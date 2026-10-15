@@ -89,7 +89,7 @@ Safety mechanisms come before builder autonomy.
 1. **Core loop** — bootstrap with the `extend` script; orchestrator, author, and researcher profiles created through it; approval-gate adapter; notifier; deterministic orchestration tests. *Done when* a PRD becomes a design-doc PR, you're notified, and the tests pass.
 2. **Safety before autonomy** — kill-switch scripts, per-profile scoped tokens, branch protection, merge commands blocked in the builder's toolset. *Done when* the first kill-switch drill and the sandbox canary's security checks pass.
 3. **Builder and reviewer** — agent PR conventions and scope discipline, with the CI scope check live. *Done when* an approved design doc produces reviewed PRs in a sandbox org, then on one real low-risk feature.
-4. **Cron** — maintenance sweep, morning digest, docs gardener, auditor. *Done when* a full week runs with no missed or duplicate alerts.
+4. **Cron** — maintenance sweep, morning digest carrying the day's operational metrics, docs gardener, auditor running the weekly trend report. *Done when* a full week runs with no missed or duplicate alerts.
 5. **Local search** over the docs repo. *Done when* every profile can find the current design doc for a feature.
 6. **Launch plans**, with you advancing every stage.
 7. **Analyst, then experimenter.** Analyst is read-only and low risk; experimenter spends money, so it comes last.
