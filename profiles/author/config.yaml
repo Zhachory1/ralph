@@ -1,0 +1,20 @@
+model:
+  provider: anthropic
+  default: claude-opus-5
+platform_toolsets:
+  cli:
+    - code_execution
+    - file
+  api_server: [no_mcp]
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  max_turns: 80
+  run_budget_seconds: 1800
+  api_max_retries: 0
