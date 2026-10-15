@@ -68,16 +68,8 @@ class SelfAuthoredPullRequestTests(unittest.TestCase):
     def test_merge_is_approval(self):
         self.assertEqual("approved", approvals.verdict([], {"merged": True}))
 
-    def test_approved_label_is_approval(self):
-        pull = {"merged": False, "labels": [{"name": "dd-approved"}]}
-        self.assertEqual("approved", approvals.verdict([], pull))
-
     def test_changes_label_sends_it_back(self):
         pull = {"merged": False, "labels": [{"name": "dd-changes"}]}
-        self.assertEqual("changes", approvals.verdict([], pull))
-
-    def test_changes_label_outranks_approved_label(self):
-        pull = {"merged": False, "labels": [{"name": "dd-approved"}, {"name": "dd-changes"}]}
         self.assertEqual("changes", approvals.verdict([], pull))
 
     def test_unrelated_labels_are_not_decisions(self):
@@ -190,7 +182,7 @@ class LabelClearingTests(unittest.TestCase):
         github.reviews.return_value = []
         github.diff_comments.return_value = []
         github.issue_comments.return_value = []
-        github.pull_request.return_value = {"merged": False, "labels": [{"name": "dd-approved"}]}
+        github.pull_request.return_value = {"merged": False, "labels": [{"name": "dd-changes"}]}
 
         board = mock.Mock()
         board.pending.return_value = [{"id": "t_1", "status": "review"}]
@@ -204,7 +196,7 @@ class LabelClearingTests(unittest.TestCase):
             approvals.main(["--board", "b"])
 
         removed = {call.args[2] for call in github.remove_label.call_args_list}
-        self.assertIn("dd-approved", removed)
+        self.assertIn("dd-changes", removed)
 
 
 class CliTests(unittest.TestCase):

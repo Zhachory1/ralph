@@ -53,14 +53,15 @@ Comments cannot say whether you have *finished*, though. Three comments might me
 
 | Signal | Means | Notes |
 | --- | --- | --- |
-| `dd-changes` label | rework | Outranks `dd-approved` if both are present |
-| `dd-approved` label | approved | Approve without merging yet |
 | Pull request merged | approved | Merging the design doc *is* approving it |
+| `dd-changes` label | rework | Sends the card back to its author |
 | Review state | either | Only works on pull requests opened by somebody else |
 
-Labels are the main path because they also give you a filterable queue in the GitHub UI: everything carrying a decision label is work the system is waiting on you to finish.
+There is no approval label. Merging already says yes, and a second way to say the same thing is one more piece of state to keep in sync.
 
-**Labels are removed once acted on.** A label left in place is a decision the next poll makes again, reopening a card the author has already revised.
+`dd-changes` also gives you a filterable queue in the GitHub UI: `label:dd-changes` is every design doc currently back with its author. The inverse — design docs waiting on *you* — is `is:open -label:dd-changes` among agent pull requests, and the morning digest lists the same thing from the board.
+
+**The label is removed once acted on.** A label left in place is a decision the next poll makes again, reopening a card the author has already revised.
 
 Agent pull requests are opened under your account, and GitHub refuses **both** `APPROVED` and `CHANGES_REQUESTED` on your own pull request, leaving `COMMENTED` as the only submittable state. That is the same rule that stops an agent approving its own work; it just also applies to you, which is why review states are the fallback rather than the main path.
 

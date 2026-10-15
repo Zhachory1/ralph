@@ -4,7 +4,7 @@ The other half of the loop: the notifier tells you a design doc is ready,
 you approve or request changes in GitHub, and this turns that into an
 unblock so the worker picks up where it left off.
 
-Comments carry the feedback; a label or a merge says you are finished.
+Comments carry the feedback; merging or labelling says you are finished.
 
 The two jobs are separate on purpose. Every comment you leave is collected
 and handed to the worker, wherever you left it: inline on the diff, at the
@@ -32,7 +32,6 @@ import sys
 
 PR_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 VERDICTS = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes"}
-APPROVED_LABEL = "dd-approved"
 CHANGES_LABEL = "dd-changes"
 
 
@@ -123,8 +122,6 @@ def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
     labels = {label.get("name") for label in pull.get("labels") or []}
     if CHANGES_LABEL in labels:
         return "changes"
-    if APPROVED_LABEL in labels:
-        return "approved"
 
     decisions = [r for r in reviews if r.get("state") in VERDICTS]
     if not decisions:
@@ -223,8 +220,7 @@ def main(argv=None) -> int:
         else:
             apply(board_client, args.board, task_id, decision, text, task.get("status", "review"))
             # Clear the marker, or the next poll acts on the same decision again.
-            for label in (APPROVED_LABEL, CHANGES_LABEL):
-                github.remove_label(repo, number, label)
+            github.remove_label(repo, number, CHANGES_LABEL)
         resumed += 1
 
     print(f"{resumed} card(s) resumed", file=sys.stderr)

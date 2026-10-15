@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Create the labels Ralph reads on pull requests.
+#
+# Only one label is a decision: dd-changes sends a design doc back to its
+# author. Approving is merging, so there is no approval label to keep in sync.
+# The rest are descriptive, so agent work can be found and filtered.
+#
+# Safe to re-run: existing labels are updated, not duplicated.
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+    echo "usage: $(basename "$0") <owner/repo> [owner/repo ...]" >&2
+    exit 64
+fi
+
+label() {
+    local repo=$1 name=$2 color=$3 description=$4
+    if gh label create "$name" --repo "$repo" --color "$color" --description "$description" >/dev/null 2>&1; then
+        echo "  created $name"
+        return
+    fi
+    # Create fails both when the label exists and when the repo is unreachable.
+    # Let edit's own error surface rather than reporting a misleading success.
+    gh label edit "$name" --repo "$repo" --color "$color" --description "$description" >/dev/null
+    echo "  updated $name"
+}
+
+for repo in "$@"; do
+    if ! gh repo view "$repo" >/dev/null 2>&1; then
+        echo "cannot reach $repo; check the repo name and your gh account" >&2
+        exit 1
+    fi
+
+    echo "$repo"
+    label "$repo" dd-changes      D93F0B "Design doc needs rework; sends the card back to its author"
+    label "$repo" agent-authored  5319E7 "Opened by an agent, not typed by a human"
+    label "$repo" scope-approved  0E8A16 "Changes outside the planned files are intentional; overrides the CI scope check"
+done
