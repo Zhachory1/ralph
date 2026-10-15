@@ -111,11 +111,37 @@ Worse, the second call **silently clears a reason set by the first** (`{'kind': 
 
 **Add to phase 1:** a two-call notifier poller (`list` for ids, `show --json` for reasons) covering **both** `blocked` and `review`, with a dedupe state file.
 
+## Live worker run
+
+A second round ran a real `author` profile on `claude-opus-5` against a real PRD, with a `dir:` workspace holding a clone of a scratch repo.
+
+**It worked unattended.** From one card brief the worker read the PRD, wrote a design document, committed it to a branch, pushed, opened a pull request, and moved its own card to `review` with a summary naming the decisions, the scope rating, and the pull-request URL. It then revised across three rounds. The Assumptions section arrived populated and honest, including *"I did not inspect the digest implementation… component names describe roles, not verified modules."*
+
+Confirmed by this run:
+
+- A worker re-spawns with feedback in context, revises, and re-requests review.
+- `reopen-review` round-trips a card to its author; the revision commit named the two decisions it had been given.
+- A `dir:` workspace survives repeated dispatches: four runs reused one checkout.
+- Completion evidence, review summaries, and run history behave as the CLI probe suggested.
+
+### `kanban.review_dispatch` makes the agent review itself
+
+**This defaults to `true`, and it quietly defeats human review.**
+
+The moment a card enters `review`, the dispatcher spawns a reviewing worker. On this run that worker was the same profile that wrote the document. It reviewed its own work, posted `changes_requested`, revised, and re-requested review — twice — before the human watcher ever saw the card. Every poll returned `0 cards resumed`, because by then the card was already `running` again.
+
+Nothing errors. The board looks busy and productive. The human is simply not in the loop, and the design's central claim — that an independent reviewer and a human gate stand between an agent and a merge — silently does not hold.
+
+Set it to `false` for any board with a human gate:
+
+```bash
+hermes config set kanban.review_dispatch false
+```
+
+With it off, the card stayed in `review`, the watcher picked it up, the human's comments reached the card, and the next run applied them. Revisit it only once a genuinely separate reviewer profile exists, and even then the human gate has to come after it, not instead of it.
+
 **Still to verify, with a live worker rather than the CLI:**
 
-- Whether a worker re-spawns with the review thread in context after `unblock`
-- Whether `request-changes` round-trips a DD back to its author
-- Whether `--workspace dir:` stays stable across repeated dispatches of the same card
 - How Hermes scopes the Docker sandbox, and whether two profiles can get separate ones
 - Skill-name resolution between layers, for layer-3 overrides
 
