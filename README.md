@@ -39,12 +39,13 @@ A new profile is justified by different permissions, resources, or lifecycle —
 
 Hermes can rewrite skill text, so a rule that exists only in a `SKILL.md` can be optimized away. The rules that matter are enforced where an agent can't reach them: per-profile scoped tokens, blocked commands in a profile's toolset, branch protection, and hard spend caps.
 
-Two properties fall out of this rather than being asserted:
+The property that holds unconditionally:
 
-- **No agent can approve agent work.** Agent PRs are opened under your account, and GitHub never lets a PR's author approve their own PR.
-- **No agent can merge** without your explicit permission, because merge commands and merge API calls are blocked in the builder's toolset and branch protection backstops it.
+- **No agent can approve agent work.** Agent PRs are opened under your account, and GitHub never lets a PR's author approve their own PR. This one needs no configuration and no cooperation.
 
-A two-level kill switch (pause dispatching; stop and revoke credentials) halts everything in under five minutes without relying on any agent's cooperation.
+Merging is guarded rather than impossible. Branch protection on the target repository is the real control, backed by token scope; `hermes tools` works at toolset granularity, so it can't block `merge` while leaving the builder the terminal access it needs to run tests. Treat "agents don't merge" as a repository setting you own, not a property of this system, and configure branch protection before pointing a builder at a repo that matters.
+
+A two-level kill switch halts everything in minutes without relying on any agent's cooperation: `hermes pause` stops dispatch, and the Stop level additionally revokes credentials and drafts open agent PRs.
 
 ### Agents record what they guessed
 
@@ -86,7 +87,7 @@ The PR reviewer is not speculative — it's a port of an agent already reviewing
 
 Safety mechanisms come before builder autonomy.
 
-1. **Core loop** — bootstrap with the `extend` script; orchestrator, author, and researcher profiles created through it; approval-gate adapter; notifier; deterministic orchestration tests. *Done when* a PRD becomes a design-doc PR, you're notified, and the tests pass.
+1. **Core loop** — hand-written orchestrator and author profiles; a notifier polling both `blocked` and `review`; deterministic orchestration tests. No approval-gate or council adapter: the spike found both are native. No `extend` script yet, because a template is easier to get right after writing the same profile a few times. *Done when* a PRD becomes a design-doc PR, you're notified, and the tests pass.
 2. **Safety before autonomy** — kill-switch scripts, per-profile scoped tokens, branch protection, merge commands blocked in the builder's toolset. *Done when* the first kill-switch drill and the sandbox canary's security checks pass.
 3. **Builder and reviewer** — agent PR conventions and scope discipline, with the CI scope check live. *Done when* an approved design doc produces reviewed PRs in a sandbox org, then on one real low-risk feature.
 4. **Cron** — maintenance sweep, morning digest carrying the day's operational metrics, docs gardener, auditor running the weekly trend report. *Done when* a full week runs with no missed or duplicate alerts.
@@ -96,14 +97,16 @@ Safety mechanisms come before builder autonomy.
 
 ## Open questions
 
-These are verified before the code that depends on them is written, not after:
+These are verified before the code that depends on them is written, not after. A first round is done: see [`docs/spikes/hermes-capabilities.md`](docs/spikes/hermes-capabilities.md), which found that the approval gate, the council fan-out, durable workspaces, and multiple boards are all native and don't need building.
 
-- [ ] Exact Hermes commands for creating profiles and registering cron jobs, which `extend` wraps
-- [ ] Kanban CLI flags for filtering blocked tasks and emitting JSON, for the notifier poller
-- [ ] Whether a Kanban workspace can be durable rather than scratch, for run artifacts
-- [ ] Whether skills can be pinned or made read-only, so self-optimization can't touch invariant-adjacent skills
-- [ ] How Hermes resolves two skills with the same name, needed for layer-3 overrides
+Still open, and each needs a live worker rather than CLI probing:
+
+- [ ] Whether a worker re-spawns with the review thread in context after `unblock`
+- [ ] Whether `request-changes` round-trips a design doc back to its author
+- [ ] Whether a `dir:` workspace stays stable across repeated dispatches of one card
 - [ ] How Hermes scopes its Docker sandbox, and whether builder and experimenter can get separate ones
+- [ ] How Hermes resolves two skills with the same name, needed for layer-3 overrides
+- [ ] Whether skills can be pinned or made read-only, so self-optimization can't touch invariant-adjacent skills
 - [ ] Whether one Hermes container can host all profiles with a shared board, versus one container per profile
 
 ## Running it
