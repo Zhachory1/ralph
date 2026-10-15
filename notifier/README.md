@@ -35,3 +35,33 @@ cd notifier && python3 -m unittest test_poller
 ```
 
 No dependencies beyond the standard library.
+
+## Approval watcher
+
+`approvals.py` is the other half of the loop: it turns your decision in GitHub into a card transition.
+
+```bash
+python3 approvals.py --board <board>
+python3 approvals.py --board <board> --dry-run
+```
+
+### You cannot approve your own pull request
+
+Agent pull requests are opened under your account, and GitHub refuses **both** `APPROVED` and `CHANGES_REQUESTED` on your own pull request. `COMMENTED` is the only review state you can submit. This is the same rule that makes agent self-approval impossible, and it applies to you too.
+
+So the decision signals are, in priority order:
+
+| Signal | Means | Notes |
+| --- | --- | --- |
+| Pull request merged | approved | The natural act: merging the design doc *is* approving it |
+| `dd-changes` label | rework | Outranks `dd-approved` if both are present |
+| `dd-approved` label | approved | For approving without merging yet |
+| Review state | either | Only works on pull requests opened by somebody else |
+
+A plain comment is never a decision.
+
+### Transitions depend on where the card waits
+
+`unblock` only accepts a blocked card. A card in `review` needs `reopen-review` to go back to its author, or `complete` to finish. The watcher picks per card status; calling the wrong one fails loudly.
+
+Feedback is always commented on the card *before* the transition, because resuming re-spawns the worker and it must wake with the feedback already in context.
