@@ -29,8 +29,9 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual("changes", approvals.verdict([review("CHANGES_REQUESTED")]))
 
     def test_comment_alone_is_not_a_verdict(self):
-        """A human thinking out loud is not a decision. Treating a comment as
-        approval would merge work nobody agreed to."""
+        """Comments carry feedback, not the decision to act on it. Three
+        comments might mean "fix these" or "answered, carry on"; the label
+        says which."""
         self.assertIsNone(approvals.verdict([review("COMMENTED")]))
 
     def test_no_reviews_is_not_a_verdict(self):
@@ -89,14 +90,37 @@ class SelfAuthoredPullRequestTests(unittest.TestCase):
 
 
 class FeedbackTests(unittest.TestCase):
-    def test_collects_bodies_from_the_deciding_review(self):
-        text = approvals.feedback(
-            [review("CHANGES_REQUESTED", body="Add a Non-goals section")]
-        )
+    """Feedback is gathered from every surface, because a human comments
+    wherever is convenient and a worker that reads only one misses the rest."""
+
+    def test_collects_review_bodies(self):
+        text = approvals.feedback([review("COMMENTED", body="Add a Non-goals section")])
         self.assertIn("Add a Non-goals section", text)
 
-    def test_empty_when_reviewer_left_no_words(self):
-        self.assertEqual("", approvals.feedback([review("CHANGES_REQUESTED")]))
+    def test_collects_top_level_comments(self):
+        text = approvals.feedback([], [], [{"created_at": "t1", "body": "What is the TTL?"}])
+        self.assertIn("What is the TTL?", text)
+
+    def test_inline_comments_keep_their_location(self):
+        """"This is wrong" means nothing without the line it points at."""
+        text = approvals.feedback(
+            [], [{"created_at": "t1", "path": "dd.md", "line": 12, "body": "unclear"}], []
+        )
+        self.assertIn("dd.md:12", text)
+        self.assertIn("unclear", text)
+
+    def test_orders_oldest_first_across_surfaces(self):
+        text = approvals.feedback(
+            [review("COMMENTED", submitted_at="2026-10-15T12:00:00Z", body="third")],
+            [{"created_at": "2026-10-15T10:00:00Z", "path": "a.md", "body": "first"}],
+            [{"created_at": "2026-10-15T11:00:00Z", "body": "second"}],
+        )
+        self.assertLess(text.index("first"), text.index("second"))
+        self.assertLess(text.index("second"), text.index("third"))
+
+    def test_skips_empty_bodies(self):
+        """Approving with no words is common and should not yield blank noise."""
+        self.assertEqual("", approvals.feedback([review("APPROVED")], [], [{"body": "  "}]))
 
 
 class PullRequestLinkTests(unittest.TestCase):
@@ -156,6 +180,31 @@ class ResolveTests(unittest.TestCase):
         approvals.apply(board, "b", "t_1", "changes", "fix it", status="review")
 
         self.assertEqual(["comment", "reopen"], calls)
+
+
+class LabelClearingTests(unittest.TestCase):
+    def test_label_is_removed_after_acting(self):
+        """A label that stays applied is a decision the next poll makes again,
+        reopening a card the author already revised."""
+        github = mock.Mock()
+        github.reviews.return_value = []
+        github.diff_comments.return_value = []
+        github.issue_comments.return_value = []
+        github.pull_request.return_value = {"merged": False, "labels": [{"name": "dd-approved"}]}
+
+        board = mock.Mock()
+        board.pending.return_value = [{"id": "t_1", "status": "review"}]
+        board.show.return_value = {
+            "latest_summary": "DD https://github.com/o/r/pull/3",
+            "comments": [],
+        }
+
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+
+        removed = {call.args[2] for call in github.remove_label.call_args_list}
+        self.assertIn("dd-approved", removed)
 
 
 class CliTests(unittest.TestCase):

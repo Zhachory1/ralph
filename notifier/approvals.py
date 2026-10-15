@@ -4,17 +4,22 @@ The other half of the loop: the notifier tells you a design doc is ready,
 you approve or request changes in GitHub, and this turns that into an
 unblock so the worker picks up where it left off.
 
-A decision is one of three signals, in priority order: the pull request was
-merged, an approval label was applied, or a review state was submitted. A
-plain comment is someone thinking out loud, and treating it as a decision
-would advance work nobody agreed to.
+Comments carry the feedback; a label or a merge says you are finished.
 
-Review states are listed last because they usually cannot be used. Agent
-pull requests are opened under your own account, and GitHub refuses both
-`APPROVED` and `CHANGES_REQUESTED` on your own pull request, leaving
-`COMMENTED` as the only state you can submit. So merging the design-doc
-pull request, or labelling it, is the approval act in practice. Review
-states are still honoured for pull requests opened by somebody else.
+The two jobs are separate on purpose. Every comment you leave is collected
+and handed to the worker, wherever you left it: inline on the diff, at the
+top level, or in a review. But comments alone cannot say whether you are
+done, since three comments might mean "fix these and resubmit" or "answered,
+carry on". Guessing resumes work on unresolved feedback or stalls a card in
+silence, so the decision is an explicit act: apply a label, or merge.
+
+Labels also give you a filterable queue in the GitHub UI, which is what
+makes them better than a marker comment.
+
+Review states are honoured too, but only work on pull requests somebody
+else opened: GitHub refuses both `APPROVED` and `CHANGES_REQUESTED` on your
+own pull request, and agent PRs are opened under your account. That is the
+same rule that stops an agent approving its own work.
 """
 
 from __future__ import annotations
@@ -48,6 +53,20 @@ class GitHub:
 
     def reviews(self, repo: str, number: int):
         return self._api(f"repos/{repo}/pulls/{number}/reviews")
+
+    def diff_comments(self, repo: str, number: int):
+        return self._api(f"repos/{repo}/pulls/{number}/comments")
+
+    def issue_comments(self, repo: str, number: int):
+        return self._api(f"repos/{repo}/issues/{number}/comments")
+
+    def remove_label(self, repo: str, number: int, label: str):
+        subprocess.run(
+            [self.binary, "api", "-X", "DELETE", f"repos/{repo}/issues/{number}/labels/{label}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def pull_request(self, repo: str, number: int):
         return self._api(f"repos/{repo}/pulls/{number}")
@@ -114,12 +133,31 @@ def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
     return VERDICTS[latest["state"]]
 
 
-def feedback(reviews: list[dict]) -> str:
-    decisions = [r for r in reviews if r.get("state") in VERDICTS]
-    if not decisions:
-        return ""
-    latest = max(decisions, key=lambda r: r.get("submitted_at") or "")
-    return (latest.get("body") or "").strip()
+def feedback(reviews: list[dict], diff_comments=(), issue_comments=()) -> str:
+    """Every comment the human left, oldest first, wherever they left it.
+
+    Inline comments keep their file and line, because "this is wrong" means
+    nothing to a worker that cannot see where you were pointing.
+    """
+    items = []
+    for review in reviews:
+        body = (review.get("body") or "").strip()
+        if body:
+            items.append((review.get("submitted_at") or "", body))
+    for comment in diff_comments:
+        body = (comment.get("body") or "").strip()
+        if body:
+            where = comment.get("path") or ""
+            line = comment.get("line") or comment.get("original_line")
+            label = f"{where}:{line}" if line else where
+            items.append((comment.get("created_at") or "", f"[{label}] {body}" if label else body))
+    for comment in issue_comments:
+        body = (comment.get("body") or "").strip()
+        if body:
+            items.append((comment.get("created_at") or "", body))
+
+    items.sort(key=lambda pair: pair[0])
+    return "\n\n".join(body for _, body in items)
 
 
 def pull_request_for(detail: dict) -> tuple[str, int] | None:
@@ -175,11 +213,18 @@ def main(argv=None) -> int:
         if not decision:
             continue
 
-        text = feedback(reviews)
+        text = feedback(
+            reviews,
+            github.diff_comments(repo, number),
+            github.issue_comments(repo, number),
+        )
         if args.dry_run:
             print(f"{task_id} <- {decision} on {repo}#{number}")
         else:
             apply(board_client, args.board, task_id, decision, text, task.get("status", "review"))
+            # Clear the marker, or the next poll acts on the same decision again.
+            for label in (APPROVED_LABEL, CHANGES_LABEL):
+                github.remove_label(repo, number, label)
         resumed += 1
 
     print(f"{resumed} card(s) resumed", file=sys.stderr)

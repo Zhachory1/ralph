@@ -45,20 +45,24 @@ python3 approvals.py --board <board>
 python3 approvals.py --board <board> --dry-run
 ```
 
-### You cannot approve your own pull request
+### Comment normally; label when you are done
 
-Agent pull requests are opened under your account, and GitHub refuses **both** `APPROVED` and `CHANGES_REQUESTED` on your own pull request. `COMMENTED` is the only review state you can submit. This is the same rule that makes agent self-approval impossible, and it applies to you too.
+Review the design doc however you like — inline on the diff, at the top level, or in a review. Every comment is collected and handed to the worker, oldest first, with inline comments keeping their `file:line` so "this is wrong" still points somewhere.
 
-So the decision signals are, in priority order:
+Comments cannot say whether you have *finished*, though. Three comments might mean "fix these and resubmit" or "answered your questions, carry on", and guessing either resumes work on unresolved feedback or stalls the card in silence. So the decision is a separate, explicit act:
 
 | Signal | Means | Notes |
 | --- | --- | --- |
-| Pull request merged | approved | The natural act: merging the design doc *is* approving it |
 | `dd-changes` label | rework | Outranks `dd-approved` if both are present |
-| `dd-approved` label | approved | For approving without merging yet |
+| `dd-approved` label | approved | Approve without merging yet |
+| Pull request merged | approved | Merging the design doc *is* approving it |
 | Review state | either | Only works on pull requests opened by somebody else |
 
-A plain comment is never a decision.
+Labels are the main path because they also give you a filterable queue in the GitHub UI: everything carrying a decision label is work the system is waiting on you to finish.
+
+**Labels are removed once acted on.** A label left in place is a decision the next poll makes again, reopening a card the author has already revised.
+
+Agent pull requests are opened under your account, and GitHub refuses **both** `APPROVED` and `CHANGES_REQUESTED` on your own pull request, leaving `COMMENTED` as the only submittable state. That is the same rule that stops an agent approving its own work; it just also applies to you, which is why review states are the fallback rather than the main path.
 
 ### Transitions depend on where the card waits
 
