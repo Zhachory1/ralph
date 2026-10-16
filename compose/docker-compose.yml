@@ -54,13 +54,23 @@ services:
   # Creates profiles, boards, and labels, then exits. Runs before hermes
   # starts and is safe to re-run: every step is idempotent.
   init:
-    image: ghcr.io/zhachory1/ralph-init:${RALPH_VERSION:-dev}
+    image: ghcr.io/zhachory1/ralph-notifier:${RALPH_VERSION:-dev}
     build:
       context: ..
-      dockerfile: compose/Dockerfile.init
+      dockerfile: compose/Dockerfile.notifier
+    command: ["/ralph/bootstrap/install"]
+    # Runs after hermes rather than before it: the CLI it configures lives in
+    # that container, reached through the proxy.
+    depends_on:
+      socket-proxy:
+        condition: service_started
+      hermes:
+        condition: service_started
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
+      RALPH_HERMES_CONTAINER: ralph-hermes-1
+      DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false
@@ -78,8 +88,6 @@ services:
     depends_on:
       socket-proxy:
         condition: service_started
-      init:
-        condition: service_completed_successfully
     environment:
       HERMES_HOME: /home/hermes/.hermes
       # Run agent commands in sibling sandbox containers rather than in this
@@ -114,14 +122,23 @@ services:
     restart: unless-stopped
 
   # Polls the board for gates waiting on a human and posts them to chat.
+  # Runs after hermes is up, because it configures hermes through its CLI.
   notifier:
-    image: ghcr.io/zhachory1/ralph-init:${RALPH_VERSION:-dev}
+    # A small image, not the Hermes one. It runs two stdlib Python scripts
+    # and shells out, so carrying a 4.5GB image for the CLI doubled the
+    # stack's disk for nothing. Board commands go through the hermes
+    # container; see RALPH_HERMES_CONTAINER below.
+    image: ghcr.io/zhachory1/ralph-notifier:${RALPH_VERSION:-dev}
     build:
       context: ..
-      dockerfile: compose/Dockerfile.init
+      dockerfile: compose/Dockerfile.notifier
     depends_on:
       hermes:
         condition: service_started
+      socket-proxy:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
     command: ["/ralph/bootstrap/run-notifier"]
     environment:
       HERMES_HOME: /home/hermes/.hermes
@@ -132,11 +149,12 @@ services:
       # cannot see a private repository, which surfaces as a 404 on a pull
       # request that plainly exists.
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
+      RALPH_HERMES_CONTAINER: ralph-hermes-1
+      DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false
     volumes:
-      - hermes-home:/home/hermes/.hermes
       - ../notifier:/ralph/notifier:ro
       - ../bootstrap:/ralph/bootstrap:ro
       - notifier-state:/var/lib/ralph

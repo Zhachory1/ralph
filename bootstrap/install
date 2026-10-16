@@ -10,6 +10,12 @@ set -euo pipefail
 PROFILES_DIR=${RALPH_PROFILES_DIR:-/ralph/profiles}
 BOARD=${RALPH_BOARD:-ralph}
 
+# The hermes CLI lives in the hermes image, which costs 4.5GB. Rather than
+# carry it to run a dozen setup commands, run them in the hermes container.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    hermes() { docker exec -e "HERMES_HOME=${HERMES_HOME:-}" "$RALPH_HERMES_CONTAINER" hermes "$@"; }
+fi
+
 echo "ralph: installing into ${HERMES_HOME:-$HOME/.hermes}"
 
 # A human gate is a blocked card, and blocked cards are never auto-dispatched.
@@ -55,6 +61,15 @@ for dir in "$PROFILES_DIR"/*/; do
     fi
 
     target="${HERMES_HOME:-$HOME/.hermes}/profiles/${name}"
+    if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+        [ -f "$dir/SOUL.md" ] && docker cp "$dir/SOUL.md" "$RALPH_HERMES_CONTAINER:$target/SOUL.md"
+        if [ -f "$dir/config.yaml" ]; then
+            docker cp /ralph/bootstrap/write-model-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
+            docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
+            docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
+        fi
+        continue
+    fi
     [ -f "$dir/SOUL.md" ] && cp "$dir/SOUL.md" "$target/SOUL.md"
 
     # Only the model block is ours; the rest is Hermes-generated.

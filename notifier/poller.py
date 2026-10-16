@@ -44,9 +44,22 @@ class HermesBoard:
     def __init__(self, binary: str = "hermes"):
         self.binary = binary
 
+    def _argv(self, args):
+        """Reach the board through the hermes container when not inside it.
+
+        Kanban is a SQLite file owned by the hermes service, and the CLI that
+        speaks to it ships in a 4.5GB image. Carrying that image just to run a
+        few commands doubled the stack's disk for no gain, so the notifier is
+        a small image that asks the hermes container instead.
+        """
+        if os.environ.get("RALPH_HERMES_CONTAINER"):
+            return ["docker", "exec", "-e", f"HERMES_HOME={os.environ.get('HERMES_HOME', '')}",
+                    os.environ["RALPH_HERMES_CONTAINER"], self.binary, *args]
+        return [self.binary, *args]
+
     def _json(self, *args: str):
         result = subprocess.run(
-            [self.binary, "kanban", *args, "--json"],
+            self._argv(["kanban", *args, "--json"]),
             capture_output=True,
             text=True,
             check=True,

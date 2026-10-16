@@ -1,0 +1,18 @@
+# The notifier: two stdlib Python scripts that poll a board and a GitHub API.
+#
+# It used to run on the Hermes image, which costs 4.5GB to carry a CLI it
+# invokes a handful of times. It reaches the board over Kanban's SQLite file
+# instead, through the hermes container, so all it needs is Python and gh.
+FROM python:3.12-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates gnupg docker-cli \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /var/lib/ralph

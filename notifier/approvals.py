@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -75,8 +76,21 @@ class Board:
     def __init__(self, binary: str = "hermes"):
         self.binary = binary
 
+    def _argv(self, args):
+        """Reach the board through the hermes container when not inside it.
+
+        Kanban is a SQLite file owned by the hermes service, and the CLI that
+        speaks to it ships in a 4.5GB image. Carrying that image just to run a
+        few commands doubled the stack's disk for no gain, so the notifier is
+        a small image that asks the hermes container instead.
+        """
+        if os.environ.get("RALPH_HERMES_CONTAINER"):
+            return ["docker", "exec", "-e", f"HERMES_HOME={os.environ.get('HERMES_HOME', '')}",
+                    os.environ["RALPH_HERMES_CONTAINER"], self.binary, *args]
+        return [self.binary, *args]
+
     def _run(self, *args: str):
-        subprocess.run([self.binary, "kanban", *args], capture_output=True, text=True, check=True)
+        subprocess.run(self._argv(["kanban", *args]), capture_output=True, text=True, check=True)
 
     def comment(self, board: str, task_id: str, text: str):
         self._run("--board", board, "comment", task_id, text)
@@ -116,7 +130,7 @@ class Board:
         reviewer and let a human decision land mid-critique.
         """
         result = subprocess.run(
-            [self.binary, "kanban", "--board", board, "list", "--status", "blocked", "--json"],
+            self._argv(["kanban", "--board", board, "list", "--status", "blocked", "--json"]),
             capture_output=True,
             text=True,
             check=True,
@@ -125,7 +139,7 @@ class Board:
 
     def show(self, board: str, task_id: str):
         result = subprocess.run(
-            [self.binary, "kanban", "--board", board, "show", task_id, "--json"],
+            self._argv(["kanban", "--board", board, "show", task_id, "--json"]),
             capture_output=True,
             text=True,
             check=True,

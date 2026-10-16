@@ -48,9 +48,14 @@ docker compose exec hermes hermes auth list
 
 | Service | What it does | Lifetime |
 | --- | --- | --- |
-| `init` | Creates the board and profiles from `profiles/`, sets board settings | Runs once, exits |
+| `socket-proxy` | Narrows the Docker API the stack may use | Long-running |
 | `hermes` | Gateway and Kanban dispatcher | Long-running |
+| `init` | Creates the board and profiles from `profiles/`, sets board settings | Runs once, exits |
 | `notifier` | Posts gates to chat, turns GitHub decisions into card moves | Long-running loop |
+
+`init` and `notifier` share one small image. They drive the Hermes CLI through the `hermes` container rather than carrying it: the Hermes image is about 4.5GB, and shipping two copies of it to run a handful of commands doubled the stack's disk for nothing.
+
+**Disk.** The Hermes and sandbox images are large, so give the container runtime room. On Colima, `colima start --disk 100` at least; the default is small enough that a few image builds fill it, and a full disk surfaces as `kanban: could not initialize database: disk I/O error` rather than as anything about disk.
 
 ## Configuration
 
