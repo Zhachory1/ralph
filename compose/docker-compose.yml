@@ -61,6 +61,8 @@ services:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
       RALPH_POLL_SECONDS: ${RALPH_POLL_SECONDS:-900}
+      # Repository work, not model access: see .env.example.
+      GH_TOKEN: ${RALPH_GITHUB_TOKEN:-${GH_TOKEN:-}}
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false

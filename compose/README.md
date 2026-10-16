@@ -19,6 +19,31 @@ docker compose ps
 docker compose exec hermes hermes kanban --board ralph list
 ```
 
+## Signing in to a model provider
+
+If your provider uses an API key, put it in `.env` and skip this.
+
+If you reach Claude through a **Claude Pro/Max subscription**, it authorizes through a browser rather than an API key, so there is one interactive step after the first start:
+
+```bash
+./bootstrap/login            # defaults to anthropic
+./bootstrap/login openai-codex
+```
+
+Open the URL it prints, authorize, paste the code back. Hermes stores the access and refresh tokens in Ralph's own volume and refreshes them itself, so this is once per install, not once a day.
+
+Two things worth knowing:
+
+**Ralph does not borrow another tool's credentials.** If you already run Claude Code, its token lives in `~/.claude/.credentials.json` on your host and is refreshed by Claude Code. Ralph deliberately does not read it: mounting another tool's credential file would couple Ralph's uptime to that tool still running, and silently break when it is not.
+
+**A GitHub token can be a model credential.** Hermes treats `GH_TOKEN` as a GitHub Copilot credential, so if you reach Claude through Copilot, `GH_TOKEN` must be a token on an account holding a Copilot licence. That is often a *different* account from the one owning your repositories, which is why `.env` separates `GH_TOKEN` (model access) from `RALPH_GITHUB_TOKEN` (repository work).
+
+Verify either way:
+
+```bash
+docker compose exec hermes hermes auth list
+```
+
 ## Services
 
 | Service | What it does | Lifetime |

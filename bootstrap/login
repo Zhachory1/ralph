@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# One-time interactive sign-in for a model provider inside Ralph's container.
+#
+# This exists because subscription providers authorize through a browser, not
+# an API key: Claude Pro/Max, ChatGPT, and others hand back a short-lived
+# access token plus a refresh token. Hermes stores both in its own auth.json
+# and refreshes them itself, so this is genuinely once per install rather than
+# once a day, and Ralph never reads a credential belonging to another tool on
+# your machine.
+#
+#   ./bootstrap/login            # defaults to anthropic
+#   ./bootstrap/login openai-codex
+#
+# Skip this entirely if you use an API key: put it in .env instead.
+
+set -euo pipefail
+
+PROVIDER=${1:-anthropic}
+cd "$(dirname "$0")/../compose"
+
+if ! docker compose ps --status running --services 2>/dev/null | grep -q '^hermes$'; then
+    echo "ralph: the hermes service is not running. Start it with 'docker compose up -d' first." >&2
+    exit 1
+fi
+
+cat <<TEXT
+Signing Ralph in to ${PROVIDER}.
+
+A URL will appear below. Open it, authorize, and paste the code back here.
+The credential is stored in Ralph's own volume and refreshed automatically;
+you should not need to repeat this.
+
+TEXT
+
+docker compose exec hermes hermes auth add "$PROVIDER" --type oauth --no-browser
+
+echo
+echo "ralph: signed in. Verify with:"
+echo "  docker compose exec hermes hermes auth list"
