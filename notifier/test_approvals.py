@@ -199,6 +199,13 @@ class HumanGateTests(unittest.TestCase):
         board = self._run([{"id": "t_1", "status": "blocked"}])
         board.unblock.assert_called_once_with("b", "t_1")
 
+    def test_unblock_is_followed_by_a_handoff(self):
+        """The dispatcher will not respawn a card whose recent comments hold a
+        pull-request URL unless a handoff event follows. Unblocking alone
+        leaves it in `ready` forever."""
+        board = self._run([{"id": "t_1", "status": "blocked"}])
+        board.handoff.assert_called_once()
+
     def test_only_blocked_is_polled(self):
         board = self._run([])
         board.pending.assert_called_once_with("b")

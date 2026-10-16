@@ -84,6 +84,24 @@ class Board:
     def unblock(self, board: str, task_id: str):
         self._run("--board", board, "unblock", task_id)
 
+    def handoff(self, board: str, task_id: str, decision: str):
+        """Record that a human handed the card back, lifting the active_pr guard.
+
+        `reopen-review` is the honest verb for rework: it says the reviewed
+        artifact needs another pass. An approval that leaves the card running
+        is a reassignment back to its owner.
+        """
+        if decision == "changes":
+            self._run("--board", board, "reopen-review", task_id,
+                      "--reason", "Changes requested in GitHub")
+            return
+        owner = self.assignee(board, task_id)
+        if owner:
+            self._run("--board", board, "assign", task_id, owner)
+
+    def assignee(self, board: str, task_id: str):
+        return (self.show(board, task_id).get("task") or {}).get("assignee")
+
     def reopen_review(self, board: str, task_id: str, reason: str):
         self._run("--board", board, "reopen-review", task_id, "--reason", reason)
 
@@ -189,6 +207,14 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
 
     if status == "blocked":
         board_client.unblock(board, task_id)
+        # Unblocking is not enough on its own. The dispatcher refuses to
+        # respawn a card whose recent comments contain a pull-request URL --
+        # the `active_pr` respawn guard, which exists so a crashed worker does
+        # not open a second PR for the same work. It lifts only on a handoff
+        # event recorded after that comment, and a human decision is exactly
+        # such a handoff. Without this the card sits in `ready` forever while
+        # the dispatcher logs "0 workers spawned".
+        board_client.handoff(board, task_id, decision)
     elif decision == "changes":
         board_client.reopen_review(board, task_id, text or "Changes requested in GitHub")
     else:

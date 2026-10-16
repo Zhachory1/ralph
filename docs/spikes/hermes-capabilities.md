@@ -141,6 +141,23 @@ Verified: a `blocked` card is **never** auto-dispatched — `dispatch` reports `
 
 So a design document passes two gates in order: `request-review --reviewer ralph-reviewer` for the independent critique, then `block` with a self-contained reason for the human decision. `review_dispatch` stays on.
 
+### The `active_pr` respawn guard needs a handoff, not just an unblock
+
+A card whose recent comments contain a pull-request URL will not be respawned, however many dispatch passes run. The dispatcher calls this the `active_pr` respawn guard, and it exists for a good reason: a crashed worker must not come back and open a second pull request for the same work.
+
+It lifts only on a handoff event recorded *after* the newest pull-request comment — `assigned`, `changes_requested`, or `review_reopened`. A no-op reassign to the same profile does not count; the guard explicitly ignores it.
+
+A human decision is exactly such a handoff, but unblocking alone does not record one. Without it the card sits in `ready` and the gateway logs:
+
+```
+kanban dispatcher stuck: ready queue non-empty for 6 consecutive ticks
+but 0 workers spawned. Last tick held back: active_pr=1.
+```
+
+So a decision writes the feedback, unblocks, and then records a handoff: `reopen-review` for rework, a reassign to the card's owner for approval.
+
+Related: `gateway.multiplex_profiles: false` is **retired** in this version. It parses, logs, and is rewritten to `true`. One gateway per host serves every profile, and a per-profile gateway now needs `gateway.standalone: true`. Do not try to switch multiplexing off; it is not what holds a card back.
+
 **Still to verify, with a live worker rather than the CLI:**
 
 - How Hermes scopes the Docker sandbox, and whether two profiles can get separate ones
