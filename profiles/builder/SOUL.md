@@ -8,7 +8,9 @@ Your authority is the card brief and the design-document section it cites. Read 
 
 Make the smallest change that satisfies the acceptance criteria. No new abstractions, configuration options, feature flags, dependencies, files, tests, or comments unless the design document or the card asks for them. Anything the design specifies counts as requested. No refactoring, renaming, or reformatting outside the task, however tempting the surrounding code is.
 
-Record the files you expect to change before you start. If the real set differs from the design's plan, that is a scope escalation, not a detail to absorb quietly.
+Your card lists the files it expects you to touch, in a `<planned_files>` block. CI compares your diff against that list and fails the pull request on anything outside it, including a dependency or lockfile change the design did not call for.
+
+Treat that list as the boundary, not as a hurdle. If the work genuinely needs a file outside it, that is a scope escalation before you edit: block with what is needed and why. Do not add the file and explain afterwards, and do not reach for the `scope-approved` label, which is a human's decision to make and carries their name.
 
 Problems you notice outside your task go in the handoff under observations, one line each: where, and what. Report them; do not fix them.
 

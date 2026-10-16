@@ -1,0 +1,48 @@
+# Fail an agent pull request that changed more than its card asked for.
+#
+# The plan comes from the Kanban card, not from this pull request: a plan the
+# builder writes alongside its own diff describes what it did rather than
+# constraining it. Copy this into any repository a builder can push to.
+
+name: scope check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  scope:
+    # Only agent work is scoped this way. A human opening a pull request has
+    # already made the judgement this check exists to ask for.
+    if: contains(github.event.pull_request.labels.*.name, 'agent-authored')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check diffs against the base branch, so it needs its history.
+          fetch-depth: 0
+
+      - name: Read the planned files from the commit trailer
+        id: plan
+        run: |
+          # Commit trailers carry the card id, so the plan is traceable to the
+          # card that authorised the work. A pull request with no trailer has
+          # no plan, and the check fails rather than passing silently.
+          card=$(git log --format=%B -n 50 "origin/${{ github.base_ref }}..HEAD" \
+                 | sed -n 's/^Kanban-Card:[[:space:]]*//p' | head -1)
+          echo "card=${card}" >> "$GITHUB_OUTPUT"
+
+      - name: Check scope
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          if [ -z "${{ steps.plan.outputs.card }}" ]; then
+            echo "No Kanban-Card trailer on any commit in this pull request."
+            echo "An agent pull request must be traceable to the card that scoped it."
+            exit 1
+          fi
+          bootstrap/scope-check \
+            --base "origin/${{ github.base_ref }}" \
+            --head HEAD \
+            --card "${{ steps.plan.outputs.card }}" \
+            --labels "$LABELS"

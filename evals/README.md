@@ -33,6 +33,14 @@ Attempts to escape a sandbox and expects to fail. The escape tests skip while th
 
 Written because a configuration test would have passed on the day the sandbox was wide open: the socket proxy was configured exactly as its documentation describes, and the documentation was misleading. Test the escape, not the configuration.
 
+## Scope-check tests
+
+```bash
+python3 evals/test_scope_check.py
+```
+
+Includes the case the design names: a builder that sneaks in an unrequested change, caught only because the plan came from the card rather than from the pull request. Also checks that a card with no plan fails rather than passing, since a check that waves through anything it cannot measure is not a check.
+
 ## What each group is for
 
 | Group | Claim under test |

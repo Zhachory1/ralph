@@ -102,6 +102,22 @@ The `socket-proxy` service narrows the Docker API the hermes container itself ma
 
 See [`docs/spikes/sandbox-isolation.md`](../docs/spikes/sandbox-isolation.md); `evals/test_sandbox_isolation.py` probes it from inside a live sandbox.
 
+## Scope checking agent pull requests
+
+A builder has the whole repository and will honestly notice things worth fixing nearby. Across a feature's pull requests those additions compound into a diff nobody agreed to, and the review that was meant to be the safety net becomes too large to be one.
+
+So every agent pull request is checked against the files its card planned:
+
+```bash
+bootstrap/scope-check --base origin/main --head HEAD --card <card-id>
+```
+
+Copy [`.github/workflows/scope-check.yml`](../.github/workflows/scope-check.yml) into any repository a builder can push to. It runs only on pull requests labelled `agent-authored`, reads the card id from the `Kanban-Card:` commit trailer, and fails on files outside the plan, dependency or build files the design did not call for, and diffs over 400 lines.
+
+**The plan comes from the card, not the pull request.** A plan the builder writes alongside its own diff describes what it did rather than constraining it. The orchestrator puts a `<planned_files>` block in the build card's brief before the work starts.
+
+To accept an out-of-scope diff, label the pull request `scope-approved`. That is a decision with your name on it rather than a silent default, and the builder is told not to apply it to itself.
+
 ## Stopping it
 
 Two levels, and the first is usually the right one.
