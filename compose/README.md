@@ -92,6 +92,14 @@ docker compose down -v       # stop and delete the board, profiles, and history
 
 `down -v` is not recoverable. Nothing in it is backed up anywhere.
 
+## Sandboxing (not yet enabled)
+
+The stack runs a `socket-proxy` service, but agent commands still run inside the hermes container (`TERMINAL_ENV: local`).
+
+This is deliberate. The builder will run untrusted code and needs a sandbox, but the socket proxy alone does not provide one: it blocks the Docker volume API while still permitting a bind mount on container create, so `docker run -v /:/host` reaches the whole machine — on macOS, including your home directory, writable. Enabling the Docker backend today would be isolation on paper and a host breach in practice.
+
+See [`docs/spikes/sandbox-isolation.md`](../docs/spikes/sandbox-isolation.md) for what was tested and the options for closing it. `evals/test_sandbox_isolation.py` fails loudly if the backend is enabled while the gap is open.
+
 ## Stopping it
 
 Two levels, and the first is usually the right one.

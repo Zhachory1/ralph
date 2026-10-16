@@ -7,6 +7,50 @@
 name: ralph
 
 services:
+  # Narrows the Docker API the hermes container can reach.
+  #
+  # The builder runs untrusted code: dependency install scripts, test suites,
+  # and code it just wrote, from repositories whose READMEs and Makefiles can
+  # carry prompt injection. That has to happen in a sandbox container, and
+  # creating one needs Docker API access.
+  #
+  # Mounting the raw socket would be worse than no sandbox at all: socket
+  # access is root-equivalent on the host, so injected code could mount the
+  # host filesystem and read everything this design is trying to protect.
+  # The proxy exposes only container lifecycle, so a compromised agent can
+  # start and stop sandboxes and nothing else.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:${SOCKET_PROXY_VERSION:-0.3.0}
+    environment:
+      # Allowed: enough to create, run, inspect, and remove a sandbox.
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+      EXEC: 1
+      # Refused. Each would hand back something the proxy exists to withhold:
+      # volume and network control to reach the host or other services, swarm
+      # and system to reconfigure the daemon, auth to read credentials.
+      VOLUMES: 0
+      NETWORKS: 0
+      SERVICES: 0
+      SWARM: 0
+      NODES: 0
+      TASKS: 0
+      SECRETS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      AUTH: 0
+      DISTRIBUTION: 0
+      INFO: 0
+      BUILD: 0
+      COMMIT: 0
+      SESSION: 0
+    volumes:
+      # Read-only, and never exposed outside this compose network.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
   # Creates profiles, boards, and labels, then exits. Runs before hermes
   # starts and is safe to re-run: every step is idempotent.
   init:
@@ -28,14 +72,25 @@ services:
 
   hermes:
     image: nousresearch/hermes-agent:${HERMES_VERSION:?set HERMES_VERSION, never latest}
-    depends_on:
-      init:
-        condition: service_completed_successfully
     # The image defaults to interactive chat, which exits immediately with no
     # terminal. Ralph needs the gateway, which is what runs the dispatcher.
     command: ["gateway", "run"]
+    depends_on:
+      socket-proxy:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
     environment:
       HERMES_HOME: /home/hermes/.hermes
+      # Run agent commands in sibling sandbox containers rather than in this
+      # one, reached only through the proxy above.
+      # Deliberately 'local' until bind-mount creation can be refused: see
+      # docs/spikes/sandbox-isolation.md. The socket proxy blocks volume and
+      # daemon APIs but still permits `docker run -v /:/host`, which reaches
+      # the whole machine, so switching this to 'docker' today would be
+      # isolation on paper and a host breach in practice.
+      TERMINAL_ENV: ${RALPH_TERMINAL_ENV:-local}
+      DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false

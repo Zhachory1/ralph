@@ -23,6 +23,16 @@ python3 evals/test_killswitch.py
 
 Runs the real `bootstrap/stop` in drill mode and checks that it changes nothing: credentials untouched, containers still up, every destructive step shown. A drill that quietly changes something is worse than no drill.
 
+## Isolation tests
+
+```bash
+python3 evals/test_sandbox_isolation.py
+```
+
+Attempts to escape a sandbox and expects to fail. The escape tests skip while the terminal backend is `local`, and fail loudly the moment someone enables the Docker backend before the gap in `docs/spikes/sandbox-isolation.md` is closed.
+
+Written because a configuration test would have passed on the day the sandbox was wide open: the socket proxy was configured exactly as its documentation describes, and the documentation was misleading. Test the escape, not the configuration.
+
 ## What each group is for
 
 | Group | Claim under test |
