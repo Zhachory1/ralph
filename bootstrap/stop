@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Stop: the second level of the kill switch, for when an agent is actively
+# doing damage.
+#
+# Pause (`hermes pause`) halts new work and is the right first move. Stop goes
+# further and is deliberately hard to undo: it pauses, kills in-flight workers,
+# takes credentials away, and drafts open agent pull requests so nobody reviews
+# or merges output you no longer trust.
+#
+# Resuming afterwards needs fresh credentials. That is the point: a system
+# stopped because it misbehaved should not restart by accident.
+#
+#   ./bootstrap/stop                 # ask before each destructive step
+#   ./bootstrap/stop --yes           # no prompts, for a real incident
+#   ./bootstrap/stop --drill         # rehearse: report, change nothing
+#
+# Safe to run repeatedly.
+
+set -uo pipefail
+
+ASSUME_YES=0
+DRILL=0
+for arg in "$@"; do
+    case "$arg" in
+        --yes|-y) ASSUME_YES=1 ;;
+        --drill)  DRILL=1 ;;
+        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "unknown option: $arg" >&2; exit 64 ;;
+    esac
+done
+
+cd "$(dirname "$0")/../compose"
+BOARD=${RALPH_BOARD:-ralph}
+[ -f .env ] && set -a && . ./.env && set +a
+
+# GH_TOKEN in .env is a model credential (Hermes reads it as GitHub Copilot),
+# not a repository one, and `gh` would silently pick it up and fail with 401.
+# Repository work uses RALPH_GITHUB_TOKEN, or the operator's own gh login.
+if [ -n "${RALPH_GITHUB_TOKEN:-}" ]; then
+    export GH_TOKEN="$RALPH_GITHUB_TOKEN"
+else
+    unset GH_TOKEN
+fi
+
+say() { printf '%s\n' "$*"; }
+step() { printf '\n== %s\n' "$*"; }
+
+# In a drill nothing is executed; the command is printed so a reader can see
+# exactly what a real stop would do.
+act() {
+    if [ "$DRILL" = 1 ]; then
+        say "  would run: $*"
+        return 0
+    fi
+    "$@"
+}
+
+confirm() {
+    [ "$DRILL" = 1 ] && return 1
+    [ "$ASSUME_YES" = 1 ] && return 0
+    printf '  %s [y/N] ' "$1"
+    read -r reply < /dev/tty || return 1
+    case "$reply" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
+
+in_hermes() { docker compose exec -T hermes "$@" 2>/dev/null; }
+
+if [ "$DRILL" = 1 ]; then
+    say "RALPH STOP — DRILL. Nothing will be changed."
+else
+    say "RALPH STOP — this revokes credentials and drafts open pull requests."
+fi
+
+# 1. Halt new work first, so nothing new starts while the rest runs.
+step "Pausing dispatch"
+if [ "$DRILL" = 1 ]; then
+    act in_hermes hermes pause --reason "kill switch"
+elif in_hermes hermes pause --reason "kill switch"; then
+    say "  dispatch paused"
+else
+    say "  WARNING: pause failed; continuing, the container stop below is the backstop" >&2
+fi
+
+# 2. Report what is in flight before killing it, so the operator knows what
+#    was interrupted and can pick it up later.
+step "In-flight work"
+RUNNING=$(in_hermes hermes kanban --board "$BOARD" list --status running --json \
+    | python3 -c 'import json,sys
+try: print(" ".join(t["id"] for t in json.load(sys.stdin)))
+except Exception: pass' 2>/dev/null)
+if [ -n "${RUNNING:-}" ]; then
+    say "  running cards: $RUNNING"
+else
+    say "  no running cards"
+fi
+
+# 3. Stop the containers. This kills worker processes; `hermes pause` alone
+#    does not, by design. It is also the backstop for a manual
+#    `hermes kanban dispatch`, which bypasses the pause sentinel entirely.
+step "Stopping containers"
+if [ "$DRILL" = 1 ]; then
+    act docker compose stop hermes notifier
+elif confirm "Stop the hermes and notifier containers?" || [ "$ASSUME_YES" = 1 ]; then
+    act docker compose stop hermes notifier && say "  containers stopped"
+else
+    say "  skipped"
+fi
+
+# 4. Take the credentials away. Everything above is reversible; this is the
+#    step that forces a deliberate restart.
+step "Revoking credentials"
+say "  Ralph's tokens live in compose/.env and in its own Hermes volume."
+say "  Revoke at the source, because a stopped container still holds them:"
+say "    - GitHub tokens:     https://github.com/settings/tokens"
+say "    - Anthropic OAuth:   docker compose run --rm hermes hermes auth remove anthropic"
+say "    - Chat webhook:      delete it in the Google Chat space"
+if confirm "Clear the credential lines in compose/.env now?"; then
+    act python3 - <<'PY'
+import pathlib, re
+p = pathlib.Path(".env")
+if p.exists():
+    lines = p.read_text().splitlines(keepends=True)
+    keys = ("GH_TOKEN", "RALPH_GITHUB_TOKEN", "ANTHROPIC_API_KEY", "GCHAT_WEBHOOK_URL")
+    out = [re.sub(r"^(%s)=.*$" % "|".join(keys), r"\1=", line.rstrip("\n")) + "\n" for line in lines]
+    p.write_text("".join(out))
+    print("  cleared credential values in compose/.env")
+PY
+else
+    say "  left .env alone; revoke at the source"
+fi
+
+# 5. Draft open agent pull requests, so nothing is reviewed or merged while
+#    the system is stopped. Drafting is reversible; closing them is not.
+step "Drafting open agent pull requests"
+if command -v gh >/dev/null 2>&1 && [ -n "${RALPH_REPOS:-}" ]; then
+    for repo in $RALPH_REPOS; do
+        if ! numbers=$(gh pr list --repo "$repo" --label agent-authored --state open \
+            --json number,isDraft --jq '.[] | select(.isDraft == false) | .number' 2>&1); then
+            # Never report "none open" for an error: during an incident that
+            # reads as "nothing to do" when in fact nothing was checked.
+            say "  $repo: COULD NOT LIST PULL REQUESTS — draft them by hand" >&2
+            say "    ${numbers}" >&2
+            continue
+        fi
+        for n in ${numbers:-}; do
+            say "  $repo#$n"
+            act gh pr ready "$n" --repo "$repo" --undo
+        done
+        [ -z "${numbers:-}" ] && say "  $repo: none open"
+    done
+else
+    say "  set RALPH_REPOS in .env to a space-separated list of owner/repo to automate this"
+    say "  otherwise draft them by hand: gh pr ready <n> --repo <repo> --undo"
+fi
+
+step "Done"
+if [ "$DRILL" = 1 ]; then
+    say "Drill complete. Nothing was changed."
+else
+    say "Ralph is stopped. To restart: issue new credentials, put them in"
+    say "compose/.env, then 'docker compose up -d' and 'hermes resume' inside"
+    say "the container. Check for interrupted cards before resuming."
+fi

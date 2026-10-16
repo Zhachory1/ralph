@@ -92,13 +92,44 @@ docker compose down -v       # stop and delete the board, profiles, and history
 
 `down -v` is not recoverable. Nothing in it is backed up anywhere.
 
+## Stopping it
+
+Two levels, and the first is usually the right one.
+
+**Pause** halts new work and leaves in-flight work alone:
+
+```bash
+docker compose exec hermes hermes pause --reason "looks wrong"
+docker compose exec hermes hermes resume
+```
+
+**Stop** is for when an agent is actively doing damage. It pauses, stops the containers, helps you revoke credentials, and drafts open agent pull requests so nothing you no longer trust gets reviewed or merged:
+
+```bash
+./bootstrap/stop --drill    # rehearse; changes nothing
+./bootstrap/stop            # asks before each destructive step
+./bootstrap/stop --yes      # no prompts, for a real incident
+```
+
+Restarting after a Stop needs fresh credentials. That is deliberate: a system stopped because it misbehaved should not restart by accident.
+
+**Drill it.** `--drill` prints every command it would run and changes nothing, so there is no excuse for the first real use being the first use. Run it monthly at first.
+
+One caveat worth knowing. `hermes pause` stops the gateway's dispatcher, verified, but a **manual** `hermes kanban dispatch` ignores the sentinel and spawns anyway. Pause protects you from the system; it does not protect you from yourself. Stopping the container is the backstop, which is why Stop does that too.
+
 ## Tests
 
 ```bash
 docker compose exec hermes python3 /ralph/evals/test_orchestration.py
 ```
 
-Asserts the board behaves as designed, against the real dispatcher, without spawning a worker or calling a model. See [`evals/README.md`](../evals/README.md).
+Asserts the board behaves as designed, against the real dispatcher, without spawning a worker or calling a model.
+
+```bash
+python3 evals/test_killswitch.py     # from the repo root
+```
+
+Checks the kill-switch drill is safe to run and rehearses every destructive step. See [`evals/README.md`](../evals/README.md).
 
 ## Troubleshooting
 

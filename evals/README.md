@@ -15,6 +15,14 @@ They use a throwaway `ralph-evals` board, created on first run, and archive ever
 
 Expect roughly two minutes: each dispatch probe waits on a real dispatcher tick.
 
+## Kill-switch tests
+
+```bash
+python3 evals/test_killswitch.py
+```
+
+Runs the real `bootstrap/stop` in drill mode and checks that it changes nothing: credentials untouched, containers still up, every destructive step shown. A drill that quietly changes something is worse than no drill.
+
 ## What each group is for
 
 | Group | Claim under test |
