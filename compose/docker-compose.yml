@@ -90,6 +90,17 @@ services:
       # docs/spikes/sandbox-isolation.md and evals/test_sandbox_isolation.py.
       TERMINAL_ENV: ${RALPH_TERMINAL_ENV:-docker}
       DOCKER_HOST: tcp://socket-proxy:2375
+      # Hermes reads this env var for the sandbox image, and it wins over
+      # the config key, so setting only the config silently keeps the stock
+      # image and the agent finds no git and no gh.
+      TERMINAL_DOCKER_IMAGE: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}
+      # Repository work inside the sandbox. This is the only credential that
+      # crosses into it; the model key and the chat webhook do not.
+      GH_TOKEN: ${RALPH_GITHUB_TOKEN:-}
+      GIT_AUTHOR_NAME: ${RALPH_GIT_NAME:-Ralph}
+      GIT_AUTHOR_EMAIL: ${RALPH_GIT_EMAIL:-ralph@localhost}
+      GIT_COMMITTER_NAME: ${RALPH_GIT_NAME:-Ralph}
+      GIT_COMMITTER_EMAIL: ${RALPH_GIT_EMAIL:-ralph@localhost}
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false

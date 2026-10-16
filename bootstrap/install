@@ -17,6 +17,15 @@ echo "ralph: installing into ${HERMES_HOME:-$HOME/.hermes}"
 # is that request-review always names a reviewer, which the author profile does.
 hermes config set kanban.review_dispatch true >/dev/null
 
+# The stock sandbox has no git and no gh, so an agent can write code in it but
+# cannot branch, push, or open a pull request. Ralph's sandbox image adds those
+# two and nothing else; every tool in there is reachable by untrusted code.
+hermes config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
+
+# Credentials the sandbox needs to do repository work. Nothing else is
+# forwarded: the model key and the chat webhook stay outside it.
+hermes config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL"]' >/dev/null
+
 hermes kanban init >/dev/null 2>&1 || true
 if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
     hermes kanban boards create "$BOARD" \
