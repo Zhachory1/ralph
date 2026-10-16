@@ -1,0 +1,25 @@
+# Tooling for bootstrap and the notifier: the Hermes CLI to talk to the board,
+# gh to read pull requests, and python for the pollers.
+FROM nousresearch/hermes-agent:v0.22.2
+
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates git \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
+
+# Docker creates a named volume owned by root unless its mount point already
+# exists with the right owner in the image. Without this, the first start
+# fails on a permission error that looks like a Hermes bug.
+RUN mkdir -p /home/hermes/.hermes /workspaces /var/lib/ralph \
+ && chown -R 10000:10000 /home/hermes /workspaces /var/lib/ralph
+
+USER hermes
+
+ENTRYPOINT []
+CMD ["/ralph/bootstrap/install"]

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Bring a fresh Ralph install up to the state the repo describes: profiles,
+# a board, and the settings the two-gate model depends on.
+#
+# Idempotent by design. Running it again on an existing install updates
+# profile definitions and leaves everything else alone.
+
+set -euo pipefail
+
+PROFILES_DIR=${RALPH_PROFILES_DIR:-/ralph/profiles}
+BOARD=${RALPH_BOARD:-ralph}
+
+echo "ralph: installing into ${HERMES_HOME:-$HOME/.hermes}"
+
+# A human gate is a blocked card, and blocked cards are never auto-dispatched.
+# Review dispatch stays on so the agent reviewer pass still runs; what matters
+# is that request-review always names a reviewer, which the author profile does.
+hermes config set kanban.review_dispatch true >/dev/null
+
+hermes kanban init >/dev/null 2>&1 || true
+if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
+    hermes kanban boards create "$BOARD" \
+        --name "Ralph" \
+        --description "Feature pipeline: PRD, design docs, PRs" \
+        --default-workdir /workspaces >/dev/null
+    echo "  created board ${BOARD}"
+else
+    echo "  board ${BOARD} already exists"
+fi
+
+for dir in "$PROFILES_DIR"/*/; do
+    [ -d "$dir" ] || continue
+    name="ralph-$(basename "$dir")"
+
+    if ! hermes profile list 2>/dev/null | grep -q "\b${name}\b"; then
+        hermes profile create "$name" --description "Ralph $(basename "$dir")" >/dev/null
+        echo "  created profile ${name}"
+    else
+        echo "  updating profile ${name}"
+    fi
+
+    target="${HERMES_HOME:-$HOME/.hermes}/profiles/${name}"
+    [ -f "$dir/SOUL.md" ] && cp "$dir/SOUL.md" "$target/SOUL.md"
+
+    # Only the model block is ours; the rest is Hermes-generated.
+    if [ -f "$dir/config.yaml" ]; then
+        python3 /ralph/bootstrap/write-model-config.py \
+            "$dir/config.yaml" "$target/config.yaml"
+    fi
+done
+
+echo "ralph: install complete"

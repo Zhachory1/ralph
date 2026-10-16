@@ -1,0 +1,77 @@
+# Ralph runs as its own Hermes, in its own container, with its own HERMES_HOME.
+#
+# It deliberately shares nothing with a Hermes you may already run on the host:
+# separate home volume, separate board database, separate profiles, separate
+# port. Installing Ralph must never disturb an existing setup.
+
+name: ralph
+
+services:
+  # Creates profiles, boards, and labels, then exits. Runs before hermes
+  # starts and is safe to re-run: every step is idempotent.
+  init:
+    image: ghcr.io/zhachory1/ralph-init:${RALPH_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.init
+    environment:
+      HERMES_HOME: /home/hermes/.hermes
+      RALPH_BOARD: ${RALPH_BOARD:-ralph}
+    env_file:
+      - path: ${RALPH_ENV_FILE:-./.env}
+        required: false
+    volumes:
+      - hermes-home:/home/hermes/.hermes
+      - ../profiles:/ralph/profiles:ro
+      - ../bootstrap:/ralph/bootstrap:ro
+    restart: "no"
+
+  hermes:
+    image: nousresearch/hermes-agent:${HERMES_VERSION:?set HERMES_VERSION, never latest}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    # The image defaults to interactive chat, which exits immediately with no
+    # terminal. Ralph needs the gateway, which is what runs the dispatcher.
+    command: ["gateway", "run"]
+    environment:
+      HERMES_HOME: /home/hermes/.hermes
+    env_file:
+      - path: ${RALPH_ENV_FILE:-./.env}
+        required: false
+    volumes:
+      - hermes-home:/home/hermes/.hermes
+      - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
+    ports:
+      # Bound to localhost. The dashboard has no authentication.
+      - "127.0.0.1:${RALPH_DASHBOARD_PORT:-9219}:9219"
+    restart: unless-stopped
+
+  # Polls the board for gates waiting on a human and posts them to chat.
+  notifier:
+    image: ghcr.io/zhachory1/ralph-init:${RALPH_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.init
+    depends_on:
+      hermes:
+        condition: service_started
+    command: ["/ralph/bootstrap/run-notifier"]
+    environment:
+      HERMES_HOME: /home/hermes/.hermes
+      RALPH_BOARD: ${RALPH_BOARD:-ralph}
+      RALPH_POLL_SECONDS: ${RALPH_POLL_SECONDS:-900}
+    env_file:
+      - path: ${RALPH_ENV_FILE:-./.env}
+        required: false
+    volumes:
+      - hermes-home:/home/hermes/.hermes
+      - ../notifier:/ralph/notifier:ro
+      - ../bootstrap:/ralph/bootstrap:ro
+      - notifier-state:/var/lib/ralph
+    restart: unless-stopped
+
+volumes:
+  # Named, not a bind mount of ~/.hermes: Ralph's Hermes state is its own.
+  hermes-home:
+  notifier-state:

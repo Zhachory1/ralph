@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Poll for gates waiting on a human, and turn GitHub decisions into card moves.
+#
+# A loop rather than a cron entry: one process, one schedule, and a crash is
+# visible as a restarting container instead of a silently missing job.
+
+set -euo pipefail
+
+BOARD=${RALPH_BOARD:-ralph}
+INTERVAL=${RALPH_POLL_SECONDS:-900}
+STATE=${RALPH_STATE_FILE:-/var/lib/ralph/notifier-state.json}
+
+echo "ralph notifier: board=${BOARD} every ${INTERVAL}s"
+
+while true; do
+    if [ -n "${GCHAT_WEBHOOK_URL:-}" ]; then
+        python3 /ralph/notifier/poller.py --board "$BOARD" --state "$STATE" \
+            || echo "notifier: poll failed, will retry" >&2
+    else
+        echo "notifier: GCHAT_WEBHOOK_URL unset, skipping alerts" >&2
+    fi
+
+    if [ -n "${GH_TOKEN:-}" ]; then
+        python3 /ralph/notifier/approvals.py --board "$BOARD" \
+            || echo "notifier: approval poll failed, will retry" >&2
+    fi
+
+    sleep "$INTERVAL"
+done
