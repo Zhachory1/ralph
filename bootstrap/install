@@ -17,6 +17,12 @@ echo "ralph: installing into ${HERMES_HOME:-$HOME/.hermes}"
 # is that request-review always names a reviewer, which the author profile does.
 hermes config set kanban.review_dispatch true >/dev/null
 
+# The orchestrator plans the card graph; Kanban must not plan a second one.
+# With auto_decompose on, a card that is already finished and waiting on a
+# human gets split into subtasks that redo the work it just did, and the
+# human's feedback is lost behind a decomposition notice.
+hermes config set kanban.auto_decompose false >/dev/null
+
 # The stock sandbox has no git and no gh, so an agent can write code in it but
 # cannot branch, push, or open a pull request. Ralph's sandbox image adds those
 # two and nothing else; every tool in there is reachable by untrusted code.

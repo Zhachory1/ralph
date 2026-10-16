@@ -84,14 +84,14 @@ class Board:
     def unblock(self, board: str, task_id: str):
         self._run("--board", board, "unblock", task_id)
 
-    def handoff(self, board: str, task_id: str, decision: str):
+    def handoff(self, board: str, task_id: str, decision: str, status: str = "blocked"):
         """Record that a human handed the card back, lifting the active_pr guard.
 
         `reopen-review` is the honest verb for rework: it says the reviewed
         artifact needs another pass. An approval that leaves the card running
         is a reassignment back to its owner.
         """
-        if decision == "changes":
+        if decision == "changes" and status == "review":
             self._run("--board", board, "reopen-review", task_id,
                       "--reason", "Changes requested in GitHub")
             return
@@ -154,12 +154,28 @@ def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
     return VERDICTS[latest["state"]]
 
 
+def is_bot(comment: dict) -> bool:
+    """CI bots comment on pull requests too, at length.
+
+    A real repository answers a design-doc review with a security scan, a
+    coverage table, and a build summary. Handing those to the worker as
+    "the feedback" buries the two sentences a person actually wrote, and the
+    worker revises against a robot. GitHub types the author, so use that
+    rather than guessing from names.
+    """
+    return ((comment.get("user") or {}).get("type") or "").lower() == "bot"
+
+
 def feedback(reviews: list[dict], diff_comments=(), issue_comments=()) -> str:
     """Every comment the human left, oldest first, wherever they left it.
 
     Inline comments keep their file and line, because "this is wrong" means
-    nothing to a worker that cannot see where you were pointing.
+    nothing to a worker that cannot see where you were pointing. Bot
+    comments are dropped: see is_bot.
     """
+    reviews = [r for r in reviews if not is_bot(r)]
+    diff_comments = [c for c in diff_comments if not is_bot(c)]
+    issue_comments = [c for c in issue_comments if not is_bot(c)]
     items = []
     for review in reviews:
         body = (review.get("body") or "").strip()
@@ -214,7 +230,7 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
         # event recorded after that comment, and a human decision is exactly
         # such a handoff. Without this the card sits in `ready` forever while
         # the dispatcher logs "0 workers spawned".
-        board_client.handoff(board, task_id, decision)
+        board_client.handoff(board, task_id, decision, status)
     elif decision == "changes":
         board_client.reopen_review(board, task_id, text or "Changes requested in GitHub")
     else:

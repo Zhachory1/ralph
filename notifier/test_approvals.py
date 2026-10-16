@@ -199,6 +199,13 @@ class HumanGateTests(unittest.TestCase):
         board = self._run([{"id": "t_1", "status": "blocked"}])
         board.unblock.assert_called_once_with("b", "t_1")
 
+    def test_handoff_on_a_blocked_card_does_not_reopen_review(self):
+        """reopen-review rejects a card that is not in a review run, which
+        is every card a human gate blocked."""
+        board = mock.Mock()
+        approvals.apply(board, "b", "t_1", "changes", "fix it", status="blocked")
+        board.handoff.assert_called_once_with("b", "t_1", "changes", "blocked")
+
     def test_unblock_is_followed_by_a_handoff(self):
         """The dispatcher will not respawn a card whose recent comments hold a
         pull-request URL unless a handoff event follows. Unblocking alone
@@ -209,6 +216,34 @@ class HumanGateTests(unittest.TestCase):
     def test_only_blocked_is_polled(self):
         board = self._run([])
         board.pending.assert_called_once_with("b")
+
+
+class BotFilterTests(unittest.TestCase):
+    """A real repository answers a review with a security scan and a coverage
+    table. Those are not the feedback, and a worker handed them revises
+    against a robot instead of the person who asked."""
+
+    def bot(self, body):
+        return {"created_at": "t1", "body": body, "user": {"login": "x[bot]", "type": "Bot"}}
+
+    def human(self, body):
+        return {"created_at": "t2", "body": body, "user": {"login": "z", "type": "User"}}
+
+    def test_bot_comments_are_dropped(self):
+        text = approvals.feedback([], [], [self.bot("Security Scan Complete")])
+        self.assertEqual("", text)
+
+    def test_human_comments_survive_alongside_bots(self):
+        text = approvals.feedback(
+            [], [], [self.bot("Coverage 98%"), self.human("Confirmed")])
+        self.assertIn("Confirmed", text)
+        self.assertNotIn("Coverage", text)
+
+    def test_bot_reviews_are_dropped(self):
+        text = approvals.feedback([
+            {"state": "COMMENTED", "submitted_at": "t1", "body": "bot said",
+             "user": {"login": "ci[bot]", "type": "Bot"}}])
+        self.assertEqual("", text)
 
 
 class LabelClearingTests(unittest.TestCase):

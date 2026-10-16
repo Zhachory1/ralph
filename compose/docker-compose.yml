@@ -127,8 +127,11 @@ services:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
       RALPH_POLL_SECONDS: ${RALPH_POLL_SECONDS:-900}
-      # Repository work, not model access: see .env.example.
-      GH_TOKEN: ${RALPH_GITHUB_TOKEN:-${GH_TOKEN:-}}
+      # Repository work, not model access: see .env.example. The fallback is
+      # deliberate but lossy — GH_TOKEN alone is a Copilot credential and
+      # cannot see a private repository, which surfaces as a 404 on a pull
+      # request that plainly exists.
+      GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false
