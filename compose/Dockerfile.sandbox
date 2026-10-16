@@ -2,8 +2,8 @@
 #
 # Hermes' stock sandbox has no git and no gh, so an agent can write code in it
 # but cannot branch, push, or open a pull request — which is most of the job.
-# This adds those two and nothing else: every tool in here is reachable by
-# untrusted code from a dependency install or an injected Makefile.
+# Every tool in here is reachable by untrusted code from a dependency install
+# or an injected Makefile, so the list stays short and each entry earns itself.
 FROM nousresearch/hermes-sandbox:desktop
 
 USER root
@@ -15,4 +15,18 @@ RUN apt-get update \
       > /etc/apt/sources.list.d/github-cli.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
+
+# Chromium, for repositories whose screenshot rule an agent has to satisfy
+# itself. 587MB on top of the base and about 16 seconds to build, in its own
+# layer so editing anything above does not rebuild it. It costs nothing at
+# rest: a build that never captures never launches it.
+#
+# A browser is the widest thing in this image — it fetches URLs and renders
+# untrusted markup. It is here because an agent that cannot produce the
+# screenshots its repository requires cannot finish a pull request, and the
+# sandbox has no host access and no credential beyond the repository token.
+# fonts-liberation so a capture renders text rather than boxes.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium fonts-liberation \
  && rm -rf /var/lib/apt/lists/*

@@ -28,6 +28,12 @@ Write a test for the behaviour before you change it, where the change is more th
 
 Solve the general case. Do not special-case the inputs a test happens to use.
 
+## Screenshots
+
+A repository that asks for screenshots on a change a person can see means it: a pull request without them is not finished, however good the diff is. Your sandbox has Chromium, so produce them yourself rather than promising them later.
+
+Use the repository's own capture if it has one, so your images match the ones its reviewers are used to. Read its agent instructions for where the images go and what shape the description expects, and follow that exactly.
+
 ## Pull requests
 
 One concern per pull request, opened as a draft and marked ready only once the checks pass. Branch `agent/<card-id>-<short-slug>`. Commit trailers carry the card id and the design-document path.

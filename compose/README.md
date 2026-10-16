@@ -101,6 +101,8 @@ docker compose down -v       # stop and delete the board, profiles, and history
 
 Agent shell commands run in a per-profile sandbox container, not in the hermes container. The builder runs dependency installs, test suites, and code it just wrote, from repositories whose READMEs and Makefiles can carry prompt injection, so none of that may sit next to the credentials.
 
+The sandbox image carries `git`, `gh` and Chromium on top of the stock one. Chromium is 587MB and about 16 seconds of build, in its own layer, and costs nothing at rest: a build that never captures never launches it. It is there because a repository whose rules require screenshots cannot be satisfied by an agent that has no browser, and a pull request that fails its own repository's rules is not finished. It is also the widest thing in the image, which is why the sandbox has no host access and no credential beyond the repository token.
+
 A sandbox gets a read-write `/workspace` and scratch home, plus read-only skills and caches. Verified it cannot reach the host filesystem, the Docker socket, the Kanban database, any credential store, or another profile's state. Every mount is under `profiles/<profile>/`, so two profiles running code never share one.
 
 The `socket-proxy` service narrows the Docker API the hermes container itself may use. It refuses the volume, network, and daemon-reconfiguration endpoints, though it cannot stop that container bind-mounting the host on a container it creates: a bind mount is a field on container create, which has to be allowed for sandboxes to exist. That is defence in depth around the orchestrator rather than the sandbox boundary, and it is accepted for now.
