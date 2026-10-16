@@ -1,71 +1,63 @@
-# Sandbox isolation: what the socket proxy does not buy
+# Sandbox isolation: what the builder's code can reach
 
-Run against Colima on macOS with Docker 29.5.2 and `tecnativa/docker-socket-proxy:0.3.0`.
+Run against Colima on macOS with Docker 29.5.2, Hermes v0.22.2, and `tecnativa/docker-socket-proxy:0.3.0`.
 
-**Result: the socket proxy alone is not enough to sandbox the builder.** It blocks the Docker APIs it advertises, and the one attack that matters still succeeds. `TERMINAL_ENV` stays `local` until this is closed.
+**Result: the sandbox isolates the thing it needs to.** Agent commands run in a per-profile sibling container that cannot see the host filesystem, the Docker socket, the Kanban database, or any credential. `TERMINAL_ENV: docker` is enabled.
 
-## What was tried
+## Correction
 
-The design calls for the builder to run its commands in a sibling sandbox container, reached through a socket proxy rather than a raw Docker socket, because raw socket access is root-equivalent on the host. The proxy was configured to allow container lifecycle and refuse everything else:
+An earlier version of this document claimed the opposite, and it was wrong.
 
-| Allowed | Refused |
+That test ran `docker run -v /:/host` **from inside the hermes container** and found it could mount the host. True, and not the threat: the hermes container is the orchestrator, and it holds Docker API access precisely so it can create sandboxes. The builder's untrusted code never runs there. It runs in the sandbox, and **Hermes constructs the mounts — the agent does not choose them.**
+
+The lesson survives in a sharper form. "Test the escape, not the configuration" is right, and it has to be the escape *from where the untrusted code actually runs*. Probing from the wrong container produced a confident, wrong conclusion, and nearly stopped a stage for no reason.
+
+## What the sandbox gets
+
+With `TERMINAL_ENV: docker`, a shell command from the `ralph-author` profile runs in `nousresearch/hermes-sandbox`, mounted like this:
+
+| Mount | Access |
 | --- | --- |
-| `CONTAINERS`, `IMAGES`, `POST`, `EXEC` | `VOLUMES`, `NETWORKS`, `SERVICES`, `SWARM`, `NODES`, `TASKS`, `SECRETS`, `CONFIGS`, `PLUGINS`, `SYSTEM`, `AUTH`, `DISTRIBUTION`, `INFO`, `BUILD`, `COMMIT`, `SESSION` |
+| `profiles/<profile>/sandboxes/docker/default/workspace` → `/workspace` | read-write |
+| `profiles/<profile>/sandboxes/docker/default/home` → `/root` | read-write |
+| `profiles/<profile>/skills`, caches, attachments, images | read-only |
 
-## What holds
+Everything is under `profiles/<profile>/`, so **each profile gets its own sandbox**. Builder and experimenter never share one, which was an open question in the design and is now settled.
 
-The refusals are real. From inside the hermes container:
+## What it cannot reach
+
+Probed from inside a live sandbox:
+
+| Probe | Result |
+| --- | --- |
+| `ls /Users` | No such file or directory |
+| `/var/run/docker.sock` | not present |
+| `docker` CLI | not installed |
+| `DOCKER_HOST` | unset |
+| `find / -name auth.json` | nothing |
+| `find / -name kanban.db` | nothing |
+| `/root/.hermes/profiles` | not present |
+
+So the design's claim holds: the sandbox never sees the board, memory, or other profiles' tokens. A dependency install script or an injected Makefile reaches the task's working copy and nothing else.
+
+## What the socket proxy does and does not do
+
+The proxy refuses the volume, network, and daemon-reconfiguration APIs, verified:
 
 ```
 $ docker volume ls
 Error response from daemon: 403 Forbidden — Request forbidden by administrative rules.
-
-$ docker info
-(refused)
 ```
 
-Container lifecycle works, so Hermes can create and run sandboxes.
+It does **not** stop the hermes container from bind-mounting the host on a container it creates: `VOLUMES: 0` governs the `/volumes` API, while a bind mount is a field on container create, which has to be allowed for sandboxes to exist at all.
 
-## What does not hold
+That is a real defence-in-depth gap, and a different, lower-priority threat than the one the sandbox addresses. It matters if the orchestrator itself is compromised — a prompt injection reaching the hermes container rather than the builder's workspace. The proxy still earns its place by removing the daemon-reconfiguration and credential-reading paths, and it is where a body-filtering proxy would go if that threat ever justifies one.
 
-**`VOLUMES: 0` does not prevent bind mounts.** It governs the `/volumes` API — creating and listing named volumes. A bind mount is a field on the container-create call, which `CONTAINERS: 1` and `POST: 1` have to allow for sandboxes to exist at all.
-
-So this succeeds from inside the hermes container:
-
-```
-$ docker run --rm -v /:/host alpine:3 ls /host
-bin  dev  etc  home  root  sbin  srv  sys  tmp  usr  var
-```
-
-On macOS with Colima, the VM mounts the user's home directory, so "host root" is not only the VM:
-
-```
-$ docker run --rm -v /:/host alpine:3 ls /host/Users/<you>
-AGENTS.md  Documents  Downloads  ...
-
-$ docker run --rm -v /:/host alpine:3 sh -c 'touch /host/Users/<you>/x && echo WRITABLE'
-WRITABLE
-```
-
-Read **and** write access to the whole home directory, from the container the builder's commands would run in.
-
-This is worse than not sandboxing. Running the builder with `TERMINAL_ENV: local` keeps untrusted code inside the hermes container, which already holds the credentials — bad, but bounded by that container. Turning on the Docker backend as configured would let the same code escape to the machine, while the architecture diagram claims it is contained.
-
-## Why the proxy still belongs in the stack
-
-It is necessary and insufficient. It removes the daemon-reconfiguration and credential-reading paths, and it is the right place to add the missing control. Leaving it in means the remaining gap is one specific, named thing rather than "the socket is wide open."
-
-## What would close it
-
-Each needs testing before the builder ships; none is in place yet.
-
-1. **Reject bind mounts at the proxy.** The tecnativa proxy filters by API path and method, not by request body, so this needs a filtering proxy that inspects `HostConfig.Binds` and `Mounts` on container create. The most direct fix, and the one that keeps the current architecture honest.
-2. **Rootless Podman.** The daemon runs as an unprivileged user, so a mount of `/` yields that user's view rather than root's. Narrows the blast radius without a custom proxy; changes the runtime.
-3. **A VM per sandbox.** Strongest and slowest; a container inside a throwaway VM cannot reach the outer host at all.
-4. **Accept and scope.** Keep `local`, and give the builder a dedicated unprivileged user and a workspace-only view. Weakest, but honest — and strictly better than a sandbox that advertises isolation it does not have.
+| Threat | Status |
+| --- | --- |
+| Untrusted code in the builder's workspace reaching credentials or the host | **Contained** by the per-profile sandbox |
+| A compromised orchestrator mounting the host | Not contained; accepted for now |
 
 ## Rule this establishes
 
-Test the escape, not the configuration. The proxy's own documentation describes `VOLUMES: 0` as blocking volumes, and reading that would have produced a confident, wrong claim in the design. One `docker run -v /:/host` answered it in a second.
-
-Any future isolation claim in this repository needs a test that tries to break out and fails.
+Test the escape from where the untrusted code actually runs. A configuration review would have missed the real boundary, and an escape test from the wrong container invented a breach that did not exist.

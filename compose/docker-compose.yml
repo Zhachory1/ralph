@@ -84,12 +84,11 @@ services:
       HERMES_HOME: /home/hermes/.hermes
       # Run agent commands in sibling sandbox containers rather than in this
       # one, reached only through the proxy above.
-      # Deliberately 'local' until bind-mount creation can be refused: see
-      # docs/spikes/sandbox-isolation.md. The socket proxy blocks volume and
-      # daemon APIs but still permits `docker run -v /:/host`, which reaches
-      # the whole machine, so switching this to 'docker' today would be
-      # isolation on paper and a host breach in practice.
-      TERMINAL_ENV: ${RALPH_TERMINAL_ENV:-local}
+      # Agent commands run in a per-profile sibling container, not in here.
+      # Verified: that sandbox cannot see the host filesystem, the Docker
+      # socket, the board, or any credential. See
+      # docs/spikes/sandbox-isolation.md and evals/test_sandbox_isolation.py.
+      TERMINAL_ENV: ${RALPH_TERMINAL_ENV:-docker}
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}

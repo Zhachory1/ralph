@@ -92,13 +92,15 @@ docker compose down -v       # stop and delete the board, profiles, and history
 
 `down -v` is not recoverable. Nothing in it is backed up anywhere.
 
-## Sandboxing (not yet enabled)
+## Sandboxing
 
-The stack runs a `socket-proxy` service, but agent commands still run inside the hermes container (`TERMINAL_ENV: local`).
+Agent shell commands run in a per-profile sandbox container, not in the hermes container. The builder runs dependency installs, test suites, and code it just wrote, from repositories whose READMEs and Makefiles can carry prompt injection, so none of that may sit next to the credentials.
 
-This is deliberate. The builder will run untrusted code and needs a sandbox, but the socket proxy alone does not provide one: it blocks the Docker volume API while still permitting a bind mount on container create, so `docker run -v /:/host` reaches the whole machine — on macOS, including your home directory, writable. Enabling the Docker backend today would be isolation on paper and a host breach in practice.
+A sandbox gets a read-write `/workspace` and scratch home, plus read-only skills and caches. Verified it cannot reach the host filesystem, the Docker socket, the Kanban database, any credential store, or another profile's state. Every mount is under `profiles/<profile>/`, so two profiles running code never share one.
 
-See [`docs/spikes/sandbox-isolation.md`](../docs/spikes/sandbox-isolation.md) for what was tested and the options for closing it. `evals/test_sandbox_isolation.py` fails loudly if the backend is enabled while the gap is open.
+The `socket-proxy` service narrows the Docker API the hermes container itself may use. It refuses the volume, network, and daemon-reconfiguration endpoints, though it cannot stop that container bind-mounting the host on a container it creates: a bind mount is a field on container create, which has to be allowed for sandboxes to exist. That is defence in depth around the orchestrator rather than the sandbox boundary, and it is accepted for now.
+
+See [`docs/spikes/sandbox-isolation.md`](../docs/spikes/sandbox-isolation.md); `evals/test_sandbox_isolation.py` probes it from inside a live sandbox.
 
 ## Stopping it
 
