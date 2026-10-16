@@ -91,8 +91,14 @@ class Board:
         self._run("--board", board, "complete", task_id, "--summary", summary)
 
     def pending(self, board: str):
+        """Cards waiting on a human.
+
+        Only `blocked`. A card in `review` is waiting on the agent reviewer and
+        the dispatcher will pick it up; polling that status would race the
+        reviewer and let a human decision land mid-critique.
+        """
         result = subprocess.run(
-            [self.binary, "kanban", "--board", board, "list", "--status", "review", "--json"],
+            [self.binary, "kanban", "--board", board, "list", "--status", "blocked", "--json"],
             capture_output=True,
             text=True,
             check=True,
@@ -167,16 +173,16 @@ def pull_request_for(detail: dict) -> tuple[str, int] | None:
     return None
 
 
-def apply(board_client, board: str, task_id: str, decision: str, text: str, status: str = "review") -> None:
+def apply(board_client, board: str, task_id: str, decision: str, text: str, status: str = "blocked") -> None:
     """Record the decision, then move the card.
 
     Order matters: resuming re-spawns the worker, so the feedback has to be on
     the card before it wakes up and reads its context.
 
-    Which transition applies depends on where the card is waiting. `unblock`
-    only accepts a blocked card, and a card in review needs `reopen-review` to
-    go back to its author or `complete` to finish. Calling the wrong one
-    fails, which is how this was found.
+    Which transition applies depends on where the card waits. A human gate is
+    `blocked`, so `unblock` is the normal path. The `review` branches are kept
+    for a card a human reaches while the agent reviewer still holds it;
+    `unblock` rejects a reviewed card, which is how this was found.
     """
     note = "Approved in GitHub." if decision == "approved" else "Changes requested in GitHub."
     board_client.comment(board, task_id, f"{note} {text}".strip())

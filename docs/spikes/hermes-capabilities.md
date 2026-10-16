@@ -124,21 +124,22 @@ Confirmed by this run:
 - A `dir:` workspace survives repeated dispatches: four runs reused one checkout.
 - Completion evidence, review summaries, and run history behave as the CLI probe suggested.
 
-### `kanban.review_dispatch` makes the agent review itself
+### `review` is the agent's queue; `blocked` is the human's
 
-**This defaults to `true`, and it quietly defeats human review.**
+The first run put the human gate on the `review` status, and the agent reviewed itself. `kanban.review_dispatch` defaults to `true`, so the moment a card entered `review` the dispatcher spawned a reviewing worker — and with no reviewer named, that worker was the profile that had just written the document. It critiqued its own work, requested changes from itself, revised, and re-requested review twice before the human watcher saw anything. Every poll returned `0 cards resumed`, because the card was already `running` again.
 
-The moment a card enters `review`, the dispatcher spawns a reviewing worker. On this run that worker was the same profile that wrote the document. It reviewed its own work, posted `changes_requested`, revised, and re-requested review — twice — before the human watcher ever saw the card. Every poll returned `0 cards resumed`, because by then the card was already `running` again.
+Nothing errored. The board looked productive. The human was simply absent.
 
-Nothing errors. The board looks busy and productive. The human is simply not in the loop, and the design's central claim — that an independent reviewer and a human gate stand between an agent and a merge — silently does not hold.
+The fix is not to disable review dispatch, which would throw away a useful independent pass. The two statuses have two different audiences:
 
-Set it to `false` for any board with a human gate:
+| Status | Whose queue | Released by |
+| --- | --- | --- |
+| `review` | the agent reviewer | the dispatcher, automatically |
+| `blocked` | the human | a person, and nothing else |
 
-```bash
-hermes config set kanban.review_dispatch false
-```
+Verified: a `blocked` card is **never** auto-dispatched — `dispatch` reports `Spawned: 0` and leaves it alone. That is what makes it a human gate. And `request-review --reviewer <profile>` **reassigns the card**, so the critique comes from a different profile and a different model rather than from the author.
 
-With it off, the card stayed in `review`, the watcher picked it up, the human's comments reached the card, and the next run applied them. Revisit it only once a genuinely separate reviewer profile exists, and even then the human gate has to come after it, not instead of it.
+So a design document passes two gates in order: `request-review --reviewer ralph-reviewer` for the independent critique, then `block` with a self-contained reason for the human decision. `review_dispatch` stays on.
 
 **Still to verify, with a live worker rather than the CLI:**
 

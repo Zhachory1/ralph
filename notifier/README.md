@@ -6,7 +6,7 @@ Polls a Kanban board for gates waiting on a human and posts each one once to a G
 
 Three findings from the [stage 0 spike](../docs/spikes/hermes-capabilities.md) shape the design, and each would otherwise fail silently:
 
-- **Two statuses, not one.** `request-review` moves a task to `review`; `block` moves it to `blocked`. A poller watching only `blocked` misses every design-doc gate.
+- **Two statuses, two audiences.** `review` is the agent reviewer's queue and the dispatcher claims it automatically. `blocked` is the human's, and is never auto-dispatched. The alert poller watches both, because you want to know either way; the approval watcher only acts on `blocked`, so it never races the reviewer for a card.
 - **Two calls, not one.** `list --json` carries no blocked reason. The reason lives in the review summary, a `BLOCKED:` comment, or a `blocked` event — all returned by `show --json`.
 - **Dedupe keyed by reason, not task id.** A second round of review is a new thing to say; an unchanged gate is not.
 
@@ -40,6 +40,8 @@ No dependencies beyond the standard library.
 
 `approvals.py` is the other half of the loop: it turns your decision in GitHub into a card transition.
 
+It polls `blocked` only. A card in `review` belongs to the agent reviewer, and the dispatcher will spawn it; acting on that status would land a human decision in the middle of a critique. Work reaches you after the reviewer is done, when the author blocks the card.
+
 ```bash
 python3 approvals.py --board <board>
 python3 approvals.py --board <board> --dry-run
@@ -65,7 +67,14 @@ There is no approval label. Merging already says yes, and a second way to say th
 
 Agent pull requests are opened under your account, and GitHub refuses **both** `APPROVED` and `CHANGES_REQUESTED` on your own pull request, leaving `COMMENTED` as the only submittable state. That is the same rule that stops an agent approving its own work; it just also applies to you, which is why review states are the fallback rather than the main path.
 
-### Transitions depend on where the card waits
+### Two gates, in order
+
+| Status | Whose queue | Released by |
+| --- | --- | --- |
+| `review` | the agent reviewer | the dispatcher, automatically |
+| `blocked` | yours | a person, and nothing else |
+
+An independent reviewer pass is worth having, so `kanban.review_dispatch` stays on. What matters is that the reviewer is a **different profile** from the author: pass `--reviewer <profile>` to `request-review`, which reassigns the card. Without that, the dispatcher hands the card back to whoever wrote it and the agent reviews itself.
 
 `unblock` only accepts a blocked card. A card in `review` needs `reopen-review` to go back to its author, or `complete` to finish. The watcher picks per card status; calling the wrong one fails loudly.
 

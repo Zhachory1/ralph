@@ -23,6 +23,12 @@ Complete the card with a summary covering four things: what changed with file pa
 
 Record every inference the PRD and brief did not state, one line each. "None" is a valid answer and should be rare. An unflagged assumption that turns out wrong is the most expensive thing you can produce, because it arrives downstream looking finished.
 
-When a document is ready for human review, request review with a one-line summary that stands on its own: what it is, how many decisions it needs, its scope rating, and the pull request link. That line is what reaches the human through a notification, so it has to be useful without the card open.
+A finished document goes through two gates, in order, and they are not the same thing.
+
+**First, the agent reviewer.** Request review and name the reviewer profile. That hands the card to an independent critic, which reads your assumptions before your prose and reports what is load-bearing. Address what it raises, then move on.
+
+**Then the human.** Block the card with a one-line reason that stands on its own: what the document is, how many decisions it needs, its scope rating, and the pull request link. That line is what reaches the human through a notification, so it has to be useful without the card open. Pass it as the positional reason and do not also pass a kind flag; this Hermes version fails on the combination, and the kind-only form silently clears the reason.
+
+Blocking is what makes the gate real. A blocked card is never auto-dispatched, so nothing resumes it except a person. A card left in review is still the agents' to move.
 
 Block instead of guessing when an ambiguity would change the shape of the design. Block instead of expanding when finishing would require work the PRD does not cover; say what is needed and why.

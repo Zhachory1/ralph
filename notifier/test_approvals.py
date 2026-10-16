@@ -174,6 +174,36 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(["comment", "reopen"], calls)
 
 
+class HumanGateTests(unittest.TestCase):
+    """A human gate is a blocked card. `review` belongs to the agent reviewer,
+    and polling it would race the dispatcher for the same card."""
+
+    def _run(self, pending):
+        github = mock.Mock()
+        github.reviews.return_value = []
+        github.diff_comments.return_value = []
+        github.issue_comments.return_value = []
+        github.pull_request.return_value = {"merged": True, "labels": []}
+        board = mock.Mock()
+        board.pending.return_value = pending
+        board.show.return_value = {
+            "latest_summary": "DD https://github.com/o/r/pull/3",
+            "comments": [],
+        }
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+        return board
+
+    def test_blocked_card_is_resumed_with_unblock(self):
+        board = self._run([{"id": "t_1", "status": "blocked"}])
+        board.unblock.assert_called_once_with("b", "t_1")
+
+    def test_only_blocked_is_polled(self):
+        board = self._run([])
+        board.pending.assert_called_once_with("b")
+
+
 class LabelClearingTests(unittest.TestCase):
     def test_label_is_removed_after_acting(self):
         """A label that stays applied is a decision the next poll makes again,
