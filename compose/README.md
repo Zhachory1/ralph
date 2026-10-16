@@ -92,6 +92,14 @@ docker compose down -v       # stop and delete the board, profiles, and history
 
 `down -v` is not recoverable. Nothing in it is backed up anywhere.
 
+## Tests
+
+```bash
+docker compose exec hermes python3 /ralph/evals/test_orchestration.py
+```
+
+Asserts the board behaves as designed, against the real dispatcher, without spawning a worker or calling a model. See [`evals/README.md`](../evals/README.md).
+
 ## Troubleshooting
 
 **`hermes` restarts in a loop.** It is probably missing `command: ["gateway", "run"]`. The image defaults to interactive chat, which exits immediately with no terminal attached.
@@ -99,3 +107,5 @@ docker compose down -v       # stop and delete the board, profiles, and history
 **Permission denied on `/home/hermes/.hermes`.** A named volume inherits root ownership unless the mount point exists in the image with the right owner. `Dockerfile.init` creates it as UID 10000; rebuild if you have changed the base image.
 
 **Notifier says `GCHAT_WEBHOOK_URL unset`.** Expected without a webhook configured. It skips alerts and still processes GitHub decisions.
+
+**A card sits in `ready` and never runs.** Check `docker compose logs hermes` for `held back: active_pr=1`. A card whose recent comments contain a pull-request URL is guarded against respawn, so a crashed worker cannot open a second PR. The guard lifts on a handoff event, which the approval watcher records; if you moved the card by hand, reassign it elsewhere and back.

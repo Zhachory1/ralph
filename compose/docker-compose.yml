@@ -42,6 +42,7 @@ services:
     volumes:
       - hermes-home:/home/hermes/.hermes
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
+      - ../evals:/ralph/evals:ro
     ports:
       # Bound to localhost. The dashboard has no authentication.
       - "127.0.0.1:${RALPH_DASHBOARD_PORT:-9219}:9219"
