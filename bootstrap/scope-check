@@ -91,8 +91,21 @@ def plan_from_card(board: str, card: str) -> dict:
 
 
 def matches(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatch(path, p) or path.startswith(p.rstrip("/") + "/")
-               for p in patterns)
+    """A plan entry matches a path exactly, as a directory prefix, or as a glob.
+
+    Exact match is tried first and literally. Next.js route directories are
+    named `[id]`, which fnmatch reads as a character set, so a planned
+    `app/a/[id]/edit/page.tsx` would never match the file of that name and the
+    check would flag the very file it authorised.
+    """
+    for pattern in patterns:
+        if path == pattern:
+            return True
+        if path.startswith(pattern.rstrip("/") + "/"):
+            return True
+        if fnmatch.fnmatch(path, pattern):
+            return True
+    return False
 
 
 def check(files: list[str], lines: int, plan: dict, max_lines: int) -> list[str]:

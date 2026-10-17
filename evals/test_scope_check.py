@@ -67,6 +67,13 @@ class CheckTests(unittest.TestCase):
         flags = scope_check.check(["src/digest.py"], 10, {"files": []}, 400)
         self.assertTrue(flags)
 
+    def test_a_route_directory_in_brackets_matches_literally(self):
+        """Next.js names a dynamic route `[id]`, which fnmatch reads as a
+        character set. Globbing first made the check flag the very file the
+        plan authorised."""
+        planned = ["apps/hub/app/a/[id]/edit/page.tsx"]
+        self.assertEqual([], self.check(planned, planned=planned))
+
     def test_a_planned_dependency_file_is_allowed(self):
         """Adding a dependency is fine when the design said to."""
         self.assertEqual([], self.check(["package.json"], planned=["package.json"]))
