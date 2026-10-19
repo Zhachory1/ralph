@@ -30,3 +30,18 @@ RUN apt-get update \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends chromium fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
+
+# mise, so a repository's own toolchain pins decide what runs.
+#
+# Without this the sandbox uses whatever Node the base image ships, which is
+# not what the repository pins and not what CI runs. That is not a detail: it
+# sent one investigation an hour down the wrong path, and forced a test run to
+# carry NODE_OPTIONS=--no-experimental-webstorage because a newer Node shadowed
+# jsdom's localStorage. An agent reasoning about a fault in the wrong runtime
+# reaches confident wrong conclusions.
+#
+# `mise install` in a checkout reads its mise.toml and fetches the pinned
+# versions; `mise exec --` then runs a command under them.
+RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh \
+ && /usr/local/bin/mise --version
+ENV MISE_DATA_DIR=/root/.local/share/mise

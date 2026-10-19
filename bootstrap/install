@@ -36,7 +36,7 @@ hermes config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory
 
 # Credentials the sandbox needs to do repository work. Nothing else is
 # forwarded: the model key and the chat webhook stay outside it.
-hermes config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL"]' >/dev/null
+hermes config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN"]' >/dev/null
 
 hermes kanban init >/dev/null 2>&1 || true
 if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
