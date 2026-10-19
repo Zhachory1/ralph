@@ -9,6 +9,8 @@ set -euo pipefail
 BOARD=${RALPH_BOARD:-ralph}
 INTERVAL=${RALPH_POLL_SECONDS:-900}
 STATE=${RALPH_STATE_FILE:-/var/lib/ralph/notifier-state.json}
+DIGEST_HOUR=${RALPH_DIGEST_HOUR:-8}
+DIGEST_STAMP=${RALPH_DIGEST_STAMP:-/var/lib/ralph/digest-sent}
 
 echo "ralph notifier: board=${BOARD} every ${INTERVAL}s"
 
@@ -23,6 +25,20 @@ while true; do
     if [ -n "${GH_TOKEN:-}" ]; then
         python3 /ralph/notifier/approvals.py --board "$BOARD" \
             || echo "notifier: approval poll failed, will retry" >&2
+    fi
+
+    # The morning digest, once a day. A stamp file rather than a timer, so a
+    # restart does not send it twice and a machine asleep at the hour still
+    # gets it on the first poll after waking.
+    today=$(date +%Y-%m-%d)
+    hour=$(date +%-H)
+    if [ -n "${GCHAT_WEBHOOK_URL:-}" ] && [ "$hour" -ge "$DIGEST_HOUR" ] \
+       && [ "$(cat "$DIGEST_STAMP" 2>/dev/null || true)" != "$today" ]; then
+        if python3 /ralph/notifier/digest.py --board "$BOARD"; then
+            echo "$today" > "$DIGEST_STAMP"
+        else
+            echo "notifier: digest failed, will retry" >&2
+        fi
     fi
 
     sleep "$INTERVAL"

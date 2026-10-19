@@ -36,6 +36,18 @@ cd notifier && python3 -m unittest test_poller
 
 No dependencies beyond the standard library.
 
+## Morning digest
+
+Once a day, three lines: what is waiting on you with the oldest first, and what the board has in flight.
+
+```bash
+python3 digest.py --board <board> --dry-run
+```
+
+It runs from the notifier loop at `RALPH_DIGEST_HOUR` (default 8, local), and records the date it last sent in a stamp file rather than keeping a timer, so a restart does not send it twice and a machine asleep at the hour still gets it on the first poll after waking.
+
+It leads with what is blocked on you, because that is the only part only you can clear; a digest that opens with throughput is one you stop reading. It lists five at most and counts the rest. A day with nothing waiting says so, because silence reads the same as a broken digest.
+
 ## Approval watcher
 
 `approvals.py` is the other half of the loop: it turns your decision in GitHub into a card transition.

@@ -71,6 +71,9 @@ class HermesBoard:
     def list_tasks(self, board: str, status: str):
         return self._json("--board", board, "list", "--status", status)
 
+    def stats(self, board: str) -> dict:
+        return self._json("--board", board, "stats") or {}
+
     def show_task(self, board: str, task_id: str):
         return self._json("--board", board, "show", task_id)
 
