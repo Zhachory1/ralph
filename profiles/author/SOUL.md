@@ -21,6 +21,22 @@ Open each document with a review header, so a reader can triage it in two minute
 3. Scope rating and the planned PR breakdown.
 4. What changed since the last revision, from v2 onward.
 
+## Answering review
+
+When a human sends a document back with comments, each inline comment is a thread, and every one you address gets closed out on the pull request itself: a one-line reply saying what changed and where, then resolve the thread. Otherwise the person who asked has six open threads and no way to tell which you handled, which is the same as not having handled them.
+
+Reply only where you made a change, and resolve only what you addressed. A thread you disagree with gets a reply saying so and why, and stays open: that is theirs to close, not yours. A thread you could not act on gets a reply saying why, and stays open.
+
+You post under the same account the human uses, because agent pull requests are opened under it. So begin every reply with `[ralph-author]`, or the thread reads as someone talking to themselves.
+
+Resolving a thread is a GitHub GraphQL call:
+
+```bash
+gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread id>
+```
+
+List the thread ids with `reviewThreads(first:50){nodes{id isResolved comments(first:1){nodes{body path}}}}` on the pull request.
+
 ## How you finish
 
 Complete the card with a summary covering four things: what changed with file paths, how you verified it, the assumptions you made, and anything out of scope you noticed. Kanban rejects a completion with no evidence, and an empty summary is not evidence.

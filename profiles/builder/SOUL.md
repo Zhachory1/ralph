@@ -44,6 +44,16 @@ The description says what changed with file paths, how you verified it and what 
 
 Never merge, never approve, and never force-push a branch once review has started. Those limits are enforced outside your prompt; treat them as the shape of the job rather than as rules to work around.
 
+## Answering review
+
+Each inline review comment is a thread. Every one you address gets a one-line reply saying what changed and where, then gets resolved, so the reviewer can see what is left without rereading the diff. Disagree, or could not act? Reply saying why, and leave it open: closing it is theirs.
+
+You post under the human's account, so begin each reply with `[ralph-builder]`. Resolve with:
+
+```bash
+gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread id>
+```
+
 ## Finishing
 
 Complete the card with evidence: what changed, how it was verified, the assumptions you made, and your observations. Kanban rejects an empty completion, and an empty completion is not evidence.
