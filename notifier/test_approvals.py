@@ -5,8 +5,10 @@ card waiting on them resumes. The risk is acting on the wrong signal, so
 most of these pin what must *not* unblock a card.
 """
 
+import io
 import json
 import unittest
+from contextlib import redirect_stderr
 from unittest import mock
 
 import approvals
@@ -134,6 +136,109 @@ class PullRequestLinkTests(unittest.TestCase):
         """A card with no PR is waiting on something else. Leave it alone."""
         detail = {"latest_summary": "question: which TTL?", "comments": []}
         self.assertIsNone(approvals.pull_request_for(detail))
+
+
+class PullRequestFromAncestorsTests(unittest.TestCase):
+    """A gate card is created before the pull request it gates exists, so the
+    address is never on the gate card itself. It has to be found on whichever
+    ancestor opened the pull request and later completed."""
+
+    def test_finds_pr_on_the_immediate_parent(self):
+        board = mock.Mock()
+        board.show.return_value = {
+            "latest_summary": "Opened https://github.com/o/r/pull/9",
+            "comments": [],
+        }
+        detail = {"parents": ["t_parent"]}
+        self.assertEqual(
+            ("o/r", 9), approvals.pull_request_from_ancestors(board, "b", detail)
+        )
+        board.show.assert_called_once_with("b", "t_parent")
+
+    def test_walks_past_a_parent_with_nothing_to_a_grandparent(self):
+        board = mock.Mock()
+        board.show.side_effect = [
+            {"latest_summary": None, "comments": [], "parents": ["t_grandparent"]},
+            {"latest_summary": "https://github.com/o/r/pull/4", "comments": []},
+        ]
+        detail = {"parents": ["t_parent"]}
+        self.assertEqual(
+            ("o/r", 4), approvals.pull_request_from_ancestors(board, "b", detail)
+        )
+
+    def test_none_when_no_ancestor_has_a_pull_request(self):
+        board = mock.Mock()
+        board.show.return_value = {"latest_summary": None, "comments": [], "parents": []}
+        detail = {"parents": ["t_parent"]}
+        self.assertIsNone(approvals.pull_request_from_ancestors(board, "b", detail))
+
+    def test_no_parents_resolves_to_none_without_calling_the_board(self):
+        board = mock.Mock()
+        self.assertIsNone(
+            approvals.pull_request_from_ancestors(board, "b", {"parents": []})
+        )
+        board.show.assert_not_called()
+
+    def test_does_not_revisit_a_parent_reachable_twice(self):
+        """Two dependency edges to the same ancestor must not loop forever."""
+        board = mock.Mock()
+        board.show.return_value = {"latest_summary": None, "comments": [], "parents": ["t_shared"]}
+        detail = {"parents": ["t_shared", "t_shared"]}
+        approvals.pull_request_from_ancestors(board, "b", detail)
+        self.assertEqual(1, board.show.call_count)
+
+
+class GateAddressPropagationTests(unittest.TestCase):
+    """The end-to-end loop: a gate card with no address of its own finds one
+    on an ancestor that completed having opened a pull request, and carries
+    it from then on -- without a human pasting it by hand."""
+
+    def _github(self, merged=True):
+        github = mock.Mock()
+        github.reviews.return_value = []
+        github.diff_comments.return_value = []
+        github.issue_comments.return_value = []
+        github.pull_request.return_value = {"merged": merged, "labels": []}
+        return github
+
+    def test_address_propagates_from_a_completed_ancestor(self):
+        board = mock.Mock()
+        board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
+
+        def show(_board, task_id):
+            if task_id == "t_gate":
+                return {"latest_summary": None, "comments": [], "parents": ["t_author"]}
+            return {
+                "latest_summary": "Opened https://github.com/o/r/pull/9",
+                "comments": [],
+            }
+
+        board.show.side_effect = show
+        github = self._github()
+
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+
+        github.reviews.assert_called_once_with("o/r", 9)
+        board.comment.assert_any_call("b", "t_gate", "https://github.com/o/r/pull/9")
+        board.unblock.assert_called_once_with("b", "t_gate")
+
+    def test_gate_with_nothing_resolvable_is_reported_not_skipped_silently(self):
+        board = mock.Mock()
+        board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
+        board.show.return_value = {"latest_summary": None, "comments": [], "parents": []}
+        github = self._github()
+
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                approvals.main(["--board", "b"])
+
+        github.reviews.assert_not_called()
+        board.unblock.assert_not_called()
+        self.assertIn("t_gate", stderr.getvalue())
 
 
 class ResolveTests(unittest.TestCase):

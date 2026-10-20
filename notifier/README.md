@@ -59,6 +59,20 @@ python3 approvals.py --board <board>
 python3 approvals.py --board <board> --dry-run
 ```
 
+### A gate card finds its own pull request
+
+A gate card is created at planning time, before the pull request it gates
+exists, so the address is never on the card itself. `approvals.py` reads its
+own summary and comments first (unchanged), and if that finds nothing, walks
+`parents` -- the ids `show --json` carries -- looking for an ancestor that
+later completed having opened one. The first address it finds is written back
+onto the gate card as a comment, the same act a human used to do by hand, so
+from then on the card carries its own address.
+
+A gate reached with nothing resolvable anywhere in its ancestry is not
+skipped in silence: it is printed to stderr, so a crashed gate shows up in
+the notifier's own logs instead of just never clearing.
+
 ### Comment normally; label when you are done
 
 Review the design doc however you like — inline on the diff, at the top level, or in a review. Every comment is collected and handed to the worker, oldest first, with inline comments keeping their `file:line` so "this is wrong" still points somewhere.
