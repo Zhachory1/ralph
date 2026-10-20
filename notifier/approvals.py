@@ -221,6 +221,30 @@ def pull_request_for(detail: dict) -> tuple[str, int] | None:
     return None
 
 
+def pull_request_from_ancestors(board_client, board: str, detail: dict, _seen=None) -> tuple[str, int] | None:
+    """Find the address on the ancestor that actually opened it.
+
+    A gate card is created at planning time, before the pull request it gates
+    exists, so the address is never on the gate card itself. It lands on
+    whichever ancestor later completed having opened one. Walk `parents` --
+    a list of task ids, per `show --json` -- one level at a time, until one
+    resolves or the chain runs out. A `seen` set guards against revisiting a
+    parent reachable by more than one path.
+    """
+    seen = _seen if _seen is not None else set()
+    for parent_id in detail.get("parents") or []:
+        if parent_id in seen:
+            continue
+        seen.add(parent_id)
+        parent_detail = board_client.show(board, parent_id)
+        link = pull_request_for(parent_detail) or pull_request_from_ancestors(
+            board_client, board, parent_detail, seen
+        )
+        if link:
+            return link
+    return None
+
+
 def apply(board_client, board: str, task_id: str, decision: str, text: str, status: str = "blocked") -> None:
     """Record the decision, then move the card.
 
@@ -262,8 +286,21 @@ def main(argv=None) -> int:
 
     for task in board_client.pending(args.board):
         task_id = task["id"]
-        link = pull_request_for(board_client.show(args.board, task_id))
+        detail = board_client.show(args.board, task_id)
+        link = pull_request_for(detail)
         if not link:
+            link = pull_request_from_ancestors(board_client, args.board, detail)
+            if link:
+                # The gate card is created before the pull request exists, so
+                # there is nobody to paste the address by hand. Write it down
+                # here instead, the same act a human would have done, so the
+                # card carries its own address from now on.
+                repo, number = link
+                board_client.comment(args.board, task_id, f"https://github.com/{repo}/pull/{number}")
+        if not link:
+            # The failure this issue is about is silence, not an error: skip
+            # this card as before, but say so instead of skipping quietly.
+            print(f"{task_id}: blocked with no pull request to approve", file=sys.stderr)
             continue
 
         repo, number = link
