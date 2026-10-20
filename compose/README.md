@@ -52,6 +52,7 @@ docker compose exec hermes hermes auth list
 | `hermes` | Gateway and Kanban dispatcher | Long-running |
 | `init` | Creates the board and profiles from `profiles/`, sets board settings | Runs once, exits |
 | `notifier` | Posts gates to chat, turns GitHub decisions into card moves | Long-running loop |
+| `hermes-webui` | Chat space for talking with the agents, alongside the dashboard | Long-running |
 
 `init` and `notifier` share one small image. They drive the Hermes CLI through the `hermes` container rather than carrying it: the Hermes image is about 4.5GB, and shipping two copies of it to run a handful of commands doubled the stack's disk for nothing.
 
@@ -78,6 +79,40 @@ hermes kanban boards list                              # your own boards, unchan
 
 The dashboard binds to `127.0.0.1:9219` rather than Hermes' usual port, so it will not collide with a dashboard you already run. It has no authentication; keep it on localhost.
 
+## hermes-webui (the chat space)
+
+The dashboard above stays the monitor: board, cards, the "needs attention" banner. `hermes-webui` is
+a separate service, alongside it, for actually talking with the agents — a chat application rather
+than a terminal in a tab. Neither replaces the other. See the decision record this follows from,
+`projects/hermes-webui-evaluation/decisions.md`.
+
+It binds to `127.0.0.1:${RALPH_WEBUI_PORT:-9220}`, a different port from the dashboard so the two run
+side by side. **It has no authentication; keep it on localhost, same as the dashboard.** There is no
+exception: condition 2 of the decision record this follows from rules out exposure beyond 127.0.0.1
+under any circumstances for this deployment.
+
+It shares the `hermes-home` volume with the `hermes` service, so it sees the same profiles, board, and
+sessions — this runs alongside the already-running agent rather than installing a second one. Its
+`environment:` block clears `HERMES_KANBAN_DB` and `HERMES_KANBAN_BOARD` explicitly: hermes-webui
+resolves which board to display from those two variables rather than from `HERMES_HOME`, so leaving
+them merely unset is not the same guarantee as setting them, and an inherited pin from an ambient
+shell would silently mislabel the live board.
+
+**Pin it in a matched pair with Hermes, and keep it that way.** hermes-webui runs the agent in-process
+against its internal module layout rather than through a versioned API, so a hermes-webui pinned to
+one Hermes Agent version is not known-good against another. There is no published compatibility
+matrix between the two projects; `HERMES_WEBUI_VERSION` in `.env.example` is pinned by release-date
+proximity to `HERMES_VERSION`, not by a verified pairing. Every time `HERMES_VERSION` moves, re-qualify
+and bump `HERMES_WEBUI_VERSION` with it — this is a standing obligation, not a one-time check.
+
+**Tool calls from its chat run in the hermes-webui container, not the agent's sandboxed one.**
+Read that plainly: the sandbox model this stack otherwise relies on — agent shell commands running in
+a per-profile sibling container, isolated from the host, the Docker socket, the board, and other
+profiles' credentials (see "Sandboxing" below) — does not cover tools invoked from hermes-webui's
+chat. A shell command started there runs directly in the `hermes-webui` container, which holds the
+`hermes-home` volume. This is a known, accepted cost of adopting hermes-webui, not something this
+deployment fixes.
+
 ## Upgrading
 
 Bump `HERMES_VERSION` or `RALPH_VERSION` in `.env`, then:
@@ -87,6 +122,18 @@ docker compose up -d --build
 ```
 
 `init` re-runs on every start and is idempotent: it updates profile definitions from the repo and leaves your board, cards, and history alone. Your own edits to a profile's `config.yaml` survive, since only the `model:` block is Ralph's.
+
+**Bumping `HERMES_VERSION` also means re-qualifying and bumping `HERMES_WEBUI_VERSION`** — see
+"hermes-webui" above. And bumping the agent image alone is not enough to update what hermes-webui
+sees: the `hermes-agent-src` volume is populated once, from the agent image's own `/opt/hermes`, the
+first time the `hermes` service starts, and a later `docker pull` or `docker compose up` reuses it
+verbatim rather than refreshing it. To actually pick up a newer agent's source:
+
+```bash
+docker compose down
+docker volume rm ralph_hermes-agent-src
+docker compose up -d
+```
 
 ## Uninstall
 
