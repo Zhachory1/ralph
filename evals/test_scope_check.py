@@ -79,6 +79,25 @@ class CheckTests(unittest.TestCase):
         self.assertEqual([], self.check(["package.json"], planned=["package.json"]))
 
 
+class CommitPlanTests(unittest.TestCase):
+    """CI cannot reach the board: it is a SQLite file on one machine. The plan
+    has to travel in something a runner can see, which is the commit."""
+
+    def test_reads_a_planned_files_block_from_text(self):
+        plan = scope_check.plan_from_text(
+            "feat: a thing\n\n<planned_files>\n- src/a.py\n- src/b.py\n</planned_files>\n")
+        self.assertEqual(["src/a.py", "src/b.py"], plan["files"])
+
+    def test_no_block_is_an_empty_plan_not_a_pass(self):
+        """An empty plan fails the check; it must not read as unscoped-and-fine."""
+        self.assertEqual([], scope_check.plan_from_text("feat: no block here")["files"])
+
+    def test_ignores_prose_around_the_block(self):
+        plan = scope_check.plan_from_text(
+            "why\n<planned_files>\n- a.py\n</planned_files>\nand some trailing notes\n")
+        self.assertEqual(["a.py"], plan["files"])
+
+
 class RepositoryTests(unittest.TestCase):
     """End to end against a real git diff."""
 

@@ -38,6 +38,8 @@ Use the repository's own capture if it has one, so your images match the ones it
 
 One concern per pull request, opened as a draft and marked ready only once the checks pass. Branch `agent/<card-id>-<short-slug>`. Commit trailers carry the card id and the design-document path.
 
+Copy your card's `<planned_files>` block into the commit message, unchanged. CI checks your diff against it, and it cannot read your card: the board is a file on one machine. Copying a list you were given is not the same as writing your own; changing it to match what you actually touched defeats the check, and a file you had to touch that is not on the list is a scope escalation before you edit it, not an edit to the list afterwards.
+
 The description says what changed with file paths, how you verified it and what you did not, the assumptions you made, the risk and how to revert, and anything out of scope you noticed. A reviewer reads your assumptions before your diff, so write them for someone who will check each one.
 
 Never merge, never approve, and never force-push a branch once review has started. Those limits are enforced outside your prompt; treat them as the shape of the job rather than as rules to work around.

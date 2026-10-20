@@ -65,18 +65,10 @@ def changed_lines(base: str, head: str) -> int:
     return total
 
 
-def plan_from_card(board: str, card: str) -> dict:
-    """Read the plan the orchestrator wrote onto the card.
-
-    The card brief is authored before the work and is not editable by the
-    pull request under review, which is the whole point.
-    """
-    raw = run("hermes", "kanban", "--board", board, "show", card, "--json")
-    detail = json.loads(raw or "{}")
-    body = (detail.get("task") or {}).get("body") or ""
-
+def plan_from_text(text: str) -> dict:
+    """Read a <planned_files> block out of whatever text holds it."""
     files, section = [], False
-    for line in body.splitlines():
+    for line in (text or "").splitlines():
         if re.match(r"^\s*<planned_files>", line):
             section = True
             continue
@@ -88,6 +80,36 @@ def plan_from_card(board: str, card: str) -> dict:
             if match:
                 files.append(match.group(1))
     return {"files": files}
+
+
+def plan_from_commit(base: str, head: str) -> dict:
+    """Read the plan out of the commit messages on this branch.
+
+    The plan belongs to the card, which is authored before the work starts and
+    is not editable by the pull request under review. But the board is a SQLite
+    file on the operator's own machine, so a CI runner cannot read it: the
+    check that depends on it fails with `FileNotFoundError: 'hermes'` and tells
+    nobody anything about scope.
+
+    So the worker copies the block into its commit message, where CI can see
+    it. That is weaker — a worker writes its own commit — and it is the
+    strongest thing available to a runner that cannot reach the board. The
+    card remains the record; `--card` still reads it where Hermes is present.
+    """
+    out = run("git", "log", "--format=%B", f"{base}...{head}")
+    return plan_from_text(out)
+
+
+def plan_from_card(board: str, card: str) -> dict:
+    """Read the plan the orchestrator wrote onto the card.
+
+    The card brief is authored before the work and is not editable by the
+    pull request under review, which is the whole point. Needs the hermes CLI
+    and the board, so it is for a machine that has both.
+    """
+    raw = run("hermes", "kanban", "--board", board, "show", card, "--json")
+    detail = json.loads(raw or "{}")
+    return plan_from_text((detail.get("task") or {}).get("body") or "")
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -143,6 +165,9 @@ def main(argv=None) -> int:
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--plan", help="JSON file with {\"files\": [...]}")
     parser.add_argument("--card", help="Kanban card id to read the plan from")
+    parser.add_argument("--from-commits", action="store_true",
+                        help="Read the plan from this branch's commit messages, "
+                             "for a runner that cannot reach the board")
     parser.add_argument("--board", default="ralph")
     parser.add_argument("--max-lines", type=int, default=DEFAULT_MAX_LINES)
     parser.add_argument("--labels", default="",
@@ -155,10 +180,12 @@ def main(argv=None) -> int:
 
     if args.plan:
         plan = json.loads(open(args.plan).read())
+    elif args.from_commits:
+        plan = plan_from_commit(args.base, args.head)
     elif args.card:
         plan = plan_from_card(args.board, args.card)
     else:
-        print("need --plan or --card", file=sys.stderr)
+        print("need --plan, --card or --from-commits", file=sys.stderr)
         return 64
 
     files = changed_files(args.base, args.head)
