@@ -1,7 +1,8 @@
 """Copy the blocks Ralph owns from a repo profile into an installed profile.
 
-Ralph owns two things in a Hermes config.yaml: which model a profile runs, and
-which toolsets it may use. Everything else is generated and version-specific,
+Ralph owns three things in a Hermes config.yaml: which model a profile runs,
+which toolsets it may use, and whether its unattended runs may use the tools
+that would otherwise wait for an approval nobody is there to give. Everything else is generated and version-specific,
 so it is left exactly as found.
 
 Toolsets are not cosmetic. A profile without the toolset its job needs reads
@@ -17,7 +18,7 @@ import re
 import sys
 
 # A top-level block and the indented lines under it.
-BLOCKS = ("model", "platform_toolsets")
+BLOCKS = ("model", "platform_toolsets", "approvals")
 
 
 def block_re(name: str) -> re.Pattern[str]:

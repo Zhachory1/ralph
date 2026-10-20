@@ -23,6 +23,16 @@ echo "ralph: installing into ${HERMES_HOME:-$HOME/.hermes}"
 # is that request-review always names a reviewer, which the author profile does.
 hermes config set kanban.review_dispatch true >/dev/null
 
+# A card-dispatched worker runs with nobody present to answer an approval
+# prompt, and Hermes' default is to refuse the approval-gated tools outright.
+# That makes work on the board strictly weaker than the same work run
+# interactively, which is backwards: the sandbox is the boundary, not a
+# prompt. Smart approval still refuses what it judges genuinely dangerous,
+# and everything a worker runs happens in a container that cannot reach the
+# host, the board, or another profile's credentials.
+hermes config set approvals.single_query_mode approve >/dev/null
+hermes config set approvals.unattended_mode approve >/dev/null
+
 # The orchestrator plans the card graph; Kanban must not plan a second one.
 # With auto_decompose on, a card that is already finished and waiting on a
 # human gets split into subtasks that redo the work it just did, and the

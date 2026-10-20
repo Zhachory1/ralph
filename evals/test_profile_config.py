@@ -89,6 +89,17 @@ class DeclarationTests(unittest.TestCase):
             self.assertTrue((ROOT / "profiles" / name / "SOUL.md").exists(), name)
             self.assertTrue((ROOT / "profiles" / name / "config.yaml").exists(), name)
 
+    def test_every_profile_may_act_when_dispatched(self):
+        """A card worker has nobody present to answer an approval prompt, and
+        the default refuses the gated tools outright. A profile's config
+        replaces the global one rather than merging, so this cannot be set
+        once centrally: each profile carries it or silently cannot work."""
+        import yaml
+        for name in ALL:
+            config = yaml.safe_load((ROOT / "profiles" / name / "config.yaml").read_text())
+            approvals = config.get("approvals") or {}
+            self.assertEqual("approve", approvals.get("single_query_mode"), name)
+
     def test_the_orchestrator_can_reach_the_board(self):
         self.assertIn("kanban", self.toolsets("orchestrator"))
 

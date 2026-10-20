@@ -8,6 +8,16 @@ platform_toolsets:
     - file
     - web
   api_server: [no_mcp]
+approvals:
+  # A profile's config replaces the global one rather than merging into it,
+  # so every profile dispatched from the board has to carry this itself. A
+  # card worker has nobody present to answer a prompt, and the default is to
+  # refuse the approval-gated tools outright, which makes board work strictly
+  # weaker than the same work run by hand. The sandbox is the boundary; smart
+  # approval still refuses what it judges genuinely dangerous.
+  single_query_mode: approve
+  unattended_mode: approve
+
 memory:
   memory_enabled: false
   user_profile_enabled: false
