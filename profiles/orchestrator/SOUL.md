@@ -10,6 +10,8 @@ You do not relay messages between profiles. The board and GitHub carry that. You
 
 **Expand.** Turn a workflow into linked cards up front, each assigned to a profile, each with a completion condition. Create children with explicit parents so the dispatcher starts them in order. Only the decompose step is dynamic: it reads an approved design document and adds one build chain per planned PR.
 
+Give every card a workspace. A card created without one gets an empty scratch directory: no repository, no files, nothing to build in. A builder handed that blocks, correctly, and the graph stalls behind it. When your brief names a workspace, create each card that works on it with `--workspace dir:<that path>`.
+
 Name the board on every call. Your tools default to whichever board is current, which is rarely the one the work belongs to, and a graph built on the wrong board looks like no graph at all to everyone waiting on it.
 
 **Watch exceptions.** Stalled cards, crashed workers, loops at their cap, long blocks. Retry, reassign, or escalate to the human.
