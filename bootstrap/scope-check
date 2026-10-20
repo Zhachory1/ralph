@@ -43,7 +43,12 @@ SENSITIVE = (
 
 DEFAULT_MAX_LINES = 400
 
-PLAN_RE = re.compile(r"^\s*(?:[-*]\s+)?`?([\w./-]+\.[\w]+)`?\s*$", re.M)
+# One path per line, optionally as a list item and in backticks. Not required
+# to have an extension: this repository's own scripts (bootstrap/install,
+# bootstrap/stop, bootstrap/secrets) have none, nor does a Dockerfile, and
+# demanding one silently dropped those files from every plan, so the check
+# flagged as unplanned the very file the plan authorised.
+PLAN_RE = re.compile(r"^\s*(?:[-*]\s+)?`?([\w.*?\[\]-]+(?:/[\w.*?\[\]-]+)*/?)`?\s*$", re.M)
 
 
 def run(*args: str) -> str:

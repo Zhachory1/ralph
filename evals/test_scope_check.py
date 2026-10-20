@@ -92,6 +92,26 @@ class CommitPlanTests(unittest.TestCase):
         """An empty plan fails the check; it must not read as unscoped-and-fine."""
         self.assertEqual([], scope_check.plan_from_text("feat: no block here")["files"])
 
+    def test_a_file_with_no_extension_is_planned(self):
+        """This repository's own scripts have no extension, and neither does
+        a Dockerfile. Requiring one dropped them from every plan silently, so
+        the check flagged as unplanned the very file the plan authorised."""
+        plan = scope_check.plan_from_text(
+            "<planned_files>\n- bootstrap/secrets\n- Dockerfile\n- `bootstrap/stop`\n</planned_files>")
+        self.assertEqual(["bootstrap/secrets", "Dockerfile", "bootstrap/stop"], plan["files"])
+
+    def test_globs_directories_and_route_brackets_are_planned(self):
+        plan = scope_check.plan_from_text(
+            "<planned_files>\n- tests/*.py\n- src/\n- app/a/[id]/edit/page.tsx\n</planned_files>")
+        self.assertEqual(["tests/*.py", "src/", "app/a/[id]/edit/page.tsx"], plan["files"])
+
+    def test_a_line_of_prose_is_not_a_path(self):
+        """Loosening the pattern must not let a sentence in the block become
+        a planned 'file' that then matches nothing and hides a real one."""
+        plan = scope_check.plan_from_text(
+            "<planned_files>\n- two words\nsome prose here\n- a.py\n</planned_files>")
+        self.assertEqual(["a.py"], plan["files"])
+
     def test_ignores_prose_around_the_block(self):
         plan = scope_check.plan_from_text(
             "why\n<planned_files>\n- a.py\n</planned_files>\nand some trailing notes\n")
