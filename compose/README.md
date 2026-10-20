@@ -7,6 +7,7 @@ Ralph runs as its own Hermes in its own container. If you already run Hermes on 
 ```bash
 cd compose
 cp .env.example .env     # fill in HERMES_VERSION and your credentials
+../bootstrap/secrets      # generates RALPH_WEBUI_API_KEY if it is still blank
 docker compose up -d
 ```
 
