@@ -90,6 +90,22 @@ services:
         condition: service_started
     environment:
       HERMES_HOME: /home/hermes/.hermes
+      # The dashboard: the monitor, and the reason port 9219 is published.
+      # Hermes' image starts it only when HERMES_DASHBOARD is truthy, so until
+      # this was set the port mapped to nothing and the "monitor" did not
+      # exist. Its port must also match the container side of the mapping
+      # below; the image's default is 9119.
+      #
+      # It binds 0.0.0.0 inside the container because that is the only way a
+      # published port reaches it, and the image's auth gate engages on any
+      # non-loopback bind and refuses to start without a provider. The
+      # password here satisfies that gate. Exposure to the machine is still
+      # loopback only, by the 127.0.0.1 in the port mapping.
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_HOST: 0.0.0.0
+      HERMES_DASHBOARD_PORT: "9219"
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${RALPH_DASHBOARD_USER:-ralph}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${RALPH_DASHBOARD_PASSWORD:?run bootstrap/secrets to generate RALPH_DASHBOARD_PASSWORD}
       # Run agent commands in sibling sandbox containers rather than in this
       # one, reached only through the proxy above.
       # Agent commands run in a per-profile sibling container, not in here.
@@ -198,6 +214,20 @@ services:
       # a parent shell can never mislabel the live board.
       HERMES_KANBAN_DB: ""
       HERMES_KANBAN_BOARD: ""
+      # Required: the image's init script exits without it. Its own volume
+      # rather than a directory inside hermes-home, so chat sessions and
+      # uploads sit apart from Hermes' state and its credentials, and can be
+      # dropped without touching either.
+      HERMES_WEBUI_STATE_DIR: /home/hermeswebui/webui-state
+      # Build hermes-webui's venv on the same Python as the agent it runs.
+      # Hermes pins every core dependency with `python_version >= '3.14'`, and
+      # the image builds its venv on its own 3.12; under 3.12 those markers are
+      # all false, so the install succeeds while skipping openai, httpx and
+      # twenty more, and the chat cannot run the agent at all. The image's
+      # init calls a bare `uv venv`, which honours UV_PYTHON, so this needs no
+      # change to the image. A venv built before this was set is reused on
+      # restart; remove the container once to rebuild it.
+      UV_PYTHON: "3.14"
       # hermes's own volume is owned by UID/GID 10000 (see Dockerfile.init);
       # match it so hermes-webui can read the shared hermes-home volume.
       WANTED_UID: 10000
@@ -215,6 +245,7 @@ services:
       # Read-only: hermes-webui only reads this to install the agent's
       # Python dependencies at startup, never to write it.
       - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
+      - hermes-webui-state:/home/hermeswebui/webui-state
     ports:
       # Bound to localhost, same as the dashboard above. No authentication.
       - "127.0.0.1:${RALPH_WEBUI_PORT:-9220}:8787"
@@ -228,3 +259,5 @@ volumes:
   # the hermes service starts. Not refreshed by a later docker pull/up --
   # see hermes-webui's entry in README.md's "Upgrading" section.
   hermes-agent-src:
+  # hermes-webui's own sessions, workspaces and uploads.
+  hermes-webui-state:

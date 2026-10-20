@@ -33,6 +33,16 @@ hermes config set kanban.review_dispatch true >/dev/null
 hermes config set approvals.single_query_mode approve >/dev/null
 hermes config set approvals.unattended_mode approve >/dev/null
 
+# hermes-webui stages the agent's source by rsync-ing it as an unprivileged
+# user, and the Hermes image ships one file in that tree, an empty lock file,
+# readable by root alone. rsync fails on it and hermes-webui exits before it
+# serves anything. Making that one file world-readable is enough; it holds no
+# data. Only the mode changes, and only for files nobody else can read.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -u 0 "$RALPH_HERMES_CONTAINER" \
+        find /opt/hermes -type f ! -perm -o+r -exec chmod o+r {} + 2>/dev/null || true
+fi
+
 # The orchestrator plans the card graph; Kanban must not plan a second one.
 # With auto_decompose on, a card that is already finished and waiting on a
 # human gets split into subtasks that redo the work it just did, and the
