@@ -1,0 +1,24 @@
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    # Reads the board, runs the evals, writes one report. It judges the
+    # system, so it needs to see the board; it may not edit what it judges,
+    # which is enforced by its token rather than by this list.
+    - kanban
+    - file
+    - code_execution
+  api_server: [no_mcp]
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  max_turns: 60
+  run_budget_seconds: 1800
+  api_max_retries: 0

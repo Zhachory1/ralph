@@ -68,18 +68,46 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("_config_version: 46", out)
 
 
+ALL = (
+    "orchestrator", "author", "reviewer", "builder", "researcher",
+    "analyst", "experimenter", "auditor", "watcher",
+)
+
+
 class DeclarationTests(unittest.TestCase):
     """What the shipped profiles ask for, so a lost grant fails here."""
 
-    def toolsets(self, name: str) -> str:
-        return (ROOT / "profiles" / name / "config.yaml").read_text()
+    def toolsets(self, name: str) -> list[str]:
+        """The granted list, not the file: a comment explaining why a toolset
+        is withheld must not read as granting it."""
+        import yaml
+        config = yaml.safe_load((ROOT / "profiles" / name / "config.yaml").read_text())
+        return list((config.get("platform_toolsets") or {}).get("cli") or [])
+
+    def test_every_designed_profile_exists(self):
+        for name in ALL:
+            self.assertTrue((ROOT / "profiles" / name / "SOUL.md").exists(), name)
+            self.assertTrue((ROOT / "profiles" / name / "config.yaml").exists(), name)
 
     def test_the_orchestrator_can_reach_the_board(self):
         self.assertIn("kanban", self.toolsets("orchestrator"))
 
     def test_code_running_profiles_can_run_code(self):
-        for name in ("builder", "author"):
+        for name in ("builder", "author", "experimenter"):
             self.assertIn("code_execution", self.toolsets(name), name)
+
+    def test_read_only_profiles_cannot_run_code(self):
+        """The reason these profiles are separate boundaries at all. A
+        read-only credential next to a shell is not read-only for long."""
+        for name in ("researcher", "analyst", "watcher"):
+            self.assertNotIn("code_execution", self.toolsets(name), name)
+
+    def test_the_researcher_holds_nothing_but_the_web(self):
+        """Everything it reads is untrusted; the less it can do, the better."""
+        declared = self.toolsets("researcher")
+        self.assertIn("web", declared)
+        for forbidden in ("kanban", "terminal", "code_execution"):
+            self.assertNotIn(forbidden, declared, forbidden)
 
 
 if __name__ == "__main__":

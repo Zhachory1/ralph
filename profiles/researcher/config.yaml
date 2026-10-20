@@ -1,0 +1,23 @@
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    # The web, and somewhere to write the note. No terminal and no code
+    # execution: everything this profile reads is untrusted, and the less it
+    # can do with a page that asks it to do something, the better.
+    - web
+    - file
+  api_server: [no_mcp]
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  max_turns: 50
+  run_budget_seconds: 1200
+  api_max_retries: 0

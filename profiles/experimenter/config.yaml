@@ -1,0 +1,24 @@
+model:
+  provider: anthropic
+  default: claude-opus-5
+platform_toolsets:
+  cli:
+    # Runs training and evaluation code, so it needs a terminal and a
+    # sandbox. Opus because a bad experiment design wastes compute, which
+    # is the expensive mistake this profile can make.
+    - code_execution
+    - file
+    - web
+  api_server: [no_mcp]
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  max_turns: 150
+  run_budget_seconds: 7200
+  api_max_retries: 0

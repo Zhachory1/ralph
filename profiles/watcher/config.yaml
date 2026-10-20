@@ -1,0 +1,23 @@
+model:
+  provider: anthropic
+  default: claude-haiku-4.5
+platform_toolsets:
+  cli:
+    # Reads instruments and writes a report. Haiku because most of this job
+    # is formatting what a dashboard already says; a card tagged for incident
+    # evidence can be dispatched to a stronger model.
+    - file
+    - web
+  api_server: [no_mcp]
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  max_turns: 40
+  run_budget_seconds: 900
+  api_max_retries: 0

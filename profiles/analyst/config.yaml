@@ -1,0 +1,22 @@
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    # Queries and a write-up. No terminal: an analysis ends in a document,
+    # and a read-only warehouse credential should not sit next to a shell.
+    - file
+    - web
+  api_server: [no_mcp]
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  max_turns: 60
+  run_budget_seconds: 1800
+  api_max_retries: 0

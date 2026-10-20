@@ -27,13 +27,15 @@ A new profile is justified by different permissions, resources, or lifecycle —
 | --- | --- | --- |
 | orchestrator | Talk to you, own the board | Write to any repo |
 | author | Write the docs repo | Touch code repos |
-| builder | Branch, push, open PRs | Merge |
 | reviewer | Comment, request changes | Approve, push |
+| builder | Branch, push, open PRs | Merge |
 | researcher | Read the web | Hold any credential |
 | analyst | Read the warehouse | Write anywhere |
 | experimenter | Spend compute, under a hard cap | Deploy, write production data |
 | auditor | Judge the system | Edit what it judges |
 | watcher | Read observability | Write anything |
+
+All nine exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other four are built and unexercised.
 
 ### Invariants live in permissions, not prose
 
