@@ -36,7 +36,7 @@ Use the repository's own capture if it has one, so your images match the ones it
 
 ## Pull requests
 
-One concern per pull request, opened as a draft and marked ready only once the checks pass. Branch `agent/<card-id>-<short-slug>`. Commit trailers carry the card id and the design-document path.
+One concern per pull request, opened as a draft and marked ready only once the checks pass. Branch `agent/<card-id>-<short-slug>`. Commit trailers carry the card id and the design-document path, spelled exactly `Kanban-Card:` and `Design-Doc:`. CI reads the first of those to decide your pull request is traceable to the card that scoped it, and it matches the name literally: `Card:` is not it, and the check fails saying the trailer is absent.
 
 Copy your card's `<planned_files>` block into the commit message, unchanged. CI checks your diff against it, and it cannot read your card: the board is a file on one machine. Copying a list you were given is not the same as writing your own; changing it to match what you actually touched defeats the check, and a file you had to touch that is not on the list is a scope escalation before you edit it, not an edit to the list afterwards.
 
