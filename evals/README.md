@@ -41,6 +41,14 @@ python3 evals/test_scope_check.py
 
 Includes the case the design names: a builder that sneaks in an unrequested change, caught only because the plan came from the card rather than from the pull request. Also checks that a card with no plan fails rather than passing, since a check that waves through anything it cannot measure is not a check.
 
+## Profile-config tests
+
+```bash
+python3 evals/test_profile_config.py
+```
+
+Checks the installer applies what a repo profile declares, and that the shipped profiles declare the toolsets their jobs need. It used to copy only the model block, so the orchestrator ran a whole feature without the kanban toolset: able to reason about a card graph and unable to create one, with nothing erroring to say so.
+
 ## What each group is for
 
 | Group | Claim under test |

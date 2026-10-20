@@ -64,7 +64,7 @@ for dir in "$PROFILES_DIR"/*/; do
     if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
         [ -f "$dir/SOUL.md" ] && docker cp "$dir/SOUL.md" "$RALPH_HERMES_CONTAINER:$target/SOUL.md"
         if [ -f "$dir/config.yaml" ]; then
-            docker cp /ralph/bootstrap/write-model-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
+            docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
             docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
             docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         fi
@@ -72,9 +72,9 @@ for dir in "$PROFILES_DIR"/*/; do
     fi
     [ -f "$dir/SOUL.md" ] && cp "$dir/SOUL.md" "$target/SOUL.md"
 
-    # Only the model block is ours; the rest is Hermes-generated.
+    # The model and the toolsets are ours; the rest is Hermes-generated.
     if [ -f "$dir/config.yaml" ]; then
-        python3 /ralph/bootstrap/write-model-config.py \
+        python3 /ralph/bootstrap/write-profile-config.py \
             "$dir/config.yaml" "$target/config.yaml"
     fi
 done

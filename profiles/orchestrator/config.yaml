@@ -3,6 +3,10 @@ model:
   default: claude-sonnet-5
 platform_toolsets:
   cli:
+    # The board is the orchestrator's whole job: it plans work as linked cards
+    # and watches for cards that stalled. Without the kanban toolset it can
+    # read a brief and reason about a graph, and then do nothing about it.
+    - kanban
     - code_execution
     - file
   api_server: [no_mcp]
