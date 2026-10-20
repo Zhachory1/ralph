@@ -105,13 +105,13 @@ matrix between the two projects; `HERMES_WEBUI_VERSION` in `.env.example` is pin
 proximity to `HERMES_VERSION`, not by a verified pairing. Every time `HERMES_VERSION` moves, re-qualify
 and bump `HERMES_WEBUI_VERSION` with it — this is a standing obligation, not a one-time check.
 
-**Tool calls from its chat run in the hermes-webui container, not the agent's sandboxed one.**
-Read that plainly: the sandbox model this stack otherwise relies on — agent shell commands running in
-a per-profile sibling container, isolated from the host, the Docker socket, the board, and other
-profiles' credentials (see "Sandboxing" below) — does not cover tools invoked from hermes-webui's
-chat. A shell command started there runs directly in the `hermes-webui` container, which holds the
-`hermes-home` volume. This is a known, accepted cost of adopting hermes-webui, not something this
-deployment fixes.
+**The chat talks to the orchestrator, not to a sandbox.** The orchestrator plans work as cards, and
+the dispatcher runs those cards in per-profile sandboxes as usual — card work never runs in the
+hermes-webui container. The orchestrator keeps `code_execution` on purpose: simple commands and
+analysis are fine to run directly from chat, and that they run in the hermes-webui container is
+intended, not a gap. Bigger, autonomous work — anything that ends in a pull request — goes through a
+card to the builder, so it runs in the builder's sandbox. The chat's profile switcher can select any
+profile, including the builder, and a profile picked there runs outside its sandbox.
 
 ## Upgrading
 
