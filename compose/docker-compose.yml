@@ -116,6 +116,13 @@ services:
       # install fails and an agent stubs modules to get the app running at
       # all, which makes the sandbox an unfaithful copy of where the code runs.
       BUF_TOKEN: ${BUF_TOKEN:-}
+      # hermes-webui below runs this agent in-process rather than through a
+      # stable API, so it needs this image's own /opt/hermes on disk rather
+      # than calling in. The gateway API server is also idle by default;
+      # hermes-webui's "gateway pill" needs it bound with a shared key.
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_KEY: ${RALPH_WEBUI_API_KEY:-}
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false
@@ -123,6 +130,10 @@ services:
       - hermes-home:/home/hermes/.hermes
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
       - ../evals:/ralph/evals:ro
+      # Populated from this image's own /opt/hermes on first start, then
+      # reused verbatim -- not refreshed by a later pull. See hermes-webui's
+      # entry in "Upgrading" below. hermes-webui mounts this read-only.
+      - hermes-agent-src:/opt/hermes
     ports:
       # Bound to localhost. The dashboard has no authentication.
       - "127.0.0.1:${RALPH_DASHBOARD_PORT:-9219}:9219"
@@ -169,7 +180,51 @@ services:
       - notifier-state:/var/lib/ralph
     restart: unless-stopped
 
+  # hermes-webui: a chat space for talking with the agents, alongside the
+  # dashboard above rather than in place of it. Shares hermes-home with the
+  # hermes service so it sees the same profiles, board, and sessions; the
+  # agent's own image is unaware of it and needs no change beyond the
+  # hermes-agent-src volume and the gateway key above.
+  hermes-webui:
+    image: ghcr.io/nesquena/hermes-webui:${HERMES_WEBUI_VERSION:?set HERMES_WEBUI_VERSION, never latest}
+    depends_on:
+      hermes:
+        condition: service_started
+    environment:
+      HERMES_WEBUI_HOST: 0.0.0.0
+      HERMES_WEBUI_PORT: 8787
+      # Resolves which board to display from these two vars, not from
+      # HERMES_HOME; cleared explicitly so an inherited pin from env_file or
+      # a parent shell can never mislabel the live board.
+      HERMES_KANBAN_DB: ""
+      HERMES_KANBAN_BOARD: ""
+      # hermes's own volume is owned by UID/GID 10000 (see Dockerfile.init);
+      # match it so hermes-webui can read the shared hermes-home volume.
+      WANTED_UID: 10000
+      WANTED_GID: 10000
+      # Reaches the agent's gateway API over the compose network by this
+      # stack's own service name, not hermes-webui's default "hermes-agent".
+      HERMES_API_URL: http://hermes:8642
+      # Must match the hermes service's API_SERVER_KEY above.
+      HERMES_WEBUI_GATEWAY_API_KEY: ${RALPH_WEBUI_API_KEY:-}
+    env_file:
+      - path: ${RALPH_ENV_FILE:-./.env}
+        required: false
+    volumes:
+      - hermes-home:/home/hermeswebui/.hermes
+      # Read-only: hermes-webui only reads this to install the agent's
+      # Python dependencies at startup, never to write it.
+      - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
+    ports:
+      # Bound to localhost, same as the dashboard above. No authentication.
+      - "127.0.0.1:${RALPH_WEBUI_PORT:-9220}:8787"
+    restart: unless-stopped
+
 volumes:
   # Named, not a bind mount of ~/.hermes: Ralph's Hermes state is its own.
   hermes-home:
   notifier-state:
+  # Populated once, from the hermes image's own /opt/hermes, the first time
+  # the hermes service starts. Not refreshed by a later docker pull/up --
+  # see hermes-webui's entry in README.md's "Upgrading" section.
+  hermes-agent-src:
