@@ -21,7 +21,7 @@ group: git-pr
 
 ## Context
 
-Rokt codebase environment:
+Codebase environment:
 
 - **Languages**: Go, Python, TypeScript
 - **CI/CD**: Buildkite, GitHub Actions
