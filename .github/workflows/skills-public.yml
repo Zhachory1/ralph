@@ -1,0 +1,31 @@
+# Fail a pull request that publishes something internal in skills/.
+#
+# This repository is public. skills/README.md rule 4 keeps internal names out of
+# it, and that rule is a judgement a reviewer makes while reading. This is the
+# backstop for when nobody read closely enough.
+#
+# Unlike the scope check, this runs on every pull request, agent-authored or
+# not: a human can publish an internal name by accident just as easily, and the
+# cost of the mistake does not depend on who made it.
+#
+# The full marker list lives in the private overlay. A public runner cannot see
+# it, so this runs in public-only mode and says so in its output. That is a real
+# gap, not a hidden one: a reviewer with the overlay checked out can run the
+# same check with --markers and get the complete answer.
+
+name: skills public
+
+on:
+  pull_request:
+    paths:
+      - "skills/**"
+      - "evals/check-skills-public"
+
+jobs:
+  skills-public:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan skills/ for internal markers
+        run: python3 evals/check-skills-public
