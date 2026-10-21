@@ -27,6 +27,9 @@ auxiliary:
   background_review:
     enabled: false
 skills:
+  external_dirs:
+    - /ralph/skills/plan
+    - /ralph/skills/meta
   creation_nudge_interval: 0
 agent:
   max_turns: 60

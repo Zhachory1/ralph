@@ -23,6 +23,8 @@ auxiliary:
   background_review:
     enabled: false
 skills:
+  external_dirs:
+    - /ralph/skills/review
   creation_nudge_interval: 0
 agent:
   max_turns: 50

@@ -78,6 +78,7 @@ services:
       - hermes-home:/home/hermes/.hermes
       - ../profiles:/ralph/profiles:ro
       - ../bootstrap:/ralph/bootstrap:ro
+      - ../skills:/ralph/skills:ro
     restart: "no"
 
   hermes:
@@ -148,6 +149,14 @@ services:
       - hermes-home:/home/hermes/.hermes
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
       - ../evals:/ralph/evals:ro
+      # Read-only on purpose. A skill_manage patch against this tree fails with
+      # an error the agent can see, which makes "an agent cannot rewrite a
+      # shipped skill" a permission rather than a sentence in a prompt.
+      - ../skills:/ralph/skills:ro
+      # The private overlay, mounted only when its checkout is beside this one.
+      # Profiles name a lane under it; a profile whose lane is absent simply has
+      # no tier-2 skills, which is the state before PR 5 lands anywhere.
+      - ${RALPH_PRIVATE_SKILLS:-../../rokt-it-ralph/skills}:/ralph/private-skills:ro
       # Populated from this image's own /opt/hermes on first start, then
       # reused verbatim -- not refreshed by a later pull. See hermes-webui's
       # entry in "Upgrading" below. hermes-webui mounts this read-only.
