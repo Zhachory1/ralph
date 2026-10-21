@@ -112,8 +112,8 @@ Structure every agent prompt with these sections: Your Role, Your Mission, Conte
 Every agent must be self-contained. Agents must not reference `setup/standards/`
 paths or assume installer state.
 
-- If an agent requires Rokt engineering standards, add: _"Consult the `standards`
-  skill for Rokt engineering conventions."_
+- If an agent requires your organisation's engineering standards, add: _"Consult
+  the `standards` skill for engineering conventions."_
 - If an agent requires domain-specific knowledge, embed it in the agent's own
   `assets/` subdirectory.
 - Never link to `~/.<ide>/standards/`, `setup/standards/`, or any path outside
