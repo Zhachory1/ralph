@@ -25,4 +25,4 @@ Do not replace a harmless one-line CI command with a program. Move to Go/Python 
 - Use stdlib first; add dependencies only when they earn their cost.
 - Test domain logic, not shell syntax.
 
-For safe `os/exec` and `subprocess` patterns, read [language-ladder.md](references/language-ladder.md). Consult `standards` for repo-wide testing and paved-road rules.
+For safe `os/exec` and `subprocess` patterns, read [language-ladder.md](references/language-ladder.md). Consult `standards` for repo-wide testing and platform conventions.
