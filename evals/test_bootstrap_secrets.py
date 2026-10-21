@@ -90,5 +90,46 @@ class BootstrapSecretsTests(unittest.TestCase):
         self.assertEqual("600", oct(self.env.stat().st_mode)[-3:])
 
 
+class MoreSecretsTests(BootstrapSecretsTests):
+    """The dashboard password, and an .env older than the example."""
+
+    def value(self, key):
+        for line in self.env.read_text().splitlines():
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1]
+        return None
+
+    def test_generates_the_dashboard_password_too(self):
+        """The dashboard refuses to start without an auth provider, and a
+        blank password is not one. Nobody should have to invent it."""
+        self.run_script()
+        self.assertGreaterEqual(len(self.value("RALPH_DASHBOARD_PASSWORD") or ""), 16)
+
+    def test_the_two_secrets_are_different(self):
+        self.run_script()
+        self.assertNotEqual(self.value("RALPH_WEBUI_API_KEY"), self.value("RALPH_DASHBOARD_PASSWORD"))
+
+    def test_adds_a_variable_a_newer_example_introduced(self):
+        """An .env written before a release that introduced a required
+        variable never gains it, and Compose then fails at parse time naming
+        the variable but not where it should have come from. This is what
+        happened the first time hermes-webui was started."""
+        self.env.write_text("HERMES_VERSION=v0.22.2\nRALPH_BOARD=ralph\n")
+        self.example.write_text(EXAMPLE + "HERMES_WEBUI_VERSION=0.52.458\n")
+        result = self.run_script()
+        self.assertEqual("0.52.458", self.value("HERMES_WEBUI_VERSION"))
+        self.assertIn("added HERMES_WEBUI_VERSION", result.stdout)
+
+    def test_an_added_variable_does_not_overwrite_one_already_set(self):
+        self.env.write_text("HERMES_VERSION=v0.99.0\n")
+        self.run_script()
+        self.assertEqual("v0.99.0", self.value("HERMES_VERSION"))
+
+    def test_neither_secret_appears_in_output(self):
+        result = self.run_script()
+        for key in ("RALPH_WEBUI_API_KEY", "RALPH_DASHBOARD_PASSWORD"):
+            self.assertNotIn(self.value(key), result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

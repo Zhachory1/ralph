@@ -33,6 +33,29 @@ hermes config set kanban.review_dispatch true >/dev/null
 hermes config set approvals.single_query_mode approve >/dev/null
 hermes config set approvals.unattended_mode approve >/dev/null
 
+# hermes-webui stages the agent's source by rsync-ing it as an unprivileged
+# user, and the Hermes image ships one file in that tree, an empty lock file,
+# readable by root alone. rsync fails on it and hermes-webui exits before it
+# serves anything. Making that one file world-readable is enough; it holds no
+# data.
+#
+# Named exactly, not found by permission. A sweep over everything unreadable
+# would also widen any private file a future image happens to ship there,
+# which could be a key rather than a lock, and nothing would say so. If this
+# file stops existing, or another one starts breaking the staging, that should
+# be noticed and decided, not silently absorbed.
+#
+# Not tolerant of failure either: hermes-webui waits on this script finishing
+# successfully, so swallowing an error here would let it start against a tree
+# that still breaks its staging, which is the failure this closes.
+AGENT_LOCK=/opt/hermes/tools/.install.lock
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    if docker exec "$RALPH_HERMES_CONTAINER" test -e "$AGENT_LOCK"; then
+        docker exec -u 0 "$RALPH_HERMES_CONTAINER" chmod o+r "$AGENT_LOCK"
+        echo "  made $AGENT_LOCK readable for hermes-webui's staging"
+    fi
+fi
+
 # The orchestrator plans the card graph; Kanban must not plan a second one.
 # With auto_decompose on, a card that is already finished and waiting on a
 # human gets split into subtasks that redo the work it just did, and the
