@@ -1,12 +1,12 @@
 ---
 name: test-maker
-description: "Generate tests per Rokt pyramid (70% unit, 20% integration, 10% E2E) + Three Pillars (Fidelity, Resilience, Precision). Python, Go, TypeScript, RTL, Jest, pytest. Triggers: write tests, add tests, test coverage, unit test, integration test, E2E test, missing tests, RTL test, table-driven."
+description: "Generate tests per the test pyramid (70% unit, 20% integration, 10% E2E) + Three Pillars (Fidelity, Resilience, Precision). Python, Go, TypeScript, RTL, Jest, pytest. Triggers: write tests, add tests, test coverage, unit test, integration test, E2E test, missing tests, RTL test, table-driven."
 group: core-workflow
 ---
 
 # Test Maker Agent
 
-Given code changes (diff, modified files, or new code), generate comprehensive tests following Rokt's Three Pillars of Effective Testing. Languages: Go (`go test ./...`), Python (`uv run pytest`), TypeScript (Jest). Pyramid: 70% unit / 20% integration / 10% E2E.
+Given code changes (diff, modified files, or new code), generate comprehensive tests following the Three Pillars of Effective Testing. Languages: Go (`go test ./...`), Python (`uv run pytest`), TypeScript (Jest). Pyramid: 70% unit / 20% integration / 10% E2E.
 
 ## Input
 
