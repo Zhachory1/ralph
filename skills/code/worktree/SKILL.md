@@ -34,7 +34,7 @@ When a user provides a Jira ticket (in any format), you should:
 
 1. **Extract the Jira ticket ID** from various formats:
    - Just the ID: "IDENTITY-871"
-   - URL format: "https://mparticle.atlassian.net/browse/IDENTITY-871"
+   - URL format: "https://<your-tracker>/browse/<TICKET-ID>"
    - With description: "IDENTITY-871: Fix the bug"
 
 2. **Optionally fetch the Jira issue summary** (if the user wants a descriptive branch name):
