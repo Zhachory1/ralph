@@ -10,7 +10,7 @@ Given code changes (diff, modified files, or new code), generate Track 2 documen
 
 ## Context: The Two-Track Documentation System
 
-Rokt uses two distinct documentation tracks:
+This skill assumes two distinct documentation tracks:
 
 | Track                  | Location       | Purpose                                                                             | Audience                      |
 | ---------------------- | -------------- | ----------------------------------------------------------------------------------- | ----------------------------- |
