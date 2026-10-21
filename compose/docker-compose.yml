@@ -99,8 +99,10 @@ services:
       # It binds 0.0.0.0 inside the container because that is the only way a
       # published port reaches it, and the image's auth gate engages on any
       # non-loopback bind and refuses to start without a provider. The
-      # password here satisfies that gate. Exposure to the machine is still
-      # loopback only, by the 127.0.0.1 in the port mapping.
+      # password here satisfies that gate. From the machine it is reachable
+      # on 127.0.0.1 alone, by the mapping below; a 0.0.0.0 bind is also
+      # reachable by every other container on this stack's network, which is
+      # what the password is actually guarding.
       HERMES_DASHBOARD: "1"
       HERMES_DASHBOARD_HOST: 0.0.0.0
       HERMES_DASHBOARD_PORT: "9219"
@@ -206,6 +208,12 @@ services:
     depends_on:
       hermes:
         condition: service_started
+      # init fixes the mode of a lock file in the agent's source tree that
+      # would otherwise break the rsync staging below. Without waiting for it
+      # to finish, that fix races this service's own startup and the failure
+      # it closes comes back intermittently on a fresh `docker compose up`.
+      init:
+        condition: service_completed_successfully
     environment:
       HERMES_WEBUI_HOST: 0.0.0.0
       HERMES_WEBUI_PORT: 8787
