@@ -27,7 +27,7 @@ findings from any context and present them as actionable bullets.
 
 ## Context
 
-Rokt codebase environment:
+Codebase environment:
 
 - **Languages**: Go, Python, TypeScript
 - **Performance Target**: p95 < 300ms for ad serving
