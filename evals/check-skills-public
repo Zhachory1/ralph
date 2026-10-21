@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Fail a pull request that publishes something internal in skills/.
+
+This repository is public. The rule in skills/README.md decides what may live
+here, and rule 4 is the one with consequences: a skill that names an internal
+repository, host, tenant, standard, process or metric does not belong in a
+public tree. Rule 4 is a judgement a person makes while reading. This is the
+backstop for the case where nobody read carefully enough, which is most cases
+once a tree has fifty skills in it and a pull request adds one.
+
+It is deliberately a word scan and not something cleverer. A scan that tried to
+understand context would have opinions, and an opinionated check that fails a
+build is worse than a blunt one: the blunt one is argued with by adding a word
+to a list, in a diff anyone can review.
+
+The marker list lives in the private overlay, because a public repository
+listing every internal name it must not contain would be the leak it is meant
+to prevent. Without the overlay mounted this check runs against the small set
+of markers that are already public knowledge, says so, and passes what it can.
+That is not a silent skip: a check that cannot see its list says which mode it
+ran in, so a green build never means more than it should.
+
+    python3 evals/check-skills-public [--markers PATH]
+"""
+
+import argparse
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SKILLS = ROOT / "skills"
+
+# Markers that are safe to name in a public repository because they are already
+# public: the company's own name, and the public hostnames it publishes under.
+# The full list is in the overlay; see the module docstring.
+PUBLIC_MARKERS = [
+    r"\brokt\b",
+    r"\bmparticle\b",
+    r"rokt\.atlassian\.net",
+    r"\.rokt\.com\b",
+]
+
+# Binary and build output: scanned for nothing, because a false positive inside
+# a minified bundle costs an afternoon and tells you nothing.
+SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip",
+                 ".woff", ".woff2", ".ttf", ".ico", ".lock"}
+SKIP_DIRS = {"node_modules", "dist", "build", ".git", "__pycache__"}
+
+
+def load_markers(path: pathlib.Path | None) -> tuple[list[str], str]:
+    """Return the marker patterns and the name of the mode they came from."""
+    if path and path.is_file():
+        patterns = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                patterns.append(re.escape(line) if not line.startswith("re:")
+                                else line[3:])
+        if patterns:
+            return patterns, f"full ({len(patterns)} markers from {path})"
+    return PUBLIC_MARKERS, f"public-only ({len(PUBLIC_MARKERS)} markers)"
+
+
+def scannable(p: pathlib.Path) -> bool:
+    if p.suffix.lower() in SKIP_SUFFIXES:
+        return False
+    return not any(part in SKIP_DIRS for part in p.parts)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--markers", type=pathlib.Path, default=None,
+                    help="marker list from the private overlay, one per line")
+    args = ap.parse_args()
+
+    if not SKILLS.is_dir():
+        print("no skills/ tree yet; nothing to check")
+        return 0
+
+    patterns, mode = load_markers(args.markers)
+    rx = re.compile("|".join(patterns), re.IGNORECASE)
+
+    hits = []
+    for p in sorted(SKILLS.rglob("*")):
+        if not p.is_file() or not scannable(p):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            m = rx.search(line)
+            if m:
+                hits.append((p.relative_to(ROOT), n, m.group(0), line.strip()[:90]))
+
+    print(f"scanned skills/ in {mode} mode")
+    if not hits:
+        print("no internal markers found")
+        return 0
+
+    print(f"\n{len(hits)} internal marker(s) in a public tree:\n")
+    for path, n, marker, line in hits:
+        print(f"  {path}:{n}  [{marker}]")
+        print(f"      {line}")
+    print("\nRule 4 in skills/README.md: a skill that names something which exists")
+    print("only inside the company belongs in the private overlay, not here.")
+    print("If the mention is incidental, generalise the sentence and keep the skill.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
