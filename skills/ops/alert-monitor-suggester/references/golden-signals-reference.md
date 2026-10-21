@@ -96,7 +96,7 @@ Optional but recommended:
 
 | Signal     | SLI Definition                       | Typical SLO Target |
 | ---------- | ------------------------------------ | ------------------ |
-| Latency    | p95 request duration < threshold     | < 300ms (Rokt)     |
+| Latency    | p95 request duration < threshold     | < 300ms (example)  |
 | Traffic    | Requests served without error        | > 99.9%            |
 | Errors     | Error count / total requests         | < 0.1%             |
 | Saturation | Resource utilization below threshold | < 80%              |
