@@ -106,6 +106,20 @@ matrix between the two projects; `HERMES_WEBUI_VERSION` in `.env.example` is pin
 proximity to `HERMES_VERSION`, not by a verified pairing. Every time `HERMES_VERSION` moves, re-qualify
 and bump `HERMES_WEBUI_VERSION` with it — this is a standing obligation, not a one-time check.
 
+**Its "update available" banner tells you to pull `:latest`. Do not.** That is the one thing the
+pin above exists to prevent. Upgrading means picking the new version, re-qualifying it against the
+Hermes image this stack pins, and bumping `HERMES_WEBUI_VERSION`; the banner is a notification, not
+an instruction.
+
+**It misses one of the agent's optional dependencies, and `bootstrap/webui-entrypoint` adds it
+back.** Hermes keeps a provider's client library as an optional extra (`anthropic = [...]`), and
+hermes-webui installs the agent with `[all]`, which this Hermes version does not define. `uv`
+ignores an unknown extra without a word, so the install reports success, brings in nothing, and the
+first message to any profile on `provider: anthropic` — which is every Ralph profile — fails with
+"The 'anthropic' package is required". Hermes' own lazy install cannot fill the gap, because
+hermes-webui runs outside the dependency environment Hermes manages. The entrypoint wrapper installs
+the named extras and then execs the image's own startup unchanged.
+
 **The chat talks to the orchestrator, not to a sandbox.** The orchestrator plans work as cards, and
 the dispatcher runs those cards in per-profile sandboxes as usual — card work never runs in the
 hermes-webui container. The orchestrator keeps `code_execution` on purpose: simple commands and

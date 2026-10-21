@@ -205,6 +205,12 @@ services:
   # hermes-agent-src volume and the gateway key above.
   hermes-webui:
     image: ghcr.io/nesquena/hermes-webui:${HERMES_WEBUI_VERSION:?set HERMES_WEBUI_VERSION, never latest}
+    # Runs before the image's own entrypoint, never instead of it: it installs
+    # the agent extras hermes-webui's startup misses, then execs
+    # /hermeswebui_init.bash unchanged. See bootstrap/webui-entrypoint for why
+    # a `[all]` install leaves the anthropic client out and why Hermes' lazy
+    # install cannot fill the gap from here.
+    entrypoint: ["/ralph/bootstrap/webui-entrypoint"]
     depends_on:
       hermes:
         condition: service_started
@@ -254,6 +260,7 @@ services:
       # Python dependencies at startup, never to write it.
       - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
       - hermes-webui-state:/home/hermeswebui/webui-state
+      - ../bootstrap:/ralph/bootstrap:ro
     ports:
       # Bound to localhost, same as the dashboard above. No authentication.
       - "127.0.0.1:${RALPH_WEBUI_PORT:-9220}:8787"

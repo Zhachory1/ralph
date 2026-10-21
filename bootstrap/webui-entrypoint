@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Install the agent extras hermes-webui's own startup misses, then hand off to it.
+#
+# Hermes keeps a provider's client library as an optional extra:
+#
+#     anthropic = ["anthropic==0.87.0"]
+#
+# hermes-webui installs the agent with `uv pip install -e "<src>[all]"`, and
+# this Hermes version has no `all` extra. uv ignores an unknown extra without
+# a word, so that install reports success and brings in nothing: the web UI
+# starts, and the first message to any profile on provider `anthropic` fails
+# with "The 'anthropic' package is required". Every Ralph profile is on that
+# provider, so the chat cannot run at all.
+#
+# Hermes' own lazy install cannot rescue it either. `security.allow_lazy_installs`
+# is already on, and it still refuses, because hermes-webui runs outside the
+# dependency environment Hermes manages and only an explicit install may change
+# what later processes boot into.
+#
+# The extras are named here, and only the ones the agent image itself carries:
+# `anthropic` for the provider, `uvloop` for the event loop. Not `[all]`, which
+# would pull every search and speech backend nobody has asked for into a
+# container that already holds the agent's credentials.
+#
+# WHY A WATCHER AND NOT A LINE BEFORE THE HANDOFF. /app/venv is built by the
+# image's own startup and lives in the container, not on a volume, so on a
+# fresh `docker compose up` there is no venv to add to when this script begins:
+# anything installed here is discarded by the `uv venv` that follows. The image
+# marks the end of its install with `touch /app/venv/.deps_installed` and only
+# then starts the server, so this waits for that marker and installs on top of
+# the finished venv, before the first message can reach a provider.
+
+set -euo pipefail
+
+VENV=${HERMES_WEBUI_VENV:-/app/venv}
+EXTRAS=${RALPH_WEBUI_AGENT_EXTRAS:-anthropic==0.87.0 uvloop}
+ENTRYPOINT=${RALPH_WEBUI_ENTRYPOINT:-/hermeswebui_init.bash}
+MARKER="$VENV/.deps_installed"
+# Generous: a cold venv build pulls ~100 packages. Expressed in seconds so a
+# slow first boot waits rather than giving up and leaving the chat broken.
+TIMEOUT=${RALPH_WEBUI_EXTRAS_TIMEOUT:-900}
+
+install_extras() {
+    local waited=0
+    while [ ! -e "$MARKER" ]; do
+        if [ "$waited" -ge "$TIMEOUT" ]; then
+            echo "[ralph] gave up waiting for $MARKER after ${TIMEOUT}s;" \
+                 "profiles on provider anthropic will fail until this container is restarted" >&2
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+
+    local missing="" spec name module
+    for spec in $EXTRAS; do
+        name=${spec%%==*}
+        module=${name//-/_}
+        if ! "$VENV/bin/python" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('$module') else 1)" 2>/dev/null; then
+            missing="$missing $spec"
+        fi
+    done
+
+    if [ -z "$missing" ]; then
+        echo "[ralph] agent extras already present"
+        return 0
+    fi
+
+    echo "[ralph] installing agent extras hermes-webui does not:$missing"
+    if VIRTUAL_ENV="$VENV" uv pip install $missing \
+            --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
+        echo "[ralph] agent extras installed"
+    else
+        # Said plainly rather than swallowed: the server is already up, so the
+        # symptom would otherwise be a working page whose every reply fails.
+        echo "[ralph] FAILED to install agent extras:$missing" >&2
+        echo "[ralph] profiles on provider anthropic will not work in this container" >&2
+    fi
+}
+
+install_extras &
+
+exec "$ENTRYPOINT" "$@"
