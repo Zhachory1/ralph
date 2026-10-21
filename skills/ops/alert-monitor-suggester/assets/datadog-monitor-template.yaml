@@ -1,0 +1,79 @@
+# Datadog Monitor Definition Template
+# Copy and adapt for each new monitor. Submit via Datadog API or Terraform.
+
+# --- Latency Monitor ---
+- name: "[Service] p95 Latency > {threshold}ms"
+  type: metric alert
+  query: "percentile(last_5m):p95:trace.{service_name}.request.duration > {threshold}"
+  message: |
+    {{#is_alert}}
+    p95 latency for {service_name} exceeded {threshold}ms.
+    Current value: {{value}}ms
+
+    Runbook: {runbook_link}
+    Dashboard: {dashboard_link}
+    {{/is_alert}}
+    @slack-{alert_channel}
+  tags:
+    - "service:{service_name}"
+    - "team:{team_name}"
+    - "signal:latency"
+  options:
+    thresholds:
+      critical: "{threshold}"
+      warning: "{threshold * 0.8}"
+    notify_no_data: false
+    evaluation_delay: 60
+
+# --- Error Rate Monitor ---
+- name: "[Service] Error Rate > {threshold}%"
+  type: metric alert
+  query: "sum(last_5m):sum:{service_name}.errors / sum:{service_name}.requests * 100 > {threshold}"
+  message: |
+    {{#is_alert}}
+    Error rate for {service_name} exceeded {threshold}%.
+    Current value: {{value}}%
+
+    Runbook: {runbook_link}
+    Dashboard: {dashboard_link}
+    {{/is_alert}}
+    @slack-{alert_channel}
+  tags:
+    - "service:{service_name}"
+    - "team:{team_name}"
+    - "signal:errors"
+  options:
+    thresholds:
+      critical: "{threshold}"
+      warning: "{threshold * 0.5}"
+
+# --- Traffic Drop Monitor ---
+- name: "[Service] Traffic Drop > {threshold}%"
+  type: metric alert
+  query: "pct_change(last_5m,last_30m):avg:{service_name}.requests < -{threshold}"
+  message: |
+    {{#is_alert}}
+    Traffic for {service_name} dropped by more than {threshold}%.
+
+    Runbook: {runbook_link}
+    {{/is_alert}}
+    @slack-{alert_channel}
+  tags:
+    - "service:{service_name}"
+    - "signal:traffic"
+
+# --- Saturation Monitor ---
+- name: "[Service] Queue Depth > {threshold}"
+  type: metric alert
+  query: "avg(last_5m):avg:{service_name}.queue.depth > {threshold}"
+  message: |
+    {{#is_alert}}
+    Queue depth for {service_name} exceeded {threshold}.
+    Current value: {{value}}
+
+    Runbook: {runbook_link}
+    {{/is_alert}}
+    @slack-{alert_channel}
+  tags:
+    - "service:{service_name}"
+    - "signal:saturation"
