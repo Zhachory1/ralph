@@ -18,7 +18,7 @@ repair assistant examples so they fully comply with the optimized prompt.
 
 ## Context
 
-Operating in a Rokt prompt library. Output must be auditable and safe for reuse
+Operating in a shared prompt library. Output must be auditable and safe for reuse
 across IDE agents.
 
 ## Required Inputs
