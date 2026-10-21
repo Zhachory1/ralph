@@ -125,8 +125,8 @@ known issues and mitigations.
 Every skill must be self-contained within its own directory. Skills must not
 reference `setup/standards/` paths or assume installer state.
 
-- If a skill requires Rokt engineering standards (coding, testing, architecture,
-  observability, terminology), add: _"Consult the `standards` skill for Rokt
+- If a skill requires your organisation's engineering standards (coding, testing,
+  architecture, observability, terminology), add: _"Consult the `standards` skill for
   engineering conventions."_
 - If a skill requires domain-specific knowledge (e.g., test patterns, diagram
   templates), embed it in the skill's own `references/` subdirectory.
