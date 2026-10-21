@@ -159,7 +159,7 @@ before optimizing:
 
 - `python scripts/codebase-scan.py <path> --functions --sizes` -- Find large files/functions
 - `../code-verifier/scripts/check-complexity.sh <path>` -- Cyclomatic complexity analysis via lizard
-- `python ../code-verifier/scripts/lint-rokt.py <path>` -- Code quality issues (nesting, magic numbers)
+- A repository lint script, if your team has one -- code quality issues (nesting, magic numbers)
 
 All scripts output JSON to stdout.
 
