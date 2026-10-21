@@ -48,18 +48,36 @@ SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip",
 SKIP_DIRS = {"node_modules", "dist", "build", ".git", "__pycache__"}
 
 
+class MarkerFileError(Exception):
+    """An explicitly requested marker file could not be used."""
+
+
 def load_markers(path: pathlib.Path | None) -> tuple[list[str], str]:
-    """Return the marker patterns and the name of the mode they came from."""
-    if path and path.is_file():
-        patterns = []
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                patterns.append(re.escape(line) if not line.startswith("re:")
-                                else line[3:])
-        if patterns:
-            return patterns, f"full ({len(patterns)} markers from {path})"
-    return PUBLIC_MARKERS, f"public-only ({len(PUBLIC_MARKERS)} markers)"
+    """Return the marker patterns and the name of the mode they came from.
+
+    Asking for a marker file and not getting one is an error, never a quiet
+    downgrade. A reviewer who passes --markers is doing the full check
+    precisely because the public subset is not enough; falling back to it
+    would answer a different question than the one asked and answer it green.
+    """
+    if path is None:
+        return PUBLIC_MARKERS, f"public-only ({len(PUBLIC_MARKERS)} markers)"
+
+    if not path.is_file():
+        raise MarkerFileError(f"marker file not found: {path}")
+    try:
+        raw = path.read_text()
+    except OSError as exc:
+        raise MarkerFileError(f"marker file unreadable: {path}: {exc}") from exc
+
+    patterns = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            patterns.append(line[3:] if line.startswith("re:") else re.escape(line))
+    if not patterns:
+        raise MarkerFileError(f"marker file has no markers: {path}")
+    return patterns, f"full ({len(patterns)} markers from {path})"
 
 
 def scannable(p: pathlib.Path) -> bool:
@@ -78,7 +96,14 @@ def main() -> int:
         print("no skills/ tree yet; nothing to check")
         return 0
 
-    patterns, mode = load_markers(args.markers)
+    try:
+        patterns, mode = load_markers(args.markers)
+    except MarkerFileError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("refusing to fall back to the public marker subset: --markers was "
+              "asked for explicitly, and a green run against the wrong list is "
+              "worse than no run.", file=sys.stderr)
+        return 2
     rx = re.compile("|".join(patterns), re.IGNORECASE)
 
     hits = []

@@ -71,6 +71,10 @@ and not a list.
 1. Run the rule. If it lands anywhere but step 5, it does not go here.
 2. Put it in the lane whose *audience* matches, not whose topic does.
 3. If it is someone else's, add it to `third-party.yaml` instead and pin a commit.
-4. `evals/check-skills-public` runs in CI and fails the build if a skill in this
-   tree names something internal. It is a backstop for rule 4, not a substitute
-   for reading it.
+4. `evals/check-skills-public` runs in CI as a backstop for rule 4, not as a
+   substitute for reading it. On a public runner it can only scan the markers
+   that are already public, because the full list lives in the private overlay
+   and putting it here would be the leak the rule exists to prevent. **A green
+   build means "no publicly-known internal name", not "nothing internal".** The
+   complete check is `--markers <overlay list>`, run by a reviewer who has the
+   overlay; rule 4 still needs a person who has read the skill.
