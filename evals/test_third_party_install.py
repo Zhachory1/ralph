@@ -94,6 +94,23 @@ class InstallTests(unittest.TestCase):
         self.assertIn("refusing to overwrite", r.stdout + r.stderr)
         self.assertIn("committed work", (t / "SKILL.md").read_text())
 
+    def test_a_read_only_tree_is_reported_not_raised(self):
+        """The deploy path that silently installed nothing.
+
+        bootstrap/install ends this call with `|| true`, so an unhandled
+        OSError here was swallowed and a fresh stack came up three skills
+        short with nothing on screen.
+        """
+        lane = self.repo / "skills" / "write"
+        lane.chmod(0o555)
+        try:
+            r = self.run_it(self.manifest())
+        finally:
+            lane.chmod(0o755)
+        self.assertEqual(0, r.returncode, "an install run must not fail the stack")
+        self.assertIn("cannot write", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_a_branch_is_not_a_pin(self):
         r = self.run_it(self.manifest(commit="main"))
         self.assertEqual(2, r.returncode)

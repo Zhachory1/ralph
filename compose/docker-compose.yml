@@ -78,7 +78,12 @@ services:
       - hermes-home:/home/hermes/.hermes
       - ../profiles:/ralph/profiles:ro
       - ../bootstrap:/ralph/bootstrap:ro
-      - ../skills:/ralph/skills:ro
+      # Writable here and read-only everywhere else, which is the whole
+      # difference between this service and the agent. init installs the
+      # pinned third-party skills into their lanes; nothing else may write a
+      # skill, and the agent's own mount below stays :ro so a skill_manage
+      # patch still fails with an error it can see.
+      - ../skills:/ralph/skills
     restart: "no"
 
   hermes:

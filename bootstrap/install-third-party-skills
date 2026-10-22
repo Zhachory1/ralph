@@ -36,6 +36,7 @@ would otherwise notice.
 """
 
 import argparse
+import errno
 import json
 import pathlib
 import shutil
@@ -167,10 +168,26 @@ def install(entry: dict, check: bool) -> tuple[str, str]:
 
         # Replace only once the new copy is complete, so an interrupted run
         # leaves the previous install rather than half of the next one.
-        if target.exists():
-            shutil.rmtree(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(staged), str(target))
+        #
+        # A read-only skills tree raises here rather than in the clone, which
+        # is the one error path the rest of this function does not produce
+        # itself. It was unhandled, and `bootstrap/install` ends the call with
+        # `|| true`, so the traceback was swallowed and a fresh stack came up
+        # with three skills missing and nothing said. Reported like any other
+        # failure now: the run continues, the lane is short, and the reason is
+        # on screen.
+        try:
+            if target.exists():
+                shutil.rmtree(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staged), str(target))
+        except OSError as exc:
+            hint = ""
+            if getattr(exc, "errno", None) == errno.EROFS:
+                hint = (" — skills/ is mounted read-only here. Only the init "
+                        "service may install skills; the agent's mount is :ro "
+                        "on purpose.")
+            return "failed", f"{lane}/{name}: cannot write {target}: {exc}{hint}"
 
     return "changed", f"{lane}/{name} installed at {commit[:8]}"
 
