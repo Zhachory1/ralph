@@ -12,7 +12,7 @@ Ralph is a personal developer assistant that runs on your own computer, built on
 
 The job it creates is **director, not reviewer-of-leftovers**. Review isn't the residue left after automation — it's the work. Every design choice here answers "does this make review faster and more trustworthy?", not "does this reduce the number of things you look at."
 
-> **Status: pre-release.** This repository holds the design and the layer boundary. The phase-1 core loop is not built yet. See [Build order](#build-order) for what lands first, and [Open questions](#open-questions) for what has to be verified before it can.
+> **Status: running.** The core loop works end to end: a design doc becomes reviewed pull requests, agents review each other's work, and you merge. Stages 1–3 of the [build order](#build-order) are done, stage 4 partly. What is still missing is listed there rather than implied.
 
 ## How it works
 
@@ -95,27 +95,30 @@ The PR reviewer is not speculative — it's a port of an agent already reviewing
 
 Safety mechanisms come before builder autonomy.
 
-1. **Core loop** — hand-written orchestrator and author profiles; a notifier polling both `blocked` and `review`; deterministic orchestration tests. No approval-gate or council adapter: the spike found both are native. No `extend` script yet, because a template is easier to get right after writing the same profile a few times. *Done when* a PRD becomes a design-doc PR, you're notified, and the tests pass.
-2. **Safety before autonomy** — kill-switch scripts, per-profile scoped tokens, branch protection, merge commands blocked in the builder's toolset. *Done when* the first kill-switch drill and the sandbox canary's security checks pass.
-3. **Builder and reviewer** — agent PR conventions and scope discipline, with the CI scope check live. *Done when* an approved design doc produces reviewed PRs in a sandbox org, then on one real low-risk feature.
-4. **Cron** — maintenance sweep, morning digest carrying the day's operational metrics, docs gardener, auditor running the weekly trend report. *Done when* a full week runs with no missed or duplicate alerts.
-5. **Local search** over the docs repo. *Done when* every profile can find the current design doc for a feature.
-6. **Launch plans**, with you advancing every stage.
-7. **Analyst, then experimenter.** Analyst is read-only and low risk; experimenter spends money, so it comes last.
+1. ~~**Core loop**~~ — **done.** Nine profiles, a notifier polling `blocked` and `review`, deterministic orchestration tests. Neither an approval-gate nor a council adapter was needed: the spike found both native.
+2. ~~**Safety before autonomy**~~ — **done**, except the canary. Kill switch with a drill, scope check in CI, isolation and profile-config evals. The **sandbox canary is still missing**, and its absence has already cost something: a change that passed review and CI failed five ways the first time anyone started it, because nothing in the pipeline had ever run `docker compose up`.
+3. ~~**Builder and reviewer**~~ — **done.** Both have shipped real features end to end, including reviewing work the other wrote. Agents have caught defects in each other's pull requests that a human reviewer had passed.
+4. **Cron** — *partly.* The morning digest and the maintenance sweep run. The docs gardener and the auditor's weekly trend report do not, and the skills [drift check](skills/README.md) has no cron yet.
+5. **Local search** over the docs repo. Not started.
+6. **Launch plans**, with you advancing every stage. Not started.
+7. **Analyst, then experimenter.** Both profiles exist and neither is proven. Analyst is read-only and low risk; experimenter spends money, so it comes last.
 
 ## Open questions
 
 These are verified before the code that depends on them is written, not after. A first round is done: see [`docs/spikes/hermes-capabilities.md`](docs/spikes/hermes-capabilities.md), which found that the approval gate, the council fan-out, durable workspaces, and multiple boards are all native and don't need building.
 
-Still open, and each needs a live worker rather than CLI probing:
+Running the thing answered most of them. Kept here with their answers, because the answers are why parts of the design look the way they do:
 
-- [ ] Whether a worker re-spawns with the review thread in context after `unblock`
-- [ ] Whether `request-changes` round-trips a design doc back to its author
-- [ ] Whether a `dir:` workspace stays stable across repeated dispatches of one card
-- [ ] How Hermes scopes its Docker sandbox, and whether builder and experimenter can get separate ones
-- [ ] How Hermes resolves two skills with the same name, needed for layer-3 overrides
-- [ ] Whether skills can be pinned or made read-only, so self-optimization can't touch invariant-adjacent skills
-- [ ] Whether one Hermes container can host all profiles with a shared board, versus one container per profile
+- [x] **`request-changes` round-trips a design doc back to its author.** Observed repeatedly; it is how every design in this repository reached its second revision.
+- [x] **A `dir:` workspace stays stable across repeated dispatches of one card.** Used for multi-stage work with no loss between dispatches.
+- [x] **Two skills with the same name inside one tier are refused, not ordered.** Hermes calls them ambiguous and drops both. This is why the public and private trees mount at *different* tiers rather than as two entries in the same list — see [`skills/README.md`](skills/README.md).
+- [x] **Skills can be made read-only, by mounting them that way.** A `skill_manage` patch against a read-only tree fails with an error the agent can see, which turns "an agent cannot rewrite a shipped skill" from a sentence in a prompt into a permission.
+- [x] **One container hosts all profiles with a shared board.** That is how the stack runs; per-profile sandboxes are spawned per card, not per profile.
+- [x] **Hermes scopes its Docker sandbox per profile**, so separate sandboxes for builder and experimenter are available. See [`docs/spikes/sandbox-isolation.md`](docs/spikes/sandbox-isolation.md).
+
+Still open:
+
+- [ ] Whether a worker re-spawns with the review thread in context after `unblock`. Guarded against in the orchestration evals; three of those tests currently fail, which is itself unresolved.
 
 ## Running it
 
@@ -123,7 +126,7 @@ Everything self-hosted runs as one Docker Compose stack on your own machine, on 
 
 Nothing here depends on a cloud service beyond the ones you already use: your model API, GitHub, and your notifier.
 
-Installation instructions land with phase 1.
+See [`compose/README.md`](compose/README.md) for the stack, its two web surfaces, and what to do when a dependency it pins moves.
 
 ## License
 
