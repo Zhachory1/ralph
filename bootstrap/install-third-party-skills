@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Install the skills that are someone else's work, from their pinned commits.
+
+Rule 2 of skills/README.md: a skill with a LICENSE naming another copyright
+holder, or a remote outside this account, is referenced rather than copied. So
+`skills/third-party.yaml` names three of them and the repository holds none,
+which means the tree in git is 50 skills and the tree an agent mounts is 53.
+
+Nothing closed that gap until this script. The manifest was declarative and
+unread: the lanes were short by exactly one wherever an entry belonged, and the
+only symptom was a count in `hermes skills list` that nobody would think to
+check against a design document.
+
+WHAT IT GUARANTEES.
+
+Pinned, not floating. A commit, never a tag or a branch, so what an agent loads
+is what someone reviewed. A manifest entry without one is an error rather than
+a default to HEAD.
+
+Idempotent. An install that is already at the right commit is left alone, so
+this is safe in `bootstrap/install`, which re-runs on every stack start.
+
+Never over a tracked skill. If a lane already holds a directory of that name
+from git, that is a name collision between the repository and the manifest, and
+the script stops rather than overwriting committed work.
+
+Offline-tolerant. A fetch that fails leaves whatever was installed before and
+says what is missing. A stack that cannot reach GitHub should start with 50
+skills and a warning, not fail to start.
+
+    bootstrap/install-third-party-skills [--manifest PATH] [--check]
+
+`--check` reports what would change and exits non-zero if anything would, which
+is what CI runs: a manifest edited without a matching install is a drift nobody
+would otherwise notice.
+"""
+
+import argparse
+import json
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+DEFAULT_MANIFEST = ROOT / "skills" / "third-party.yaml"
+STAMP = ".third-party.json"
+
+
+class ManifestError(Exception):
+    """The manifest itself is wrong, which no install run can work around."""
+
+
+def load_manifest(path: pathlib.Path) -> list[dict]:
+    """Parse the manifest without requiring PyYAML in every container."""
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text()) or {}
+        entries = data.get("skills") or []
+    except ImportError:
+        entries = _parse_minimal(path.read_text())
+
+    problems = []
+    for e in entries:
+        for field in ("name", "lane", "upstream", "commit"):
+            if not e.get(field):
+                problems.append(f"entry missing {field!r}: {e}")
+        if e.get("commit") and len(str(e["commit"])) < 40:
+            problems.append(
+                f"{e.get('name')}: commit must be a full 40-character sha, not "
+                f"{e['commit']!r}. A tag or a branch is not a pin."
+            )
+    if problems:
+        # A malformed manifest is a repository error, not a transient one: it
+        # fails loudly whichever mode asked, because every later decision reads
+        # from it.
+        for p_ in problems:
+            print(f"manifest: {p_}", file=sys.stderr)
+        raise ManifestError(f"{len(problems)} problem(s) in {path}")
+    return entries
+
+
+def _parse_minimal(text: str) -> list[dict]:
+    """Enough YAML for this one file's shape, for a container without PyYAML."""
+    entries, cur = [], None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip() if not raw.strip().startswith("#") else ""
+        if not line.strip():
+            continue
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            if cur:
+                entries.append(cur)
+            cur = {}
+            stripped = stripped[2:]
+        if cur is not None and ":" in stripped:
+            k, v = stripped.split(":", 1)
+            cur[k.strip()] = v.strip().strip('"').strip("'")
+    if cur:
+        entries.append(cur)
+    return [e for e in entries if e.get("name")]
+
+
+def git(*args, cwd=None) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+
+def installed_commit(target: pathlib.Path) -> str | None:
+    stamp = target / STAMP
+    if not stamp.is_file():
+        return None
+    try:
+        return json.loads(stamp.read_text()).get("commit")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def is_tracked(target: pathlib.Path) -> bool:
+    """True when this path is committed to the repository rather than installed."""
+    rel = target.relative_to(ROOT)
+    r = git("ls-files", "--error-unmatch", str(rel / "SKILL.md"), cwd=ROOT)
+    return r.returncode == 0
+
+
+def install(entry: dict, check: bool) -> tuple[str, str]:
+    """Return (state, detail). state is ok | would-change | changed | failed."""
+    name, lane, commit = entry["name"], entry["lane"], str(entry["commit"])
+    target = ROOT / "skills" / lane / name
+
+    if target.exists() and is_tracked(target):
+        return "failed", (
+            f"{lane}/{name} is committed to this repository and also named in the "
+            f"manifest. One of the two is wrong; refusing to overwrite the commit."
+        )
+
+    if installed_commit(target) == commit:
+        return "ok", f"{lane}/{name} already at {commit[:8]}"
+
+    if check:
+        have = installed_commit(target) or "nothing"
+        return "would-change", f"{lane}/{name}: {have[:8] if have != 'nothing' else have} -> {commit[:8]}"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        clone = pathlib.Path(tmp) / "src"
+        r = git("clone", "--quiet", "--filter=blob:none", "--no-checkout",
+                entry["upstream"], str(clone))
+        if r.returncode != 0:
+            return "failed", f"{lane}/{name}: clone failed: {r.stderr.strip()[:120]}"
+        r = git("checkout", "--quiet", commit, cwd=clone)
+        if r.returncode != 0:
+            return "failed", f"{lane}/{name}: commit {commit[:8]} not found upstream"
+
+        src = clone / entry["subdir"] if entry.get("subdir") else clone
+        if not (src / "SKILL.md").is_file():
+            return "failed", f"{lane}/{name}: no SKILL.md at {entry.get('subdir') or '<root>'}"
+
+        staged = pathlib.Path(tmp) / "staged"
+        shutil.copytree(src, staged, ignore=shutil.ignore_patterns(".git"))
+        (staged / STAMP).write_text(json.dumps({
+            "name": name,
+            "upstream": entry["upstream"],
+            "commit": commit,
+            "license": entry.get("license"),
+            "copyright": entry.get("copyright"),
+        }, indent=2) + "\n")
+
+        # Replace only once the new copy is complete, so an interrupted run
+        # leaves the previous install rather than half of the next one.
+        if target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staged), str(target))
+
+    return "changed", f"{lane}/{name} installed at {commit[:8]}"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--manifest", type=pathlib.Path, default=DEFAULT_MANIFEST)
+    ap.add_argument("--check", action="store_true",
+                    help="report what would change and exit non-zero if anything would")
+    args = ap.parse_args()
+
+    if not args.manifest.is_file():
+        print(f"no manifest at {args.manifest}; nothing to install")
+        return 0
+
+    try:
+        entries = load_manifest(args.manifest)
+    except ManifestError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if not entries:
+        print("manifest names no skills")
+        return 0
+
+    pending, failed = [], []
+    for entry in entries:
+        state, detail = install(entry, args.check)
+        if state == "ok":
+            print(f"  {detail}")
+        elif state == "would-change":
+            pending.append(detail)
+            print(f"  WOULD CHANGE {detail}")
+        elif state == "changed":
+            print(f"  {detail}")
+        else:
+            failed.append(detail)
+            print(f"  FAILED {detail}", file=sys.stderr)
+
+    if failed:
+        # Not fatal on an install run: a stack that cannot reach GitHub should
+        # start with the skills it has and a warning, rather than not start.
+        print(f"\n{len(failed)} third-party skill(s) could not be installed. "
+              f"The lanes they belong to are short by that many.", file=sys.stderr)
+        return 1 if args.check else 0
+    if pending:
+        print(f"\n{len(pending)} third-party skill(s) are not installed or are at "
+              f"the wrong commit. Run bootstrap/install-third-party-skills.")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -7,3 +7,11 @@ __pycache__/
 *.pyc
 compose/.env
 compose/workspaces/
+
+# Installed from skills/third-party.yaml at a pinned commit, never committed:
+# the repository holds 50 skills and the mounted tree resolves 53. Each
+# install leaves a .third-party.json naming its upstream and commit.
+skills/*/*/.third-party.json
+skills/write/stop-slop/
+skills/debug/debug-investigation/
+skills/review/pr-review/

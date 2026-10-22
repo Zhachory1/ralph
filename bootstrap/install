@@ -112,4 +112,12 @@ for dir in "$PROFILES_DIR"/*/; do
     fi
 done
 
+# The three skills the manifest references rather than the repository holding.
+# Tolerant of a failure here: a stack that cannot reach GitHub should start
+# with the skills it has and a warning, not refuse to start.
+if [ -f /ralph/skills/third-party.yaml ] || [ -f "$(dirname "$0")/../skills/third-party.yaml" ]; then
+    echo "  installing third-party skills from their pinned commits"
+    python3 "$(dirname "$0")/install-third-party-skills" || true
+fi
+
 echo "ralph: install complete"
