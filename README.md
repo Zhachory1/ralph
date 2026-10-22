@@ -1,6 +1,12 @@
-# Ralph
+# ✊ Ralph
 
 **R**eliable **A**gent **L**oop using **P**ersonal **H**ermes.
+
+[![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![Hermes Agent](https://img.shields.io/badge/Hermes%20Agent-v0.22.2-6b4fbb)](https://hermes-agent.nousresearch.com/)
+[![skills](https://img.shields.io/badge/skills-50%20public%20%2B%203%20pinned-2f8f4e)](skills/README.md)
+[![scope check](https://github.com/Zhachory1/ralph/actions/workflows/scope-check.yml/badge.svg)](https://github.com/Zhachory1/ralph/actions/workflows/scope-check.yml)
+[![skills public](https://github.com/Zhachory1/ralph/actions/workflows/skills-public.yml/badge.svg)](https://github.com/Zhachory1/ralph/actions/workflows/skills-public.yml)
 
 Ralph is a personal developer assistant that runs on your own computer, built on [Hermes Agent](https://hermes-agent.nousresearch.com/). You write requirements and approve design docs; agents draft the designs, open the pull requests, review them, and keep them healthy. You decide what merges.
 
