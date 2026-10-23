@@ -23,6 +23,18 @@ echo "ralph: installing into ${HERMES_HOME:-$HOME/.hermes}"
 # is that request-review always names a reviewer, which the author profile does.
 hermes config set kanban.review_dispatch true >/dev/null
 
+# Unset today, these fall back to a host-memory-derived default --
+# clamp(MemTotal / 512MiB, 2, 8) -- which is silent and changes with the
+# machine's RAM rather than with a decision anyone made. Written down
+# explicitly: 6 concurrent workers host-wide, 2 per profile, so a flood of
+# queue cards cannot starve a hand-written one and cannot push past what
+# this host (5.77 GiB, also running the gateway, the web UI, and sandbox
+# containers) can hold alongside Hermes' own 512MiB-per-worker guard.
+# Dispatcher settings are read once at gateway boot, so this takes a
+# restart to apply, not a reload.
+hermes config set kanban.max_in_progress 6 >/dev/null
+hermes config set kanban.max_in_progress_per_profile 2 >/dev/null
+
 # A card-dispatched worker runs with nobody present to answer an approval
 # prompt, and Hermes' default is to refuse the approval-gated tools outright.
 # That makes work on the board strictly weaker than the same work run
@@ -80,6 +92,25 @@ if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
     echo "  created board ${BOARD}"
 else
     echo "  board ${BOARD} already exists"
+fi
+
+# A second board for anything a producer creates automatically, never for
+# anything you write by hand. The embedded dispatcher enumerates every
+# board each tick with no extra config, so this needs no dispatcher
+# wiring; max_in_progress above is a host cap shared across every board,
+# so a second board cannot multiply concurrency. The notifier polls only
+# RALPH_BOARD, so queue cards stay off its radar by construction: a flood
+# of machine-created cards cannot page you, with nothing left to maintain
+# that property.
+QUEUES_BOARD=${RALPH_QUEUES_BOARD:-queues}
+if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${QUEUES_BOARD}\b"; then
+    hermes kanban boards create "$QUEUES_BOARD" \
+        --name "Ralph queues" \
+        --description "Producer-created work: PR review, maintenance, inbox. No human cards here." \
+        --default-workdir /workspaces >/dev/null
+    echo "  created board ${QUEUES_BOARD}"
+else
+    echo "  board ${QUEUES_BOARD} already exists"
 fi
 
 for dir in "$PROFILES_DIR"/*/; do

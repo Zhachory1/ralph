@@ -171,7 +171,35 @@ The `socket-proxy` service narrows the Docker API the hermes container itself ma
 
 See [`docs/spikes/sandbox-isolation.md`](../docs/spikes/sandbox-isolation.md); `evals/test_sandbox_isolation.py` probes it from inside a live sandbox.
 
+## Producer-created work: bounds and spend
+
+A hand-written card arrives one at a time; a producer can discover dozens of pull requests in one
+tick. Four bounds apply, in the order a card meets them, and only one is enforced outside this
+stack.
+
+| # | Bound | Where | Stops | Does not stop |
+| --- | --- | --- | --- | --- |
+| 1 | Admission | each producer's own config | the backlog flood | a single card costing 10x |
+| 2 | Concurrency | `kanban.max_in_progress` / `max_in_progress_per_profile`, set in `bootstrap/install` | pile-up, host pressure, one profile saturating the host | total spend |
+| 3 | Per card | `--max-runtime` / `--max-retries` at `kanban create`, and `run_budget_seconds` in the profile | a runaway card, and the default's silent second attempt | the number of cards |
+| 4 | Provider | a monthly hard cap on the credential a producer bills to, set with that provider | everything, when 1-3 are wrong | nothing -- it is the floor |
+
+Bounds 1-3 are ours and can be wrong. Bound 4 is what makes being wrong survivable, and it lives
+outside this repository: set it with whichever model provider a producer's credential belongs to,
+not here. A tripped cap on one credential stops only the queues billing to it -- Ralph's own nine
+profiles run on a separate provider and are unaffected.
+
+Producer-created cards live on a second board, `queues` (`$RALPH_QUEUES_BOARD`, created by
+`bootstrap/install`), never on `$RALPH_BOARD`. The notifier polls only `RALPH_BOARD`, so a flood of
+machine-created cards cannot page you -- by construction, not by a filter someone has to maintain.
+`kanban.max_in_progress` is a host-wide cap shared across every board, so the second board cannot
+be used to multiply concurrency.
+
+See [`docs`](https://github.com/Zhachory1/docs) project `fleet-into-ralph` for the design this
+implements, including the cost arithmetic behind these defaults.
+
 ## Scope checking agent pull requests
+
 
 A builder has the whole repository and will honestly notice things worth fixing nearby. Across a feature's pull requests those additions compound into a diff nobody agreed to, and the review that was meant to be the safety net becomes too large to be one.
 
