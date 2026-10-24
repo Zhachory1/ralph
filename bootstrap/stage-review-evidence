@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Stage one pull request's evidence for the review lenses to read.
+
+PR 3 of the fleet-into-ralph design: "the restricted tool server and the
+evidence staging contract... driven by hand with --once. Nothing creates
+cards." This is that --once path. PR 4 is the graph builder that calls it
+automatically per discovered pull request; nothing here creates a Kanban card.
+
+What it writes, under a fresh directory below --work-root:
+
+    <work-root>/<operation-id>/
+        evidence/diff.patch       the base..head diff, nothing else of the
+                                   repository -- a lens never gets a live
+                                   checkout, only what is staged
+        evidence/context.json     repo, number, base_sha, head_sha, and the
+                                   changed file list; never code
+        .lens-tools.json          the binding file bootstrap/lens-tools reads,
+                                   mode 0440, owned by the user running this
+
+operation-id is sha256(repo, number, head_sha), matching the fleet's identity
+rule, so staging the same head twice is a no-op rather than a second
+directory: idempotent the same way bootstrap/install is.
+
+Never clones. Runs `git fetch`/`git diff` against a checkout you already have,
+because a lens having no live checkout to read from is the point -- this
+script is the only thing with one, and it keeps it.
+"""
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import subprocess
+import sys
+
+
+def operation_id(repo: str, number: int, head_sha: str) -> str:
+    digest = hashlib.sha256(f"{repo}:{number}:{head_sha}".encode()).hexdigest()
+    return f"review-{digest}"
+
+
+def git(*args, cwd) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60)
+
+
+def security_relevant(paths: list[str]) -> bool:
+    markers = ("auth", "secret", "credential", "iam", "crypto", "permission")
+    return any(m in p.lower() for m in markers for p in paths)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--checkout", required=True, type=pathlib.Path,
+                    help="an existing local clone with repo and head_sha reachable")
+    ap.add_argument("--repo", required=True, help="owner/name, for the operation id and context only")
+    ap.add_argument("--number", required=True, type=int)
+    ap.add_argument("--base-sha", required=True)
+    ap.add_argument("--head-sha", required=True)
+    ap.add_argument("--work-root", required=True, type=pathlib.Path)
+    args = ap.parse_args()
+
+    for sha in (args.base_sha, args.head_sha):
+        if len(sha) != 40 or not all(c in "0123456789abcdef" for c in sha):
+            print(f"error: not a full commit sha: {sha!r}", file=sys.stderr)
+            return 2
+
+    checkout = args.checkout.resolve()
+    if not (checkout / ".git").exists():
+        print(f"error: not a git checkout: {checkout}", file=sys.stderr)
+        return 2
+    for sha in (args.base_sha, args.head_sha):
+        r = git("cat-file", "-e", f"{sha}^{{commit}}", cwd=checkout)
+        if r.returncode != 0:
+            print(f"error: {sha} is not present in {checkout} -- fetch it first", file=sys.stderr)
+            return 2
+
+    op_id = operation_id(args.repo, args.number, args.head_sha)
+    op_root = args.work_root.resolve() / op_id
+    evidence = op_root / "evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+
+    diff = git("diff", "--no-ext-diff", "--no-textconv", "--binary",
+              f"{args.base_sha}...{args.head_sha}", "--", cwd=checkout)
+    if diff.returncode != 0:
+        print(f"error: git diff failed: {diff.stderr.strip()[:300]}", file=sys.stderr)
+        return 1
+    (evidence / "diff.patch").write_text(diff.stdout)
+
+    names = git("diff", "--name-status", f"{args.base_sha}...{args.head_sha}", "--", cwd=checkout)
+    changed = [line.split("\t", 1)[1] for line in names.stdout.splitlines() if "\t" in line]
+
+    context = {
+        "repo": args.repo,
+        "number": args.number,
+        "base_sha": args.base_sha,
+        "head_sha": args.head_sha,
+        "changed_paths": changed,
+        "security_relevant": security_relevant(changed),
+    }
+    (evidence / "context.json").write_text(json.dumps(context, indent=2, sort_keys=True) + "\n")
+
+    binding = op_root / ".lens-tools.json"
+    # Idempotent: the same operation id always stages the same evidence root,
+    # so a second run for one head is a no-op, not a failure. The binding file
+    # bootstrap/lens-tools trusts is 0440 -- restoring write access before
+    # overwriting it is what makes the second run possible at all; the second
+    # chmod below puts it back to the only mode that server will accept.
+    if binding.exists():
+        os.chmod(binding, stat.S_IRUSR | stat.S_IWUSR)
+    binding.write_text(json.dumps({"schema_version": 1, "evidence_root": str(evidence)},
+                                  separators=(",", ":")))
+    os.chmod(binding, stat.S_IRUSR | stat.S_IRGRP)
+
+    print(f"staged {op_id}")
+    print(f"  evidence: {evidence}")
+    print(f"  changed files: {len(changed)}" +
+         (" (security-relevant path detected)" if context["security_relevant"] else ""))
+    print(f"  operation id: {op_id}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

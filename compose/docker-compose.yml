@@ -149,6 +149,11 @@ services:
       - hermes-home:/home/hermes/.hermes
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
       - ../evals:/ralph/evals:ro
+      # Read-only: this is where the review lenses' restricted MCP server
+      # (bootstrap/lens-tools) lives, referenced by path from five profile
+      # configs. Nothing a lens does may rewrite the tool mediating its own
+      # access to the Kanban database.
+      - ../bootstrap:/ralph/bootstrap:ro
       # Read-only on purpose. A skill_manage patch against this tree fails with
       # an error the agent can see, which makes "an agent cannot rewrite a
       # shipped skill" a permission rather than a sentence in a prompt.
