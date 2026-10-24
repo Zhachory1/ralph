@@ -1,0 +1,38 @@
+# Ported from the fleet's pr-review-generalist-v2, which is defined in git but
+# not what production currently dispatches onto the generalist role -- that
+# runs under the fleet's older pr-review-v1, which also orchestrates and
+# publishes. This shape is deliberately narrower than that, matching what the
+# design calls for rather than what happens to be running today.
+#
+# Two lines differ from the fleet's config: provider (openai-codex -> openai-api,
+# an API key rather than a device-code OAuth flow) and model (gpt-6-sol ->
+# gpt-6-luna). The model change is the one line in this port that is not a
+# straight copy -- see Design-Doc section 2, dissent 5.
+model:
+  provider: openai-api
+  default: gpt-6-luna
+platform_toolsets:
+  # file-only, no terminal, no network: PR 3's restricted evidence server does
+  # not exist yet, so this profile reads a diff staged into its workspace by
+  # whatever dispatches it -- by hand for now. It cannot reach GitHub, cannot
+  # create cards, and cannot post anything, which is the one property this
+  # profile must have before it ever reads a real PR.
+  cli:
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 80
+  run_budget_seconds: 480
+  api_max_retries: 0

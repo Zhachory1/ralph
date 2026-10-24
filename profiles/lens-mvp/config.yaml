@@ -1,0 +1,35 @@
+# Ported from the fleet's pr-review-mvp-v2. Two lines differ: provider
+# (openai-codex -> openai-api) and nothing else -- this role already runs on
+# gpt-6-luna in production, so the model line is unchanged, unlike the
+# generalist (see Design-Doc section 2, dissent 5).
+model:
+  provider: openai-api
+  default: gpt-6-luna
+platform_toolsets:
+  # terminal + file, not file-only: this role reads GitHub directly (gh api,
+  # read-only) rather than from a staged evidence file, matching how the
+  # fleet runs it today. PR 3's restricted evidence server replaces this with
+  # a narrower, credential-free path; until then this is the real shape, not
+  # a placeholder, and it is why this role may not hold GH_TOKEN for writes:
+  # the sandbox forwards it for read calls only, and this profile's SOUL
+  # forbids every GitHub write.
+  cli:
+    - terminal
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  disabled_toolsets: [delegation, kanban, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 80
+  run_budget_seconds: 480
+  api_max_retries: 0
