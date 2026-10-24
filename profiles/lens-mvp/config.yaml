@@ -1,20 +1,22 @@
-# Ported from the fleet's pr-review-mvp-v2. Two lines differ: provider
-# (openai-codex -> openai-api) and nothing else -- this role already runs on
-# gpt-6-luna in production, so the model line is unchanged, unlike the
-# generalist (see Design-Doc section 2, dissent 5).
+# Ported from the fleet's pr-review-mvp-v2. Two lines differ from it:
+# provider (openai-codex -> openai-api) and nothing else -- this role
+# already runs on gpt-6-luna in production, so the model line is
+# unchanged, unlike the generalist (Design-Doc section 2, dissent 5).
+#
+# A third difference from the fleet's shape, and the reason this profile
+# has no terminal: PR 3's restricted evidence server now exists, so this
+# role reads a diff staged into its workspace rather than gh api against
+# live GitHub, matching the generalist and synthesis shape the fleet's
+# own config already uses for those two roles. It never held a GitHub
+# credential capable of a write; now it holds none at all.
 model:
   provider: openai-api
   default: gpt-6-luna
 platform_toolsets:
-  # terminal + file, not file-only: this role reads GitHub directly (gh api,
-  # read-only) rather than from a staged evidence file, matching how the
-  # fleet runs it today. PR 3's restricted evidence server replaces this with
-  # a narrower, credential-free path; until then this is the real shape, not
-  # a placeholder, and it is why this role may not hold GH_TOKEN for writes:
-  # the sandbox forwards it for read calls only, and this profile's SOUL
-  # forbids every GitHub write.
+  # file-only: no terminal, no network, no GitHub credential. See the header
+  # comment -- this role reads staged evidence through lens-tools, same as
+  # the generalist and synthesis.
   cli:
-    - terminal
     - file
   api_server: [no_mcp]
 approvals:
@@ -26,6 +28,32 @@ memory:
 auxiliary:
   background_review:
     enabled: false
+mcp_servers:
+  lens-tools:
+    # The one piece of fleet machinery worth carrying over (Design-Doc
+    # section 3). Every env value here is a Hermes-supplied worker fact,
+    # resolved only inside a real dispatch -- there is nothing to configure
+    # per profile beyond pointing at the script and the Python that runs it.
+    command: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    args: ["/ralph/bootstrap/lens-tools"]
+    enabled: true
+    worker_only: true
+    env:
+      LENS_TASK_ID: "${HERMES_KANBAN_TASK}"
+      LENS_RUN_ID: "${HERMES_KANBAN_RUN_ID}"
+      LENS_CLAIM_LOCK: "${HERMES_KANBAN_CLAIM_LOCK}"
+      LENS_BOARD: "${HERMES_KANBAN_BOARD}"
+      LENS_DB: "${HERMES_KANBAN_DB}"
+      LENS_WORKSPACE: "${HERMES_KANBAN_WORKSPACE}"
+      # bootstrap/stage-review-evidence writes its output directly into the
+      # card's own workspace (PR 4 passes --work-root pointing there), so
+      # this is simply that workspace's evidence/ subdirectory -- no shared
+      # work root, no path a second card could collide on.
+      LENS_EVIDENCE_ROOT: "${HERMES_KANBAN_WORKSPACE}/evidence"
+      LENS_PROFILE: "${HERMES_PROFILE}"
+      LENS_TOOLS_PYTHON: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    tools:
+      include: [evidence_read, evidence_search, kanban_show, kanban_heartbeat, kanban_complete, kanban_block]
 skills:
   creation_nudge_interval: 0
 agent:

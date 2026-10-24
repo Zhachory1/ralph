@@ -22,6 +22,28 @@ memory:
 auxiliary:
   background_review:
     enabled: false
+mcp_servers:
+  lens-tools:
+    command: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    args: ["/ralph/bootstrap/lens-tools"]
+    enabled: true
+    worker_only: true
+    env:
+      LENS_TASK_ID: "${HERMES_KANBAN_TASK}"
+      LENS_RUN_ID: "${HERMES_KANBAN_RUN_ID}"
+      LENS_CLAIM_LOCK: "${HERMES_KANBAN_CLAIM_LOCK}"
+      LENS_BOARD: "${HERMES_KANBAN_BOARD}"
+      LENS_DB: "${HERMES_KANBAN_DB}"
+      LENS_WORKSPACE: "${HERMES_KANBAN_WORKSPACE}"
+      LENS_EVIDENCE_ROOT: "${HERMES_KANBAN_WORKSPACE}/evidence"
+      LENS_PROFILE: "${HERMES_PROFILE}"
+      LENS_TOOLS_PYTHON: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    tools:
+      # kanban_parent_handoffs is the one tool only this profile may call:
+      # bootstrap/lens-tools refuses it for any profile other than
+      # ralph-review-synthesis on the queues board, checked server-side, not
+      # by omitting it from another profile's include list alone.
+      include: [evidence_read, evidence_search, kanban_show, kanban_parent_handoffs, kanban_heartbeat, kanban_complete, kanban_block]
 skills:
   creation_nudge_interval: 0
 agent:
