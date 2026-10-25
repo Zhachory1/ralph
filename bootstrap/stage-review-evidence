@@ -21,6 +21,12 @@ operation-id is sha256(repo, number, head_sha), matching the fleet's identity
 rule, so staging the same head twice is a no-op rather than a second
 directory: idempotent the same way bootstrap/install is.
 
+A diff over bootstrap/lens-tools' own 1 MiB per-file read cap is staged with a
+visible warning rather than silently truncated later inside a lens: a lens
+finding its own evidence unreadable, discovered independently by three lenses
+on the first real graph this script produced, is the failure this check
+replaces.
+
 Never clones. Runs `git fetch`/`git diff` against a checkout you already have,
 because a lens having no live checkout to read from is the point -- this
 script is the only thing with one, and it keeps it.
@@ -33,6 +39,10 @@ import pathlib
 import stat
 import subprocess
 import sys
+
+# bootstrap/lens-tools' own MAX_FILE_BYTES -- kept in sync by the test that
+# imports both, not by eye.
+LENS_TOOLS_MAX_FILE_BYTES = 1_048_576
 
 
 def operation_id(repo: str, number: int, head_sha: str) -> str:
@@ -87,6 +97,8 @@ def main() -> int:
         print(f"error: git diff failed: {diff.stderr.strip()[:300]}", file=sys.stderr)
         return 1
     (evidence / "diff.patch").write_text(diff.stdout)
+    diff_bytes = len((evidence / "diff.patch").read_bytes())
+    oversized = diff_bytes > LENS_TOOLS_MAX_FILE_BYTES
 
     names = git("diff", "--name-status", f"{args.base_sha}...{args.head_sha}", "--", cwd=checkout)
     changed = [line.split("\t", 1)[1] for line in names.stdout.splitlines() if "\t" in line]
@@ -98,6 +110,8 @@ def main() -> int:
         "head_sha": args.head_sha,
         "changed_paths": changed,
         "security_relevant": security_relevant(changed),
+        "diff_bytes": diff_bytes,
+        "diff_oversized": oversized,
     }
     (evidence / "context.json").write_text(json.dumps(context, indent=2, sort_keys=True) + "\n")
 
@@ -117,6 +131,11 @@ def main() -> int:
     print(f"  evidence: {evidence}")
     print(f"  changed files: {len(changed)}" +
          (" (security-relevant path detected)" if context["security_relevant"] else ""))
+    if oversized:
+        print(f"  WARNING: diff.patch is {diff_bytes:,} bytes, over lens-tools' "
+             f"{LENS_TOOLS_MAX_FILE_BYTES:,}-byte read cap. Every lens will fail to "
+             f"read it as a whole file; evidence_search still works per matched line.",
+             file=sys.stderr)
     print(f"  operation id: {op_id}")
     return 0
 
