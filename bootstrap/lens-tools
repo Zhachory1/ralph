@@ -190,7 +190,13 @@ def safe_binding(aliases):
     fd = os.open(path, os.O_RDONLY | NOFOLLOW | NONBLOCK)
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 \
+        # No owner check: the binding is written by a host-side producer
+        # (uid of the operator) and read here inside the container (root), so
+        # an owner equality can never hold across that bind mount. What still
+        # holds: regular file, not a symlink, single link, mode exactly 0440
+        # (sealed read-only after writing), bounded size -- and below, the
+        # evidence root it names must resolve under the configured root.
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 \
                 or stat.S_IMODE(info.st_mode) != 0o440 or info.st_size > MAX_BINDING_BYTES:
             fail("unsafe lens tools binding")
         data = json.loads(os.read(fd, MAX_BINDING_BYTES + 1))

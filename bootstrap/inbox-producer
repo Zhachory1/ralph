@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Find unread Gmail threads and create one drafter card each.
+
+PR 10 of the fleet-into-ralph design. Runs on the host, where the Gmail token
+lives; the token never enters the hermes container. Reads with the token,
+writes the thread as a JSON file into a staging directory, and creates a
+card whose workspace is that directory -- the same --workspace dir: shape
+bootstrap/build-review-graph uses, so the drafter reads the thread through
+lens-tools and nothing else.
+
+    RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-producer \
+        --token ~/.config/ralph/inbox/gmail-token.json \
+        --work-root /path/visible/to/both/host-and-container --board queues
+
+Every unread inbox thread gets a draft, by direct instruction -- no opt-in
+label. --query overrides the Gmail search if that ever needs to narrow.
+Threads whose latest message is from this account are skipped: there is
+nothing to answer. Drafting never marks a thread read, so an unread thread
+is seen again each run; the idempotency key keeps that a no-op.
+The idempotency key is the thread id plus its latest message id, so a new
+message on a labeled thread is a new card and an unchanged thread is a
+no-op. Archiving a card frees its key, so archived work runs again.
+"""
+import argparse, base64, json, os, pathlib, subprocess, sys
+
+DEFAULT_QUERY = "in:inbox is:unread -from:me"
+
+
+def hermes(*args):
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    cmd = (["docker", "exec", container, "hermes", *args] if container
+           else ["hermes", *args])
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def gmail(token_path: pathlib.Path):
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+    creds = Credentials.from_authorized_user_info(json.loads(token_path.read_text()))
+    if not creds.valid:
+        creds.refresh(Request())
+        token_path.write_text(creds.to_json())
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def body_text(payload) -> str:
+    """The first text/plain part, decoded. Enough to reply to; attachments and
+    HTML are not staged."""
+    if payload.get("mimeType") == "text/plain" and payload.get("body", {}).get("data"):
+        return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", "replace")
+    for part in payload.get("parts", []) or []:
+        text = body_text(part)
+        if text:
+            return text
+    return ""
+
+
+def header(msg, name):
+    for h in msg["payload"].get("headers", []):
+        if h["name"].lower() == name.lower():
+            return h["value"]
+    return ""
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--token", required=True, type=pathlib.Path)
+    ap.add_argument("--work-root", required=True, type=pathlib.Path,
+                    help="host path of a directory the hermes container also mounts")
+    ap.add_argument("--container-work-root", type=pathlib.Path, default=None,
+                    help="the same directory as the container sees it; defaults to "
+                         "--work-root. Card workspaces and the lens-tools binding must "
+                         "name the container's path, since that is where the drafter runs")
+    ap.add_argument("--board", default="queues")
+    ap.add_argument("--query", default=DEFAULT_QUERY,
+                    help=f"Gmail search selecting threads to draft for (default: {DEFAULT_QUERY!r})")
+    ap.add_argument("--include-self", action="store_true",
+                    help="also draft for threads whose latest message is from this "
+                         "account; for testing against a mailbox you send to yourself")
+    args = ap.parse_args()
+    container_root = args.container_work_root or args.work_root
+
+    g = gmail(args.token.expanduser())
+    me = g.users().getProfile(userId="me").execute()["emailAddress"].lower()
+    threads = g.users().threads().list(userId="me", q=args.query, maxResults=100).execute().get("threads", [])
+    print(f"{len(threads)} thread(s) match {args.query!r}")
+    for t in threads:
+        thread = g.users().threads().get(userId="me", id=t["id"], format="full").execute()
+        msgs = thread["messages"]
+        latest = msgs[-1]
+        if me in header(latest, "From").lower() and not args.include_self:
+            print(f"  skip {t['id']}: latest message is from this account")
+            continue
+        op_id = f"inbox-{t['id']}-{latest['id']}"
+        staged = {
+            "thread_id": t["id"],
+            "reply_to_message_id": header(latest, "Message-ID"),
+            "subject": header(latest, "Subject"),
+            "reply_to": header(latest, "Reply-To") or header(latest, "From"),
+            "messages": [{"from": header(m, "From"), "date": header(m, "Date"),
+                          "body": body_text(m["payload"])[:20000]} for m in msgs],
+        }
+        evidence = args.work_root / op_id / "evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        (evidence / "thread.json").write_text(json.dumps(staged, indent=2))
+        binding = args.work_root / op_id / ".lens-tools.json"
+        if binding.exists():
+            os.chmod(binding, 0o600)
+        binding.write_text(json.dumps({"schema_version": 1,
+                                       "evidence_root": str(container_root / op_id / "evidence")},
+                                      separators=(",", ":")))
+        os.chmod(binding, 0o440)
+
+        # Card body carries ids only; the thread text stays in the workspace.
+        r = hermes("kanban", "--board", args.board, "create",
+                   f"Draft reply: thread {t['id']}",
+                   "--body", f"operation_id: {op_id}\nthread_id: {t['id']}\n",
+                   "--assignee", "ralph-inbox-drafter",
+                   "--idempotency-key", op_id,
+                   "--workspace", f"dir:{container_root / op_id}",
+                   "--max-runtime", "480", "--max-retries", "1", "--json")
+        if r.returncode != 0:
+            print(f"  error creating card for {t['id']}: {r.stderr.strip()[:200]}", file=sys.stderr)
+            continue
+        print(f"  {t['id']} -> {json.loads(r.stdout)['id']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
