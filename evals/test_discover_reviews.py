@@ -240,5 +240,62 @@ class SearchFailureTests(unittest.TestCase):
         self.assertNotEqual(0, code)
 
 
+class AllowFileTests(unittest.TestCase):
+    """bootstrap/cutover-repo writes a flat allowlist file; this reads it
+    fresh on every run so a cutover takes effect with no restart."""
+
+    def test_allow_file_alone_is_sufficient(self):
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            allow_file = pathlib.Path(d) / "allow.txt"
+            allow_file.write_text("a/repo\n")
+            with mock.patch.object(discover_reviews, "search_assigned_prs",
+                                   return_value=[fake_pr("a/repo", 1)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+                argv = ["discover-reviews", "--allow-file", str(allow_file),
+                       "--checkout", "/x", "--work-root", d, "--once-for-real"]
+                with mock.patch.object(sys, "argv", argv):
+                    code = discover_reviews.main()
+            self.assertEqual(0, code)
+
+    def test_neither_allow_nor_allow_file_is_an_error(self):
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            argv = ["discover-reviews", "--checkout", "/x", "--work-root", d]
+            with mock.patch.object(sys, "argv", argv):
+                code = discover_reviews.main()
+            self.assertNotEqual(0, code)
+
+    def test_a_missing_allow_file_is_not_a_crash(self):
+        """cutover-repo may not have run yet; an absent file means an empty
+        scope, which fails closed on its own, not a traceback."""
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            argv = ["discover-reviews", "--allow-file", str(pathlib.Path(d) / "nope.txt"),
+                   "--checkout", "/x", "--work-root", d]
+            with mock.patch.object(sys, "argv", argv):
+                code = discover_reviews.main()
+            self.assertEqual(2, code)
+
+    def test_allow_and_allow_file_merge(self):
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            allow_file = pathlib.Path(d) / "allow.txt"
+            allow_file.write_text("b/repo\n")
+            with mock.patch.object(discover_reviews, "search_assigned_prs",
+                                   return_value=[fake_pr("a/repo", 1), fake_pr("b/repo", 2)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+                argv = ["discover-reviews", "--allow", "a/repo", "--allow-file", str(allow_file),
+                       "--checkout", "/x", "--work-root", d, "--once-for-real"]
+                with mock.patch.object(sys, "argv", argv):
+                    discover_reviews.main()
+                calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+                self.assertEqual(2, len(calls), "both a/repo and b/repo should be admitted")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

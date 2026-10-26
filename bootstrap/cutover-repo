@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Move one repository's review scope from the fleet to Ralph, or back.
+
+PR 7 of the fleet-into-ralph design. The design names the invariant this
+exists to hold: "at any moment, exactly one of the two systems has a given
+repository in scope." Confirmed live before writing this -- the fleet's
+review producer runs the authority-scoped engine (QUEUE_ENGINE unset,
+defaults to "bridge"), and its authority file currently grants `Zhachory1/*`,
+so this is Plan A from section 6: a two-line swap, not a one-switch cutover.
+
+    bootstrap/cutover-repo --repo owner/name \\
+        --fleet-authority /usr/local/etc/ai-pr-automation/authority.yaml \\
+        --ralph-allowlist /path/to/ralph-allowlist.txt
+
+Dry-run by default, same as every producer in this design: prints the two
+edits it would make and exits 0. Pass --apply to actually write both files.
+
+WHAT THIS DOES AND DOES NOT DO.
+
+It edits two plain text files: removes one line (or narrows a wildcard grant)
+from the fleet's authority.yaml, and appends one line to Ralph's own allowlist
+file, a flat newline-separated list bootstrap/discover-reviews --allow reads
+from -- or prints the --allow argument to add by hand, if discover-reviews is
+still invoked directly rather than from a file.
+
+It does not touch running processes. The fleet's review producer re-reads its
+authority file on its own schedule; nothing here restarts it, because a
+cutover mid-tick is exactly the race the design's lock in PR 6 exists to
+avoid on Ralph's side, and the fleet's own producer has no equivalent -- the
+safe thing is to let the next natural tick pick up the change.
+
+It does not check for duplicate markers itself. The design's second belt is
+Ralph's publisher searching for both markers before writing (PR 5), which
+runs on every post regardless of this tool; re-deriving that check here would
+be a second, divergent implementation of the same guarantee.
+
+ROLLBACK. Run again with --direction fleet to reverse: removes the repo from
+Ralph's allowlist, restores it to the fleet's authority file. The design
+calls this "swap the two lines back," and that is literally what --direction
+fleet does.
+"""
+import argparse
+import pathlib
+import re
+import sys
+
+REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def read_authority(path: pathlib.Path) -> list[str]:
+    """Same minimal parse as the fleet's own hermes-authority.py: a `repos:`
+    block of `- owner/repo` or `- owner/*` lines, no YAML dependency."""
+    if not path.is_file():
+        return []
+    repos, in_repos = [], False
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped == "repos:":
+            in_repos = True
+            continue
+        if in_repos and stripped.startswith("- "):
+            repos.append(stripped[2:].strip())
+        elif in_repos:
+            in_repos = False
+    return repos
+
+
+def write_authority(path: pathlib.Path, repos: list[str]) -> None:
+    lines = ["repos:"] + [f"  - {r}" for r in repos]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def read_allowlist(path: pathlib.Path) -> list[str]:
+    if not path.is_file():
+        return []
+    return [line.strip() for line in path.read_text().splitlines()
+           if line.strip() and not line.strip().startswith("#")]
+
+
+def write_allowlist(path: pathlib.Path, repos: list[str]) -> None:
+    path.write_text("\n".join(repos) + ("\n" if repos else ""))
+
+
+def grants(repo: str, entry: str) -> bool:
+    """A fleet authority entry is either the exact repo, or `owner/*`."""
+    if entry == repo:
+        return True
+    if entry.endswith("/*") and repo.startswith(entry[:-1]):
+        return True
+    return False
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--repo", required=True, metavar="owner/name")
+    ap.add_argument("--fleet-authority", required=True, type=pathlib.Path)
+    ap.add_argument("--ralph-allowlist", required=True, type=pathlib.Path,
+                    help="a flat file of owner/repo lines; need not exist yet")
+    ap.add_argument("--direction", choices=("ralph", "fleet"), default="ralph",
+                    help="ralph: fleet loses scope, Ralph gains it (cutover, default). "
+                         "fleet: the reverse (rollback).")
+    ap.add_argument("--apply", action="store_true",
+                    help="actually write both files. Without this, prints what "
+                         "would change and exits 0.")
+    args = ap.parse_args()
+
+    if not REPO_RE.match(args.repo):
+        print(f"error: {args.repo!r} is not owner/name", file=sys.stderr)
+        return 2
+
+    fleet_repos = read_authority(args.fleet_authority)
+    ralph_repos = read_allowlist(args.ralph_allowlist)
+
+    matching = [e for e in fleet_repos if grants(args.repo, e)]
+    already_ralph = args.repo in ralph_repos
+
+    if args.direction == "ralph":
+        if not matching and already_ralph:
+            print(f"no-op: {args.repo} is already Ralph-only "
+                 f"(not in fleet authority, already in Ralph's allowlist)")
+            return 0
+        print(f"cutover: {args.repo}")
+        for entry in matching:
+            if entry == args.repo:
+                print(f"  fleet authority: remove {entry!r}")
+            else:
+                print(f"  fleet authority: {entry!r} is a wildcard grant covering "
+                     f"{args.repo}; narrowing a wildcard is not automatic -- "
+                     f"edit {args.fleet_authority} by hand to list the other "
+                     f"repos under {entry} explicitly, then re-run this tool")
+                print("  refusing to apply: wildcard narrowing needs a human decision")
+                return 2
+        if not already_ralph:
+            print(f"  ralph allowlist: add {args.repo!r}")
+        if not args.apply:
+            print("\n(dry run: pass --apply to write both files)")
+            return 0
+        if matching:
+            write_authority(args.fleet_authority, [e for e in fleet_repos if e != args.repo])
+        if not already_ralph:
+            write_allowlist(args.ralph_allowlist, ralph_repos + [args.repo])
+        print("\napplied. Neither producer was restarted; each picks this up on "
+             "its own next tick.")
+        return 0
+
+    # direction == fleet: rollback.
+    if not already_ralph and matching:
+        print(f"no-op: {args.repo} is already fleet-scoped")
+        return 0
+    print(f"rollback: {args.repo}")
+    if already_ralph:
+        print(f"  ralph allowlist: remove {args.repo!r}")
+    if not matching:
+        print(f"  fleet authority: add {args.repo!r}")
+    if not args.apply:
+        print("\n(dry run: pass --apply to write both files)")
+        return 0
+    if already_ralph:
+        write_allowlist(args.ralph_allowlist, [r for r in ralph_repos if r != args.repo])
+    if not matching:
+        write_authority(args.fleet_authority, fleet_repos + [args.repo])
+    print("\napplied. Neither producer was restarted; each picks this up on "
+         "its own next tick.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

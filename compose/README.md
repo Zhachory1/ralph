@@ -198,6 +198,33 @@ be used to multiply concurrency.
 See [`docs`](https://github.com/Zhachory1/docs) project `fleet-into-ralph` for the design this
 implements, including the cost arithmetic behind these defaults.
 
+## Moving a repository's review scope from a prior system to Ralph
+
+If another system already reviews pull requests for you -- the design's own worked example is an
+older agent fleet -- the invariant that matters is ownership, not timing: *at any moment, exactly
+one of the two systems has a given repository in scope.* Running both at once on one repository is
+how a colleague's pull request gets two bot reviews, and no amount of marker-checking makes that a
+good idea on purpose. Ralph's publisher checks for both systems' markers before posting regardless
+(a second belt, not the first line), but `bootstrap/cutover-repo` is the first: it moves one
+repository's scope between a `repos:` grant file (the shape a scope-of-attention allowlist already
+uses) and `bootstrap/discover-reviews --allow-file`, never both at once.
+
+```sh
+bootstrap/cutover-repo --repo owner/name \
+    --fleet-authority /path/to/the/other/system/authority.yaml \
+    --ralph-allowlist /path/to/ralph-allowlist.txt
+```
+
+Dry run by default, same as every producer in this design. `--apply` writes both files; neither
+producer is restarted, so the change takes effect on each one's own next tick. `--direction fleet`
+reverses it.
+
+**A wildcard grant (`owner/*`) is refused, not narrowed automatically.** Deciding which repositories
+stay behind under a wildcard while one moves out is a human call; the tool prints what it found and
+stops rather than guessing. The design's own cutover plan narrates this as a careful, staged move --
+one low-traffic repository first, watched for a while, batches after that -- and a tool that
+narrows a wildcard silently would undercut exactly that carefulness.
+
 ## Scope checking agent pull requests
 
 

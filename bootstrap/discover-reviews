@@ -9,6 +9,13 @@ ceiling in code, not a default someone could leave permissive.
     bootstrap/discover-reviews --allow owner/repo [--allow owner/repo2] \\
         --checkout /path/to/a/local/clone --work-root /var/lib/ralph/review-work
 
+--allow-file <path> is an alternative to repeated --allow flags: a flat file
+of owner/repo lines, read fresh on every invocation. bootstrap/cutover-repo
+(PR 7) writes this file, so moving a repository's review scope into Ralph
+takes effect on the next tick with no restart here. The two can be combined;
+at least one is required, or this refuses rather than silently discovering
+nothing from an empty scope.
+
 Run on a timer (cron, a sidecar loop) once this has been watched manually for
 a while. --once-for-real is required to let it call build-review-graph; every
 other flag works without it, so a dry run of the discovery and filtering logic
@@ -234,9 +241,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--allow", action="append", default=[], dest="allowlist",
-                    metavar="owner/repo", required=True,
+                    metavar="owner/repo",
                     help="repeatable; a PR outside this list is never admitted, "
                          "no matter what gh search prs returns")
+    ap.add_argument("--allow-file", type=pathlib.Path,
+                    help="a flat file of owner/repo lines, one per line, read "
+                         "fresh on every invocation -- not cached, not read once "
+                         "at process start. bootstrap/cutover-repo writes this "
+                         "file, so a cutover takes effect on the next tick with "
+                         "no restart, the same way the fleet's own authority "
+                         "file is re-read on its own schedule. Merged with "
+                         "--allow if both are given.")
     ap.add_argument("--checkout", required=True, type=pathlib.Path,
                     help="passed through to build-review-graph for each admitted PR; "
                          "must have every admitted PR's commits reachable")
@@ -249,6 +264,20 @@ def main() -> int:
                     help="required to actually call build-review-graph; without it, "
                          "this reports what it would admit and exits 0")
     args = ap.parse_args()
+
+    allowlist = list(args.allowlist)
+    if args.allow_file is not None:
+        if args.allow_file.is_file():
+            allowlist += [line.strip() for line in args.allow_file.read_text().splitlines()
+                         if line.strip() and not line.strip().startswith("#")]
+        # A missing allow-file is not an error: bootstrap/cutover-repo may not
+        # have run yet, and an empty allowlist already fails closed below --
+        # admitting nothing is the safe default, not a crash.
+    args.allowlist = sorted(set(allowlist))
+    if not args.allowlist:
+        print("error: no repos in scope (--allow and --allow-file both empty); "
+             "nothing to discover", file=sys.stderr)
+        return 2
 
     args.work_root.mkdir(parents=True, exist_ok=True)
 
