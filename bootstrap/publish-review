@@ -54,11 +54,15 @@ must never change is the string every reviewer -- old and new -- checks for
 before writing: `<!-- ai-pr-automation head=<sha> -->`.
 """
 import argparse
+import errno
+import fcntl
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
+from contextlib import contextmanager
 
 def hermes_argv(*args):
     """Reach the board through the hermes container, same reasoning and same
@@ -88,8 +92,45 @@ def marker_for(head_sha: str) -> str:
     return f"{MARKER_PREFIX}{head_sha} -->"
 
 
+@contextmanager
+def operation_lock(task_id: str):
+    """Hold an exclusive lock for one task id across the whole check-then-post
+    sequence.
+
+    Found reviewing this script: the marker check and the POST are two
+    separate gh calls with no lock between them, so two concurrent
+    invocations for the same task -- a retry racing a scheduled run, two cron
+    ticks overlapping -- could both read 'absent' before either posts,
+    defeating the exactly-once guarantee the rest of this file exists to
+    keep. A lock file per task id, held for the lifetime of this process,
+    makes a second concurrent invocation fail fast instead of racing."""
+    lock_dir = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "ralph-publish-review-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{task_id}.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                raise SystemExit(
+                    f"refused: another publish-review is already running for "
+                    f"{task_id}. Not racing it.")
+            raise
+        yield
+    finally:
+        os.close(fd)
+
+
 def gh(*args) -> subprocess.CompletedProcess:
-    return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+    """A timed-out read is a failed read, not an uncaught exception: returns a
+    CompletedProcess with a non-zero code, same shape every caller already
+    checks, rather than letting TimeoutExpired escape and crash past every
+    error path below it."""
+    try:
+        return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="gh timed out")
 
 
 def parse_body(body: str) -> dict:
@@ -116,12 +157,21 @@ def current_head(repo: str, number: int) -> str | None:
 
 
 def existing_marker_state(repo: str, number: int, head_sha: str, login: str) -> str:
-    """exact | mismatch | absent | error -- mirrors the fleet's own
-    github_marker_review_state, including checking only this account's
-    reviews: a marker from a different reviewer is not this operation's."""
+    """exact | mismatch | absent | error.
+
+    Excludes PENDING: an unsubmitted draft review has not actually been
+    posted, so it cannot be this operation's completed effect.
+
+    Includes DISMISSED, unlike the fleet's own github_marker_review_state. A
+    marker is a fact about something this account already posted; GitHub
+    allowing a review to be dismissed afterward does not undo that POST. The
+    fleet's filter excluding DISMISSED meant a dismissed marked review
+    silently stopped counting as already-posted, so a re-run could post a
+    second review carrying the identical marker on the identical head --
+    found reviewing this script with the graph it builds."""
     marker = marker_for(head_sha)
     r = gh("api", "--paginate", f"repos/{repo}/pulls/{number}/reviews",
-          "--jq", '.[] | select(.state != "DISMISSED" and .state != "PENDING") '
+          "--jq", '.[] | select(.state != "PENDING") '
                  '| [.user.login, .state, .commit_id, (.body // "")] | @tsv')
     if r.returncode != 0:
         return "error"
@@ -140,10 +190,21 @@ def existing_marker_state(repo: str, number: int, head_sha: str, login: str) -> 
 
 
 def post_review(repo: str, number: int, head_sha: str, event: str, body: str) -> dict | None:
+    """None means ambiguous -- caller must recheck GitHub, never retry blindly.
+
+    A timeout here is the textbook ambiguous case this whole script exists to
+    handle: the request may have reached GitHub and been applied, or may not
+    have. subprocess.run(..., timeout=...) raises TimeoutExpired rather than
+    returning on one, and an uncaught exception here would crash past the
+    recheck-then-RECONCILE path in main() instead of reaching it -- found
+    reviewing this script, not from a timeout actually happening."""
     payload = json.dumps({"commit_id": head_sha, "event": event, "body": body})
-    r = subprocess.run(["gh", "api", "--method", "POST",
-                       f"repos/{repo}/pulls/{number}/reviews", "--input", "-"],
-                       input=payload, capture_output=True, text=True, timeout=60)
+    try:
+        r = subprocess.run(["gh", "api", "--method", "POST",
+                           f"repos/{repo}/pulls/{number}/reviews", "--input", "-"],
+                           input=payload, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return None
     if r.returncode != 0:
         return None
     try:
@@ -158,119 +219,133 @@ def main() -> int:
     ap.add_argument("--task", required=True, help="the synthesis card's id")
     ap.add_argument("--board", default="queues")
     ap.add_argument("--login", default=None,
-                    help="GitHub login this script posts as; defaults to "
-                         "whoever `gh auth status` reports")
+                    help="asserted GitHub login this script posts as; checked "
+                         "against the account gh actually authenticates as, "
+                         "never trusted in place of it")
     ap.add_argument("--post", action="store_true",
                     help="actually write to GitHub. Without this, prints the "
                          "review that would be posted and exits 0.")
     args = ap.parse_args()
 
-    show = subprocess.run(
-        hermes_argv("kanban", "--board", args.board, "show", args.task, "--json"),
-        capture_output=True, text=True)
-    if show.returncode != 0:
-        print(f"error: could not read task {args.task}: {show.stderr.strip()[:300]}",
-             file=sys.stderr)
-        return 1
-    envelope = json.loads(show.stdout)
-    task = envelope.get("task") or {}
+    # Held for the whole check-then-post sequence below: see
+    # operation_lock's docstring for the race this closes.
+    with operation_lock(args.task):
 
-    if task.get("status") != "done":
-        print(f"refused: {args.task} is {task.get('status')!r}, not done. "
-             "Nothing is published for an incomplete synthesis.", file=sys.stderr)
-        return 2
+        show = subprocess.run(
+            hermes_argv("kanban", "--board", args.board, "show", args.task, "--json"),
+            capture_output=True, text=True)
+        if show.returncode != 0:
+            print(f"error: could not read task {args.task}: {show.stderr.strip()[:300]}",
+                 file=sys.stderr)
+            return 1
+        envelope = json.loads(show.stdout)
+        task = envelope.get("task") or {}
 
-    fields = parse_body(task.get("body", ""))
-    repo, number_s, head_sha = fields.get("repo"), fields.get("number"), fields.get("head_sha")
-    if not repo or not number_s or not head_sha or not SHA_RE.match(head_sha):
-        print(f"refused: {args.task}'s body does not carry repo/number/head_sha "
-             "in the shape build-review-graph writes", file=sys.stderr)
-        return 2
-    number = int(number_s)
+        if task.get("status") != "done":
+            print(f"refused: {args.task} is {task.get('status')!r}, not done. "
+                 "Nothing is published for an incomplete synthesis.", file=sys.stderr)
+            return 2
 
-    runs = [r for r in (envelope.get("runs") or []) if r.get("outcome") == "completed"]
-    if not runs:
-        print(f"refused: {args.task} has no completed run to read a verdict from",
-             file=sys.stderr)
-        return 2
-    metadata = runs[-1].get("metadata") or {}
-    verdict = metadata.get("verdict")
-    if verdict not in VERDICT_TO_EVENT:
-        print(f"refused: {args.task}'s run metadata has no valid verdict "
-             f"(got {verdict!r}); synthesis must set one of "
-             f"{sorted(VERDICT_TO_EVENT)}", file=sys.stderr)
-        return 2
-    event = VERDICT_TO_EVENT[verdict]
-    summary = (envelope.get("latest_summary") or "").strip() or "(no summary)"
+        fields = parse_body(task.get("body", ""))
+        repo, number_s, head_sha = fields.get("repo"), fields.get("number"), fields.get("head_sha")
+        if not repo or not number_s or not head_sha or not SHA_RE.match(head_sha):
+            print(f"refused: {args.task}'s body does not carry repo/number/head_sha "
+                 "in the shape build-review-graph writes", file=sys.stderr)
+            return 2
+        number = int(number_s)
 
-    login = args.login
-    if login is None:
-        who = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                             capture_output=True, text=True, timeout=30)
+        runs = [r for r in (envelope.get("runs") or []) if r.get("outcome") == "completed"]
+        if not runs:
+            print(f"refused: {args.task} has no completed run to read a verdict from",
+                 file=sys.stderr)
+            return 2
+        metadata = runs[-1].get("metadata") or {}
+        verdict = metadata.get("verdict")
+        if verdict not in VERDICT_TO_EVENT:
+            print(f"refused: {args.task}'s run metadata has no valid verdict "
+                 f"(got {verdict!r}); synthesis must set one of "
+                 f"{sorted(VERDICT_TO_EVENT)}", file=sys.stderr)
+            return 2
+        event = VERDICT_TO_EVENT[verdict]
+        summary = (envelope.get("latest_summary") or "").strip() or "(no summary)"
+
+        # The marker check and the POST must run as the same account, or the
+        # exactly-once guarantee is only checking one identity while writing
+        # under another. --login is an assertion to validate against gh's actual
+        # authenticated account, never a value substituted in place of it --
+        # found reviewing this script: a caller passing the wrong --login, or gh
+        # rotating accounts between the check and the POST, silently broke this.
+        who = gh("api", "user", "--jq", ".login")
         if who.returncode != 0:
-            print("error: could not resolve the posting account from `gh api user`; "
-                 "pass --login explicitly", file=sys.stderr)
+            print("error: could not resolve the posting account from `gh api user`",
+                 file=sys.stderr)
             return 1
         login = who.stdout.strip()
+        if args.login is not None and args.login != login:
+            print(f"refused: --login {args.login!r} does not match the account gh "
+                 f"actually authenticates as ({login!r}). The marker check and the "
+                 f"POST must run as the same account; fix which one is wrong rather "
+                 f"than overriding either.", file=sys.stderr)
+            return 2
 
-    # Guarantee 1 and 2 of the marker check: already posted, under this
-    # account, for this exact head -- a no-op, by design, not an error.
-    state = existing_marker_state(repo, number, head_sha, login)
-    if state == "error":
-        print(f"error: could not read reviews on {repo}#{number}", file=sys.stderr)
-        return 1
-    if state == "exact":
-        print(f"no-op: {repo}#{number} already carries this operation's marker "
-             f"at head {head_sha[:8]}, posted by {login}")
-        return 0
-    if state == "mismatch":
-        print(f"refused: {repo}#{number} carries this operation's marker at a "
-             f"different head -- the PR moved after a prior post. A new head "
-             f"needs a new operation, not a repost from this one.", file=sys.stderr)
-        return 2
+        # Guarantee 1 and 2 of the marker check: already posted, under this
+        # account, for this exact head -- a no-op, by design, not an error.
+        state = existing_marker_state(repo, number, head_sha, login)
+        if state == "error":
+            print(f"error: could not read reviews on {repo}#{number}", file=sys.stderr)
+            return 1
+        if state == "exact":
+            print(f"no-op: {repo}#{number} already carries this operation's marker "
+                 f"at head {head_sha[:8]}, posted by {login}")
+            return 0
+        if state == "mismatch":
+            print(f"refused: {repo}#{number} carries this operation's marker at a "
+                 f"different head -- the PR moved after a prior post. A new head "
+                 f"needs a new operation, not a repost from this one.", file=sys.stderr)
+            return 2
 
-    # Guarantee 4: the PR's head right now, not the head this operation was
-    # built against, is what gates posting.
-    live_head = current_head(repo, number)
-    if live_head is None:
-        print(f"error: could not read the current head of {repo}#{number}", file=sys.stderr)
-        return 1
-    if live_head != head_sha:
-        print(f"refused: {repo}#{number}'s head moved from {head_sha[:8]} to "
-             f"{live_head[:8]} since this operation was built. No review is "
-             f"posted against a head that is no longer current.", file=sys.stderr)
-        return 2
+        # Guarantee 4: the PR's head right now, not the head this operation was
+        # built against, is what gates posting.
+        live_head = current_head(repo, number)
+        if live_head is None:
+            print(f"error: could not read the current head of {repo}#{number}", file=sys.stderr)
+            return 1
+        if live_head != head_sha:
+            print(f"refused: {repo}#{number}'s head moved from {head_sha[:8]} to "
+                 f"{live_head[:8]} since this operation was built. No review is "
+                 f"posted against a head that is no longer current.", file=sys.stderr)
+            return 2
 
-    body = f"{summary}\n\n{marker_for(head_sha)}"
+        body = f"{summary}\n\n{marker_for(head_sha)}"
 
-    if not args.post:
-        print(f"DRY RUN -- would post to {repo}#{number} at {head_sha[:8]}:")
-        print(f"  event: {event}")
-        print(f"  body:\n{body}")
-        print("\nPass --post to actually write this.")
-        return 0
+        if not args.post:
+            print(f"DRY RUN -- would post to {repo}#{number} at {head_sha[:8]}:")
+            print(f"  event: {event}")
+            print(f"  body:\n{body}")
+            print("\nPass --post to actually write this.")
+            return 0
 
-    response = post_review(repo, number, head_sha, event, body)
-    if response is not None and response.get("state") == {
-            "APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED",
-            "COMMENT": "COMMENTED"}[event] and response.get("commit_id") == head_sha:
-        print(f"posted: {repo}#{number} {event} at {head_sha[:8]}, "
-             f"review id {response.get('id')}")
-        return 0
+        response = post_review(repo, number, head_sha, event, body)
+        if response is not None and response.get("state") == {
+                "APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED",
+                "COMMENT": "COMMENTED"}[event] and response.get("commit_id") == head_sha:
+            print(f"posted: {repo}#{number} {event} at {head_sha[:8]}, "
+                 f"review id {response.get('id')}")
+            return 0
 
-    # Guarantee 5: the POST's own result was unclear. Check GitHub's state
-    # directly rather than trust a timeout or a malformed response either
-    # way, and never issue a second POST regardless of what this finds.
-    recheck = existing_marker_state(repo, number, head_sha, login)
-    if recheck == "exact":
-        print(f"posted (confirmed on recheck after an ambiguous response): "
-             f"{repo}#{number} {event} at {head_sha[:8]}")
-        return 0
-    print(f"RECONCILE: the POST to {repo}#{number} returned an unclear result "
-         f"and a recheck does not show this operation's marker at {head_sha[:8]}. "
-         f"Not retrying -- a second POST here risks a duplicate review. "
-         f"Raise this to a human.", file=sys.stderr)
-    return 3
+        # Guarantee 5: the POST's own result was unclear. Check GitHub's state
+        # directly rather than trust a timeout or a malformed response either
+        # way, and never issue a second POST regardless of what this finds.
+        recheck = existing_marker_state(repo, number, head_sha, login)
+        if recheck == "exact":
+            print(f"posted (confirmed on recheck after an ambiguous response): "
+                 f"{repo}#{number} {event} at {head_sha[:8]}")
+            return 0
+        print(f"RECONCILE: the POST to {repo}#{number} returned an unclear result "
+             f"and a recheck does not show this operation's marker at {head_sha[:8]}. "
+             f"Not retrying -- a second POST here risks a duplicate review. "
+             f"Raise this to a human.", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

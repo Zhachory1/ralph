@@ -13,6 +13,7 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "bootstrap" / "publish-review"
@@ -120,6 +121,92 @@ class HermesArgvTests(unittest.TestCase):
                 os.environ["HERMES_HOME"] = old_home
             else:
                 os.environ.pop("HERMES_HOME", None)
+
+
+class DismissedReviewTests(unittest.TestCase):
+    """Found by a review swarm: the fleet's own filter excludes DISMISSED,
+    so a dismissed marked review silently stopped counting as already-posted
+    -- a second POST would carry an identical marker on an identical head."""
+
+    def test_pending_is_excluded_dismissed_is_not(self):
+        import re
+        # The jq filter string itself carries the fix; read it directly
+        # rather than re-deriving gh's own filtering behavior.
+        src = publish_review.__file__
+        text = pathlib.Path(src).read_text() if pathlib.Path(src).exists() else \
+            pathlib.Path(publish_review.__loader__.path).read_text()
+        self.assertIn('state != "PENDING"', text)
+        self.assertNotIn('state != "DISMISSED"', text)
+
+
+class TimeoutHandlingTests(unittest.TestCase):
+    """Found by a review swarm: subprocess.run(..., timeout=...) raises
+    rather than returning, which would crash past the recheck-then-RECONCILE
+    path these functions exist to feed into."""
+
+    def test_post_review_timeout_returns_none_not_an_exception(self):
+        import subprocess
+        from unittest import mock
+        with mock.patch("subprocess.run",
+                        side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=60)):
+            result = publish_review.post_review("a/b", 1, "0" * 40, "APPROVE", "x")
+        self.assertIsNone(result)
+
+    def test_gh_timeout_returns_failed_completedprocess_not_an_exception(self):
+        import subprocess
+        from unittest import mock
+        with mock.patch("subprocess.run",
+                        side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=60)):
+            result = publish_review.gh("api", "user")
+        self.assertEqual(1, result.returncode)
+
+
+class LoginAssertionTests(unittest.TestCase):
+    """Found by a review swarm: --login was trusted as the posting identity
+    instead of checked against it, so a wrong --login (or gh changing
+    accounts between the check and the POST) silently broke the exactly-once
+    guarantee, which checks one identity while writing under another."""
+
+    def test_login_help_text_says_it_is_checked_not_trusted(self):
+        import subprocess
+        r = subprocess.run(["python3", str(SCRIPT), "--help"],
+                           capture_output=True, text=True)
+        self.assertIn("checked", r.stdout)
+        self.assertIn("never trusted", r.stdout)
+
+
+class OperationLockTests(unittest.TestCase):
+    """Found by a review swarm: the marker check and the POST were two
+    separate gh calls with nothing between them, so two concurrent
+    invocations for the same task could both see the marker absent before
+    either posted."""
+
+    def test_second_concurrent_lock_is_refused(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"TMPDIR": d}):
+                with publish_review.operation_lock("t_test123"):
+                    with self.assertRaises(SystemExit) as ctx:
+                        with publish_review.operation_lock("t_test123"):
+                            pass
+                    self.assertIn("already running", str(ctx.exception))
+
+    def test_different_tasks_do_not_contend(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"TMPDIR": d}):
+                with publish_review.operation_lock("t_aaa"):
+                    with publish_review.operation_lock("t_bbb"):
+                        pass  # must not raise
+
+    def test_lock_releases_on_normal_exit(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"TMPDIR": d}):
+                with publish_review.operation_lock("t_ccc"):
+                    pass
+                with publish_review.operation_lock("t_ccc"):
+                    pass  # must not raise; the first lock released
 
 
 if __name__ == "__main__":
