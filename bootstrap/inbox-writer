@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Turn one completed drafter card into one Gmail draft. Never sends.
+
+PR 10 of the fleet-into-ralph design. The draft-only guarantee lives here:
+no Gmail scope permits drafting without sending -- gmail.compose can send,
+proven live -- so the guarantee cannot be the credential. It is this file
+instead. The only Gmail write call it makes is users.drafts.create, and
+evals/test_inbox_writer.py fails the build if any send call ever appears in
+it. The token stays on the host; the agent that read the untrusted email
+never holds it.
+
+    RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-writer \
+        --task t_xxxxxxxx --token ~/.config/ralph/inbox/gmail-token.json \
+        --work-root <same as inbox-producer> --board queues
+
+The reply goes to the thread's own Reply-To or From, as a reply in the same
+thread. The agent cannot choose or change recipients: it only supplies body
+text, and recipients come from the staged thread, not from anything the
+agent wrote.
+"""
+import argparse, base64, fcntl, json, os, pathlib, subprocess, sys
+from email.message import EmailMessage
+
+
+def hermes(*args):
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    cmd = (["docker", "exec", container, "hermes", *args] if container
+           else ["hermes", *args])
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def gmail(token_path: pathlib.Path):
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+    creds = Credentials.from_authorized_user_info(json.loads(token_path.read_text()))
+    if not creds.valid:
+        creds.refresh(Request())
+        token_path.write_text(creds.to_json())
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+MARKER = "X-Ralph-Operation"
+
+
+def build_draft(staged: dict, reply_body: str, op_id: str = "") -> dict:
+    msg = EmailMessage()
+    if op_id:
+        msg[MARKER] = op_id
+    msg["To"] = staged["reply_to"]
+    subject = staged["subject"] or ""
+    msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+    if staged.get("reply_to_message_id"):
+        msg["In-Reply-To"] = staged["reply_to_message_id"]
+        msg["References"] = staged["reply_to_message_id"]
+    msg.set_content(reply_body)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    return {"message": {"raw": raw, "threadId": staged["thread_id"]}}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--task", required=True)
+    ap.add_argument("--token", required=True, type=pathlib.Path)
+    ap.add_argument("--work-root", required=True, type=pathlib.Path)
+    ap.add_argument("--board", default="queues")
+    args = ap.parse_args()
+
+    r = hermes("kanban", "--board", args.board, "show", args.task, "--json")
+    if r.returncode != 0:
+        print(f"error: could not read {args.task}: {r.stderr.strip()[:200]}", file=sys.stderr)
+        return 1
+    envelope = json.loads(r.stdout)
+    task = envelope.get("task") or {}
+    if task.get("status") != "done":
+        print(f"refused: {args.task} is {task.get('status')!r}, not done", file=sys.stderr)
+        return 2
+    runs = [x for x in envelope.get("runs") or [] if x.get("outcome") == "completed"]
+    reply_body = ((runs[-1].get("metadata") or {}).get("reply_body") if runs else None)
+    if reply_body is None:
+        print(f"refused: {args.task} has no reply_body in its run metadata", file=sys.stderr)
+        return 2
+    if not reply_body.strip():
+        print(f"no draft: the drafter judged this thread needs no reply")
+        return 0
+
+    op_id = next((l.split(": ", 1)[1] for l in (task.get("body") or "").splitlines()
+                  if l.startswith("operation_id: ")), None)
+    if op_id is None:
+        print(f"refused: {args.task} has no operation_id", file=sys.stderr)
+        return 2
+    staged = json.loads((args.work_root / op_id / "evidence" / "thread.json").read_text())
+
+    g = gmail(args.token.expanduser())
+    # Idempotent by Gmail's own state, not a local record: a draft carrying
+    # this operation's id in its X-Ralph-Operation header means no second
+    # one. The operation id always exists and pins the message being
+    # answered, so a later message still gets its own draft, and a create
+    # whose response was lost is found on retry. The lock makes
+    # check-then-create atomic against a second writer for the same operation.
+    lock = open(args.work_root / op_id / ".writer.lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    thread = g.users().threads().get(userId="me", id=staged["thread_id"], format="metadata",
+                                     metadataHeaders=[MARKER]).execute()
+    for m in thread.get("messages", []):
+        if "DRAFT" in (m.get("labelIds") or []) and any(
+                h["name"].lower() == MARKER.lower() and h["value"] == op_id
+                for h in m.get("payload", {}).get("headers", [])):
+            print(f"no-op: a draft for {op_id} already exists in thread {staged['thread_id']}")
+            return 0
+    draft = g.users().drafts().create(userId="me", body=build_draft(staged, reply_body, op_id)).execute()
+    print(f"drafted: {draft['id']} in thread {staged['thread_id']} to {staged['reply_to']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

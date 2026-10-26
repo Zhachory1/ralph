@@ -1,0 +1,56 @@
+# PR 10 of the fleet-into-ralph design. Reads one staged email thread and
+# writes the text of a reply. Nothing else.
+#
+# Draft-only is enforced by where the credential lives, not by this file or
+# the SOUL. No Gmail scope allows drafting without sending -- gmail.compose
+# can send, proven live -- so the Gmail token never enters this container.
+# bootstrap/inbox-producer stages the thread as files on the host;
+# bootstrap/inbox-writer, also on the host, reads this profile's completed
+# reply text and calls drafts.create, and contains no send call at all.
+# This profile sees only lens-tools: read staged files, complete its own
+# card. No terminal, no network, no credential.
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  # Same shape as the review lenses. An empty list leaves the lens-tools MCP
+  # server nothing to attach to (verified: a card on cli: [] saw only
+  # kanban tools). `file` reaches only this card's own workspace, never
+  # Gmail -- the token is not in this container.
+  cli:
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+mcp_servers:
+  lens-tools:
+    command: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    args: ["/ralph/bootstrap/lens-tools"]
+    enabled: true
+    worker_only: true
+    env:
+      LENS_TASK_ID: "${HERMES_KANBAN_TASK}"
+      LENS_RUN_ID: "${HERMES_KANBAN_RUN_ID}"
+      LENS_CLAIM_LOCK: "${HERMES_KANBAN_CLAIM_LOCK}"
+      LENS_BOARD: "${HERMES_KANBAN_BOARD}"
+      LENS_DB: "${HERMES_KANBAN_DB}"
+      LENS_WORKSPACE: "${HERMES_KANBAN_WORKSPACE}"
+      LENS_EVIDENCE_ROOT: "${HERMES_KANBAN_WORKSPACE}/evidence"
+      LENS_PROFILE: "${HERMES_PROFILE}"
+      LENS_TOOLS_PYTHON: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    tools:
+      include: [evidence_read, evidence_search, kanban_show, kanban_heartbeat, kanban_complete, kanban_block]
+skills:
+  creation_nudge_interval: 0
+agent:
+  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 40
+  run_budget_seconds: 480
+  api_max_retries: 0
