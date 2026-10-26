@@ -121,5 +121,124 @@ class DryRunTests(unittest.TestCase):
                 run.assert_not_called()
 
 
+class CapValidationTests(unittest.TestCase):
+    """Found by the review council: a negative --max-per-run was accepted,
+    and allowed[:budget] with a negative budget admits almost the entire
+    eligible list instead of enforcing a smaller ceiling."""
+
+    def test_negative_max_per_run_is_rejected(self):
+        import sys, subprocess
+        r = subprocess.run(["python3", str(SCRIPT), "--allow", "a/b",
+                           "--checkout", "/x", "--work-root", "/tmp/x",
+                           "--max-per-run", "-5"], capture_output=True, text=True)
+        self.assertNotEqual(0, r.returncode)
+
+    def test_zero_max_age_days_is_rejected(self):
+        """Zero was previously a documented 'disable the filter' sentinel.
+        The age filter is a hard ceiling now, with no escape hatch."""
+        import subprocess
+        r = subprocess.run(["python3", str(SCRIPT), "--allow", "a/b",
+                           "--checkout", "/x", "--work-root", "/tmp/x",
+                           "--max-age-days", "0"], capture_output=True, text=True)
+        self.assertNotEqual(0, r.returncode)
+
+    def test_positive_values_still_work(self):
+        self.assertEqual(7, discover_reviews._positive_int("7"))
+
+
+class AdmissionLockTests(unittest.TestCase):
+    """Found by the review council: the daily cap was read once at the top
+    and written once at the bottom with nothing locking the file between, so
+    two overlapping runs could each see the same remaining budget."""
+
+    def test_second_concurrent_lock_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            work_root = pathlib.Path(d)
+            with discover_reviews.admissions_lock(work_root):
+                with self.assertRaises(SystemExit) as ctx:
+                    with discover_reviews.admissions_lock(work_root):
+                        pass
+                self.assertIn("already running", str(ctx.exception))
+
+    def test_lock_releases_on_normal_exit(self):
+        with tempfile.TemporaryDirectory() as d:
+            work_root = pathlib.Path(d)
+            with discover_reviews.admissions_lock(work_root):
+                pass
+            with discover_reviews.admissions_lock(work_root):
+                pass  # must not raise; the first lock released
+
+
+class ReservationTests(unittest.TestCase):
+    def test_reserve_admission_persists_immediately(self):
+        with tempfile.TemporaryDirectory() as d:
+            work_root = pathlib.Path(d)
+            state = {"date": discover_reviews.today(), "count": 0}
+            discover_reviews.save_admissions(work_root, state)
+            reserved = discover_reviews.reserve_admission(work_root, state)
+            self.assertEqual(1, reserved["count"])
+            # Persisted to disk, not just returned -- a concurrent reader
+            # (were the lock not held) would see the reservation too.
+            on_disk = discover_reviews.load_admissions(work_root)
+            self.assertEqual(1, on_disk["count"])
+
+
+class RepeatDiscoveryTests(unittest.TestCase):
+    """Found by the review council: re-discovering an unchanged PR still
+    incremented admitted whenever build-review-graph exited 0, even though
+    its own idempotency keys made that a no-op rebuild. Repeated successful
+    no-ops could consume every daily slot and starve newly assigned PRs."""
+
+    def test_an_already_staged_operation_does_not_consume_the_cap(self):
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            work_root = pathlib.Path(d)
+            pr = fake_pr("a/repo", 1)
+            op_id = discover_reviews.operation_id("a/repo", 1, "1" * 40)
+            # Simulate an earlier run having already staged this exact head.
+            (work_root / op_id).mkdir(parents=True)
+
+            with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[pr]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+                argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
+                       "--work-root", str(work_root), "--once-for-real"]
+                with mock.patch.object(sys, "argv", argv):
+                    discover_reviews.main()
+
+            state = discover_reviews.load_admissions(work_root)
+            self.assertEqual(0, state["count"],
+                            "a repeat of an already-staged operation must not spend a slot")
+
+
+class SearchFailureTests(unittest.TestCase):
+    """Found by the review council: gh search prs failing and gh search prs
+    finding nothing both returned [] and both exited 0. A scheduled run
+    cannot tell "nothing assigned" from "stopped working" from its exit code."""
+
+    def test_a_failed_search_returns_none_not_an_empty_list(self):
+        with mock.patch.object(discover_reviews, "gh") as gh:
+            gh.return_value = mock.Mock(returncode=1, stdout="", stderr="auth error")
+            result = discover_reviews.search_assigned_prs(7)
+        self.assertIsNone(result)
+
+    def test_a_search_with_no_results_returns_an_empty_list(self):
+        with mock.patch.object(discover_reviews, "gh") as gh:
+            gh.return_value = mock.Mock(returncode=0, stdout="[]", stderr="")
+            result = discover_reviews.search_assigned_prs(7)
+        self.assertEqual([], result)
+
+    def test_main_exits_nonzero_when_search_fails(self):
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=None):
+                argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
+                       "--work-root", d, "--once-for-real"]
+                with mock.patch.object(sys, "argv", argv):
+                    code = discover_reviews.main()
+        self.assertNotEqual(0, code)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
