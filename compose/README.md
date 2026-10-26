@@ -209,6 +209,12 @@ good idea on purpose. Ralph's publisher checks for both systems' markers before 
 repository's scope between a `repos:` grant file (the shape a scope-of-attention allowlist already
 uses) and `bootstrap/discover-reviews --allow-file`, never both at once.
 
+The `review-loop` service runs review unattended, every `RALPH_REVIEW_POLL_SECONDS` (default 900).
+Each tick it runs `discover-reviews` against `workspaces/review-allowlist.txt`, then calls
+`publish-review --post` for every finished synthesis card. An absent or empty allowlist means it
+admits nothing. Clones are cached per repository under `workspaces/repo-cache`, fetched on demand.
+`docker compose stop review-loop` stops all of it.
+
 ```sh
 bootstrap/cutover-repo --repo owner/name \
     --fleet-authority /path/to/the/other/system/authority.yaml \

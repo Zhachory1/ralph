@@ -41,10 +41,11 @@ class AllowlistTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/allowed", 1), fake_pr("b/not-allowed", 2)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
                 import sys
-                argv = ["discover-reviews", "--allow", "a/allowed", "--checkout", "/x",
+                argv = ["discover-reviews", "--allow", "a/allowed", "--checkout-root", "/x",
                        "--work-root", str(work_root), "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
@@ -61,9 +62,10 @@ class PerRunCapTests(unittest.TestCase):
         import sys
         with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=prs), \
             mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
             mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-            argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
                    "--work-root", str(work_root), "--once-for-real",
                    "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
@@ -118,8 +120,9 @@ class DryRunTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/repo", 1)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
-                argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
+                argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
                        "--work-root", d]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
@@ -134,7 +137,7 @@ class CapValidationTests(unittest.TestCase):
     def test_negative_max_per_run_is_rejected(self):
         import subprocess
         r = subprocess.run(["python3", str(SCRIPT), "--allow", "a/b",
-                           "--checkout", "/x", "--work-root", "/tmp/x",
+                           "--checkout-root", "/x", "--work-root", "/tmp/x",
                            "--max-per-run", "-5"], capture_output=True, text=True)
         self.assertNotEqual(0, r.returncode)
 
@@ -143,7 +146,7 @@ class CapValidationTests(unittest.TestCase):
         The age filter is a hard ceiling now, with no escape hatch."""
         import subprocess
         r = subprocess.run(["python3", str(SCRIPT), "--allow", "a/b",
-                           "--checkout", "/x", "--work-root", "/tmp/x",
+                           "--checkout-root", "/x", "--work-root", "/tmp/x",
                            "--max-age-days", "0"], capture_output=True, text=True)
         self.assertNotEqual(0, r.returncode)
 
@@ -169,9 +172,10 @@ class RepeatDiscoveryTests(unittest.TestCase):
 
             with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[pr]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-                argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
+                argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
                        "--work-root", str(work_root), "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     code = discover_reviews.main()
@@ -203,7 +207,7 @@ class SearchFailureTests(unittest.TestCase):
         import sys
         with tempfile.TemporaryDirectory() as d:
             with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=None):
-                argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
+                argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
                        "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     code = discover_reviews.main()
@@ -222,10 +226,11 @@ class AllowFileTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/repo", 1)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
                 argv = ["discover-reviews", "--allow-file", str(allow_file),
-                       "--checkout", "/x", "--work-root", d, "--once-for-real"]
+                       "--checkout-root", "/x", "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     code = discover_reviews.main()
             self.assertEqual(0, code)
@@ -233,7 +238,7 @@ class AllowFileTests(unittest.TestCase):
     def test_neither_allow_nor_allow_file_is_an_error(self):
         import sys
         with tempfile.TemporaryDirectory() as d:
-            argv = ["discover-reviews", "--checkout", "/x", "--work-root", d]
+            argv = ["discover-reviews", "--checkout-root", "/x", "--work-root", d]
             with mock.patch.object(sys, "argv", argv):
                 code = discover_reviews.main()
             self.assertNotEqual(0, code)
@@ -244,7 +249,7 @@ class AllowFileTests(unittest.TestCase):
         import sys
         with tempfile.TemporaryDirectory() as d:
             argv = ["discover-reviews", "--allow-file", str(pathlib.Path(d) / "nope.txt"),
-                   "--checkout", "/x", "--work-root", d]
+                   "--checkout-root", "/x", "--work-root", d]
             with mock.patch.object(sys, "argv", argv):
                 code = discover_reviews.main()
             self.assertEqual(2, code)
@@ -257,10 +262,11 @@ class AllowFileTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/repo", 1), fake_pr("b/repo", 2)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
                 argv = ["discover-reviews", "--allow", "a/repo", "--allow-file", str(allow_file),
-                       "--checkout", "/x", "--work-root", d, "--once-for-real"]
+                       "--checkout-root", "/x", "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
                 calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]

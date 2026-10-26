@@ -212,6 +212,35 @@ services:
       - notifier-state:/var/lib/ralph
     restart: unless-stopped
 
+  # Review, unattended (bootstrap/run-review-loop). Same image as the
+  # notifier: gh, git and docker-cli, board commands through the hermes
+  # container. /workspaces is shared with hermes at the same path, because
+  # build-review-graph runs there and reads the cached clones and staging
+  # this writes.
+  review-loop:
+    image: ghcr.io/zhachory1/ralph-notifier:${RALPH_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.notifier
+    depends_on:
+      hermes:
+        condition: service_started
+      socket-proxy:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
+    command: ["/ralph/bootstrap/run-review-loop"]
+    environment:
+      HERMES_HOME: /home/hermes/.hermes
+      RALPH_REVIEW_POLL_SECONDS: ${RALPH_REVIEW_POLL_SECONDS:-900}
+      GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
+      RALPH_HERMES_CONTAINER: ralph-hermes-1
+      DOCKER_HOST: tcp://socket-proxy:2375
+    volumes:
+      - ../bootstrap:/ralph/bootstrap:ro
+      - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
+    restart: unless-stopped
+
   # hermes-webui: a chat space for talking with the agents, alongside the
   # dashboard above rather than in place of it. Shares hermes-home with the
   # hermes service so it sees the same profiles, board, and sessions; the
