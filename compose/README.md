@@ -225,6 +225,35 @@ stops rather than guessing. The design's own cutover plan narrates this as a car
 one low-traffic repository first, watched for a while, batches after that -- and a tool that
 narrows a wildcard silently would undercut exactly that carefulness.
 
+## Inbox drafts (manual)
+
+Writes a Gmail draft for every unread inbox thread. Nothing is ever sent. The Gmail token stays on
+the host and never enters a container. Both scripts run on the host, by hand, for now.
+
+1. Python packages on the host: `pip install google-auth google-auth-oauthlib google-api-python-client`.
+2. A token with `gmail.readonly` + `gmail.compose`, saved as an authorized-user JSON (for example
+   `~/.config/ralph/inbox/gmail-token.json`, mode 0600), from a one-time `InstalledAppFlow` consent.
+   `gmail.compose` *can* send; draft-only comes from `inbox-writer` containing no send call.
+3. Create cards. `--work-root` is the host path of the stack's `workspaces/`; `--container-work-root`
+   is that same directory as the container sees it:
+
+   ```sh
+   RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-producer \
+       --token ~/.config/ralph/inbox/gmail-token.json \
+       --work-root compose/workspaces/inbox-work --container-work-root /workspaces/inbox-work
+   ```
+
+4. Each card is assigned to `ralph-inbox-drafter` on the `queues` board. When one is `done`, turn it
+   into a draft:
+
+   ```sh
+   RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-writer --task t_xxxxxxxx \
+       --token ~/.config/ralph/inbox/gmail-token.json --work-root compose/workspaces/inbox-work
+   ```
+
+   Re-running either is safe: the producer is keyed on thread and latest message, and the writer
+   finds its own earlier draft by the `X-Ralph-Operation` header.
+
 ## Scope checking agent pull requests
 
 

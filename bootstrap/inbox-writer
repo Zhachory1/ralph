@@ -40,8 +40,13 @@ def gmail(token_path: pathlib.Path):
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-def build_draft(staged: dict, reply_body: str) -> dict:
+MARKER = "X-Ralph-Operation"
+
+
+def build_draft(staged: dict, reply_body: str, op_id: str = "") -> dict:
     msg = EmailMessage()
+    if op_id:
+        msg[MARKER] = op_id
     msg["To"] = staged["reply_to"]
     subject = staged["subject"] or ""
     msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
@@ -88,25 +93,23 @@ def main() -> int:
     staged = json.loads((args.work_root / op_id / "evidence" / "thread.json").read_text())
 
     g = gmail(args.token.expanduser())
-    # Idempotent by Gmail's own state, not a local record: a draft already
-    # replying to this exact message means no second one. Keyed on the
-    # message, not the thread, so a later message still gets its own draft.
-    # This also covers a create whose response was lost -- the draft exists,
-    # so the retry finds it. The lock makes check-then-create atomic against
-    # a second writer for the same operation.
+    # Idempotent by Gmail's own state, not a local record: a draft carrying
+    # this operation's id in its X-Ralph-Operation header means no second
+    # one. The operation id always exists and pins the message being
+    # answered, so a later message still gets its own draft, and a create
+    # whose response was lost is found on retry. The lock makes
+    # check-then-create atomic against a second writer for the same operation.
     lock = open(args.work_root / op_id / ".writer.lock", "w")
     fcntl.flock(lock, fcntl.LOCK_EX)
     thread = g.users().threads().get(userId="me", id=staged["thread_id"], format="metadata",
-                                     metadataHeaders=["In-Reply-To"]).execute()
-    target = staged.get("reply_to_message_id")
+                                     metadataHeaders=[MARKER]).execute()
     for m in thread.get("messages", []):
-        if "DRAFT" in (m.get("labelIds") or []) and target and any(
-                h["name"].lower() == "in-reply-to" and h["value"] == target
+        if "DRAFT" in (m.get("labelIds") or []) and any(
+                h["name"].lower() == MARKER.lower() and h["value"] == op_id
                 for h in m.get("payload", {}).get("headers", [])):
-            print(f"no-op: a draft replying to this message already exists in "
-                  f"thread {staged['thread_id']}")
+            print(f"no-op: a draft for {op_id} already exists in thread {staged['thread_id']}")
             return 0
-    draft = g.users().drafts().create(userId="me", body=build_draft(staged, reply_body)).execute()
+    draft = g.users().drafts().create(userId="me", body=build_draft(staged, reply_body, op_id)).execute()
     print(f"drafted: {draft['id']} in thread {staged['thread_id']} to {staged['reply_to']}")
     return 0
 

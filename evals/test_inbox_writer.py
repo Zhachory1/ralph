@@ -102,9 +102,9 @@ class FakeGmail:
         return self
 
     def get(self, userId, id, format, metadataHeaders=None):
-        # thread_labels entries: (labels, in_reply_to or None)
+        # thread_labels entries: (labels, X-Ralph-Operation value or None)
         return mock.Mock(execute=lambda: {"messages": [
-            {"labelIds": l, "payload": {"headers": [{"name": "In-Reply-To", "value": r}] if r else []}}
+            {"labelIds": l, "payload": {"headers": [{"name": "X-Ralph-Operation", "value": r}] if r else []}}
             for l, r in self.thread_labels]})
 
     def list(self, userId, q, maxResults, pageToken=None):
@@ -123,7 +123,7 @@ class DuplicateDraftTests(unittest.TestCase):
             ev = pathlib.Path(d) / "op1" / "evidence"
             ev.mkdir(parents=True)
             (ev / "thread.json").write_text(json.dumps(
-                {"thread_id": "t1", "reply_to": "a@b.c", "subject": "x", "reply_to_message_id": "<m2@x>"}))
+                {"thread_id": "t1", "reply_to": "a@b.c", "subject": "x", "reply_to_message_id": ""}))
             show = {"task": {"status": "done", "body": "operation_id: op1\n"},
                     "runs": [{"outcome": "completed", "metadata": {"reply_body": "hi"}}]}
             with mock.patch.object(inbox_writer, "hermes",
@@ -140,14 +140,22 @@ class DuplicateDraftTests(unittest.TestCase):
 
     def test_a_message_that_already_has_a_draft_gets_no_second(self):
         """Covers a rerun and a create whose response was lost."""
-        fake = FakeGmail(thread_labels=[(["INBOX"], None), (["DRAFT"], "<m2@x>")])
+        fake = FakeGmail(thread_labels=[(["INBOX"], None), (["DRAFT"], "op1")])
         self.assertEqual(0, self._run(fake))
         self.assertEqual([], fake.created)
+
+    def test_created_draft_carries_the_operation_marker(self):
+        """With no Message-ID staged, the marker is what a retry after a
+        lost create response finds."""
+        fake = FakeGmail(thread_labels=[(["INBOX"], None)])
+        self._run(fake)
+        raw = base64.urlsafe_b64decode(fake.created[0]["message"]["raw"])
+        self.assertEqual("op1", email.message_from_bytes(raw)["X-Ralph-Operation"])
 
     def test_a_later_message_gets_a_draft_despite_an_older_one(self):
         """A draft answering an earlier message must not suppress a draft
         for the message that arrived after it."""
-        fake = FakeGmail(thread_labels=[(["INBOX"], None), (["DRAFT"], "<m1@x>"), (["INBOX"], None)])
+        fake = FakeGmail(thread_labels=[(["INBOX"], None), (["DRAFT"], "op0"), (["INBOX"], None)])
         self.assertEqual(0, self._run(fake))
         self.assertEqual(1, len(fake.created))
 
@@ -172,6 +180,26 @@ class PaginationTests(unittest.TestCase):
              mock.patch.object(sys, "argv", ["inbox-producer", "--token", "/x", "--work-root", d]):
             self.assertEqual(0, inbox_producer.main())
         self.assertEqual(["a", "b"], seen)
+
+
+class PrivateModesTests(unittest.TestCase):
+    def test_staged_mail_is_owner_only(self):
+        import os, stat, sys, tempfile
+        fake = FakeGmail(pages=[{"threads": [{"id": "a"}]}])
+        fake.getProfile = lambda userId: mock.Mock(execute=lambda: {"emailAddress": "me@x"})
+        fake.get = lambda userId, id, format, metadataHeaders=None: mock.Mock(execute=lambda: {
+            "messages": [{"id": "m", "payload": {"headers": [{"name": "From", "value": "s@y"}]}}]})
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(inbox_producer, "gmail", return_value=fake), \
+             mock.patch.object(inbox_producer, "hermes",
+                               return_value=mock.Mock(returncode=0, stdout='{"id": "t_1"}')), \
+             mock.patch.object(sys, "argv", ["inbox-producer", "--token", "/x", "--work-root", d]):
+            self.assertEqual(0, inbox_producer.main())
+            op = pathlib.Path(d) / "inbox-a-m"
+            mode = lambda p: stat.S_IMODE(os.stat(p).st_mode)
+            self.assertEqual(0o700, mode(op))
+            self.assertEqual(0o700, mode(op / "evidence"))
+            self.assertEqual(0o600, mode(op / "evidence" / "thread.json"))
 
 
 class StageOnceTests(unittest.TestCase):
