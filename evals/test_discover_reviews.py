@@ -1,16 +1,17 @@
 """Discovery on a timer: the first thing that acts without a human.
 
 No network -- these stub gh and build-review-graph to test the admission
-logic itself: the allowlist, the per-run cap, and the daily cap persisted
-across invocations. The real discovery and real graph-building were proven
-by hand against a live board and a real PR; see the PR body for that record.
+logic itself: the allowlist and the per-run cap. There is no daily cap by
+direct instruction, so these tests check that nothing in this file gates
+on a count across invocations, not that a count stays under some number.
+The real discovery and real graph-building were proven by hand against a
+live board and a real PR; see the PR body for that record.
 
     python3 evals/test_discover_reviews.py
 """
 
 import importlib.machinery
 import importlib.util
-import json
 import pathlib
 import tempfile
 import unittest
@@ -47,14 +48,16 @@ class AllowlistTests(unittest.TestCase):
                        "--work-root", str(work_root), "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                # Only one build-review-graph call, for the allowed repo.
                 calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
                 self.assertEqual(1, len(calls))
                 self.assertIn("a/allowed", calls[0].args[0])
 
 
-class CapTests(unittest.TestCase):
-    def _run(self, work_root, prs, max_per_run=10, daily_cap=25):
+class PerRunCapTests(unittest.TestCase):
+    """The one remaining admission bound: how many PRs one invocation can
+    build, regardless of how many gh search prs returns."""
+
+    def _run(self, work_root, prs, max_per_run=10):
         import sys
         with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=prs), \
             mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
@@ -62,7 +65,7 @@ class CapTests(unittest.TestCase):
             run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
             argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
                    "--work-root", str(work_root), "--once-for-real",
-                   "--max-per-run", str(max_per_run), "--daily-cap", str(daily_cap)]
+                   "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
         return [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
@@ -73,37 +76,39 @@ class CapTests(unittest.TestCase):
             calls = self._run(pathlib.Path(d), prs, max_per_run=2)
             self.assertEqual(2, len(calls))
 
-    def test_daily_cap_persists_across_invocations(self):
+    def test_all_eligible_are_admitted_when_under_the_per_run_cap(self):
+        """No daily cap means a repeated run the same day admits every
+        eligible PR again, bounded only by max-per-run."""
         with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            (work_root / discover_reviews.STATE_FILE).write_text(
-                json.dumps({"date": discover_reviews.today(), "count": 24}))
-            calls = self._run(work_root, [fake_pr("a/repo", 1), fake_pr("a/repo", 2)],
-                             max_per_run=10, daily_cap=25)
-            # Only one slot left today, so only one graph is built even
-            # though two PRs are eligible.
-            self.assertEqual(1, len(calls))
+            prs = [fake_pr("a/repo", i) for i in range(1, 4)]
+            calls = self._run(pathlib.Path(d), prs, max_per_run=10)
+            self.assertEqual(3, len(calls))
 
-    def test_cap_reached_admits_nothing_and_does_not_call_search(self):
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            (work_root / discover_reviews.STATE_FILE).write_text(
-                json.dumps({"date": discover_reviews.today(), "count": 25}))
-            with mock.patch.object(discover_reviews, "search_assigned_prs") as search:
-                import sys
-                argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
-                       "--work-root", str(work_root), "--once-for-real", "--daily-cap", "25"]
-                with mock.patch.object(sys, "argv", argv):
-                    discover_reviews.main()
-                search.assert_not_called()
 
-    def test_a_stale_date_resets_the_count(self):
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            (work_root / discover_reviews.STATE_FILE).write_text(
-                json.dumps({"date": "2020-01-01", "count": 25}))
-            calls = self._run(work_root, [fake_pr("a/repo", 1)])
-            self.assertEqual(1, len(calls), "yesterday's count must not block today")
+class NoDailyCapTests(unittest.TestCase):
+    """By direct instruction: discovery has no daily cap. Every assigned PR
+    gets reviewed; concurrency is the only throughput lever."""
+
+    def test_no_daily_cap_argument_exists(self):
+        help_text = self._help()
+        self.assertNotIn("--daily-cap", help_text)
+
+    def test_no_admissions_lock_exists(self):
+        self.assertFalse(hasattr(discover_reviews, "admissions_lock"))
+
+    def test_no_admission_state_functions_exist(self):
+        self.assertFalse(hasattr(discover_reviews, "load_admissions"))
+        self.assertFalse(hasattr(discover_reviews, "save_admissions"))
+        self.assertFalse(hasattr(discover_reviews, "reserve_admission"))
+
+    def test_no_state_file_constant_exists(self):
+        self.assertFalse(hasattr(discover_reviews, "STATE_FILE"))
+
+    @staticmethod
+    def _help():
+        import subprocess
+        return subprocess.run(["python3", str(SCRIPT), "--help"],
+                              capture_output=True, text=True).stdout
 
 
 class DryRunTests(unittest.TestCase):
@@ -127,7 +132,7 @@ class CapValidationTests(unittest.TestCase):
     eligible list instead of enforcing a smaller ceiling."""
 
     def test_negative_max_per_run_is_rejected(self):
-        import sys, subprocess
+        import subprocess
         r = subprocess.run(["python3", str(SCRIPT), "--allow", "a/b",
                            "--checkout", "/x", "--work-root", "/tmp/x",
                            "--max-per-run", "-5"], capture_output=True, text=True)
@@ -146,50 +151,14 @@ class CapValidationTests(unittest.TestCase):
         self.assertEqual(7, discover_reviews._positive_int("7"))
 
 
-class AdmissionLockTests(unittest.TestCase):
-    """Found by the review council: the daily cap was read once at the top
-    and written once at the bottom with nothing locking the file between, so
-    two overlapping runs could each see the same remaining budget."""
-
-    def test_second_concurrent_lock_is_refused(self):
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            with discover_reviews.admissions_lock(work_root):
-                with self.assertRaises(SystemExit) as ctx:
-                    with discover_reviews.admissions_lock(work_root):
-                        pass
-                self.assertIn("already running", str(ctx.exception))
-
-    def test_lock_releases_on_normal_exit(self):
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            with discover_reviews.admissions_lock(work_root):
-                pass
-            with discover_reviews.admissions_lock(work_root):
-                pass  # must not raise; the first lock released
-
-
-class ReservationTests(unittest.TestCase):
-    def test_reserve_admission_persists_immediately(self):
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            state = {"date": discover_reviews.today(), "count": 0}
-            discover_reviews.save_admissions(work_root, state)
-            reserved = discover_reviews.reserve_admission(work_root, state)
-            self.assertEqual(1, reserved["count"])
-            # Persisted to disk, not just returned -- a concurrent reader
-            # (were the lock not held) would see the reservation too.
-            on_disk = discover_reviews.load_admissions(work_root)
-            self.assertEqual(1, on_disk["count"])
-
-
 class RepeatDiscoveryTests(unittest.TestCase):
     """Found by the review council: re-discovering an unchanged PR still
     incremented admitted whenever build-review-graph exited 0, even though
-    its own idempotency keys made that a no-op rebuild. Repeated successful
-    no-ops could consume every daily slot and starve newly assigned PRs."""
+    its own idempotency keys made that a no-op rebuild. There is no cap
+    for this to silently consume anymore, but the "admitted" count in the
+    printed summary should still reflect genuinely new work, not a repeat."""
 
-    def test_an_already_staged_operation_does_not_consume_the_cap(self):
+    def test_an_already_staged_operation_is_not_counted_as_newly_admitted(self):
         import sys
         with tempfile.TemporaryDirectory() as d:
             work_root = pathlib.Path(d)
@@ -205,11 +174,12 @@ class RepeatDiscoveryTests(unittest.TestCase):
                 argv = ["discover-reviews", "--allow", "a/repo", "--checkout", "/x",
                        "--work-root", str(work_root), "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
-                    discover_reviews.main()
-
-            state = discover_reviews.load_admissions(work_root)
-            self.assertEqual(0, state["count"],
-                            "a repeat of an already-staged operation must not spend a slot")
+                    code = discover_reviews.main()
+            self.assertEqual(0, code)
+            # build-review-graph is still invoked (it owns the real
+            # idempotency key), but the summary should not call this new.
+            calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+            self.assertEqual(1, len(calls))
 
 
 class SearchFailureTests(unittest.TestCase):
@@ -295,19 +265,6 @@ class AllowFileTests(unittest.TestCase):
                     discover_reviews.main()
                 calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
                 self.assertEqual(2, len(calls), "both a/repo and b/repo should be admitted")
-
-
-class DailyCapDefaultTests(unittest.TestCase):
-    """The operator wants every assigned PR pushed through, bounded by
-    concurrency (max_in_progress, not this). 200 is headroom over a 65-PR
-    day actually observed, not a throttle meant to bind."""
-
-    def test_default_daily_cap_is_200_not_the_original_25(self):
-        import argparse
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--daily-cap", type=discover_reviews._positive_int, default=200)
-        args = ap.parse_args([])
-        self.assertEqual(200, args.daily_cap)
 
 
 if __name__ == "__main__":
