@@ -37,13 +37,13 @@ judgement:
                                 yesterday, so discovering it today is not
                                 urgent and widens the backlog a cold start
                                 could import
-  --allow (repeatable)         an explicit repo allowlist. No wildcard, no
-                                "all accessible repos" mode exists in this
-                                script at all -- the fleet's board-engine
-                                shape, which searches everything accessible
+  --allow (repeatable)         an explicit allowlist: owner/repo, or
+                                owner/* for every repo of one owner (how
+                                bootstrap/cutover-repo moves a whole owner
+                                grant). No "all accessible repos" mode
+                                exists -- the fleet's board-engine shape,
                                 with no per-repo dial, is the design's
-                                rejected alternative (section 4), not an
-                                option here
+                                rejected alternative (section 4)
 
 A PR already admitted is a no-op. This is checked here, not inferred from
 build-review-graph's output: it gives no new-vs-existing signal, since every
@@ -232,7 +232,7 @@ def main() -> int:
     allowed, skipped_not_allowed = [], 0
     for pr in prs:
         repo = pr.get("repository", {}).get("nameWithOwner", "")
-        if repo in args.allowlist:
+        if repo in args.allowlist or f"{repo.split('/')[0]}/*" in args.allowlist:
             allowed.append(pr)
         else:
             skipped_not_allowed += 1
