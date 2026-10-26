@@ -83,5 +83,86 @@ class RecipientTests(unittest.TestCase):
         self.assertEqual("Re: x", self._decode(inbox_writer.build_draft(staged, "y"))["Subject"])
 
 
+from unittest import mock
+
+
+class FakeGmail:
+    """Just the calls these scripts make, returning canned data."""
+
+    def __init__(self, thread_labels=(), pages=()):
+        self.thread_labels, self.pages, self.created = list(thread_labels), list(pages), []
+
+    def users(self):
+        return self
+
+    def threads(self):
+        return self
+
+    def drafts(self):
+        return self
+
+    def get(self, userId, id, format):
+        return mock.Mock(execute=lambda: {"messages": [{"labelIds": l} for l in self.thread_labels]})
+
+    def list(self, userId, q, maxResults, pageToken=None):
+        page = self.pages.pop(0)
+        return mock.Mock(execute=lambda: page)
+
+    def create(self, userId, body):
+        self.created.append(body)
+        return mock.Mock(execute=lambda: {"id": "r-1"})
+
+
+class DuplicateDraftTests(unittest.TestCase):
+    def _run(self, fake):
+        import json, sys, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ev = pathlib.Path(d) / "op1" / "evidence"
+            ev.mkdir(parents=True)
+            (ev / "thread.json").write_text(json.dumps(
+                {"thread_id": "t1", "reply_to": "a@b.c", "subject": "x", "reply_to_message_id": ""}))
+            show = {"task": {"status": "done", "body": "operation_id: op1\n"},
+                    "runs": [{"outcome": "completed", "metadata": {"reply_body": "hi"}}]}
+            with mock.patch.object(inbox_writer, "hermes",
+                                   return_value=mock.Mock(returncode=0, stdout=json.dumps(show))), \
+                 mock.patch.object(inbox_writer, "gmail", return_value=fake), \
+                 mock.patch.object(sys, "argv", ["inbox-writer", "--task", "t_x", "--token", "/x",
+                                                 "--work-root", d]):
+                return inbox_writer.main()
+
+    def test_creates_a_draft_when_the_thread_has_none(self):
+        fake = FakeGmail(thread_labels=[["INBOX", "UNREAD"]])
+        self.assertEqual(0, self._run(fake))
+        self.assertEqual(1, len(fake.created))
+
+    def test_a_thread_that_already_has_a_draft_gets_no_second(self):
+        """Covers a rerun and a create whose response was lost."""
+        fake = FakeGmail(thread_labels=[["INBOX"], ["DRAFT"]])
+        self.assertEqual(0, self._run(fake))
+        self.assertEqual([], fake.created)
+
+
+_ploader = importlib.machinery.SourceFileLoader("inbox_producer", str(PRODUCER))
+_pspec = importlib.util.spec_from_loader("inbox_producer", _ploader)
+inbox_producer = importlib.util.module_from_spec(_pspec)
+_ploader.exec_module(inbox_producer)
+
+
+class PaginationTests(unittest.TestCase):
+    def test_every_page_of_matching_threads_is_read(self):
+        import sys, tempfile
+        fake = FakeGmail(pages=[{"threads": [{"id": "a"}], "nextPageToken": "p2"},
+                                {"threads": [{"id": "b"}]}])
+        fake.getProfile = lambda userId: mock.Mock(execute=lambda: {"emailAddress": "me@x"})
+        seen = []
+        fake.get = lambda userId, id, format: (seen.append(id), mock.Mock(execute=lambda: {
+            "messages": [{"id": "m", "payload": {"headers": [{"name": "From", "value": "me@x"}]}}]}))[1]
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(inbox_producer, "gmail", return_value=fake), \
+             mock.patch.object(sys, "argv", ["inbox-producer", "--token", "/x", "--work-root", d]):
+            self.assertEqual(0, inbox_producer.main())
+        self.assertEqual(["a", "b"], seen)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

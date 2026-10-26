@@ -88,6 +88,14 @@ def main() -> int:
     staged = json.loads((args.work_root / op_id / "evidence" / "thread.json").read_text())
 
     g = gmail(args.token.expanduser())
+    # Idempotent by Gmail's own state, not a local record: a thread that
+    # already holds a draft gets no second one. This also covers a create
+    # whose response was lost -- the draft exists, so the retry finds it.
+    thread = g.users().threads().get(userId="me", id=staged["thread_id"],
+                                     format="minimal").execute()
+    if any("DRAFT" in (m.get("labelIds") or []) for m in thread.get("messages", [])):
+        print(f"no-op: thread {staged['thread_id']} already has a draft")
+        return 0
     draft = g.users().drafts().create(userId="me", body=build_draft(staged, reply_body)).execute()
     print(f"drafted: {draft['id']} in thread {staged['thread_id']} to {staged['reply_to']}")
     return 0

@@ -84,8 +84,16 @@ def main() -> int:
 
     g = gmail(args.token.expanduser())
     me = g.users().getProfile(userId="me").execute()["emailAddress"].lower()
-    threads = g.users().threads().list(userId="me", q=args.query, maxResults=100).execute().get("threads", [])
+    threads, page = [], None
+    while True:
+        resp = g.users().threads().list(userId="me", q=args.query, maxResults=100,
+                                        pageToken=page).execute()
+        threads += resp.get("threads", [])
+        page = resp.get("nextPageToken")
+        if not page:
+            break
     print(f"{len(threads)} thread(s) match {args.query!r}")
+    failures = 0
     for t in threads:
         thread = g.users().threads().get(userId="me", id=t["id"], format="full").execute()
         msgs = thread["messages"]
@@ -102,16 +110,23 @@ def main() -> int:
             "messages": [{"from": header(m, "From"), "date": header(m, "Date"),
                           "body": body_text(m["payload"])[:20000]} for m in msgs],
         }
+        # Staged once per operation id and never rewritten: the id already
+        # pins the latest message, so a rerun has nothing new to write, and a
+        # drafter may be reading these files right now.
         evidence = args.work_root / op_id / "evidence"
         evidence.mkdir(parents=True, exist_ok=True)
-        (evidence / "thread.json").write_text(json.dumps(staged, indent=2))
+        if not (evidence / "thread.json").exists():
+            tmp = evidence / ".thread.json.tmp"
+            tmp.write_text(json.dumps(staged, indent=2))
+            os.replace(tmp, evidence / "thread.json")
         binding = args.work_root / op_id / ".lens-tools.json"
-        if binding.exists():
-            os.chmod(binding, 0o600)
-        binding.write_text(json.dumps({"schema_version": 1,
+        if not binding.exists():
+            tmp = args.work_root / op_id / ".lens-tools.json.tmp"
+            tmp.write_text(json.dumps({"schema_version": 1,
                                        "evidence_root": str(container_root / op_id / "evidence")},
                                       separators=(",", ":")))
-        os.chmod(binding, 0o440)
+            os.chmod(tmp, 0o440)
+            os.replace(tmp, binding)
 
         # Card body carries ids only; the thread text stays in the workspace.
         r = hermes("kanban", "--board", args.board, "create",
@@ -123,9 +138,10 @@ def main() -> int:
                    "--max-runtime", "480", "--max-retries", "1", "--json")
         if r.returncode != 0:
             print(f"  error creating card for {t['id']}: {r.stderr.strip()[:200]}", file=sys.stderr)
+            failures += 1
             continue
         print(f"  {t['id']} -> {json.loads(r.stdout)['id']}")
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
