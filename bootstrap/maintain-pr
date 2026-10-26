@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Build one maintenance card: react to feedback on a pull request you authored.
+
+PR 8 of the fleet-into-ralph design. Run by hand for now, against one named
+pull request. Unlike bootstrap/build-review-graph, this runs wherever gh
+lives, not inside the hermes container -- it needs gh for every GitHub read
+(reviews, threads, checks), and that container carries neither gh nor a
+standalone hermes CLI. Reaches the board through RALPH_HERMES_CONTAINER, the
+same bridge bootstrap/publish-review and bootstrap/discover-reviews already
+use for the same reason.
+
+    RALPH_HERMES_CONTAINER=ralph-hermes-1 \
+      bootstrap/maintain-pr --once --repo owner/name --pr 123 --board queues
+
+WHAT THIS DOES NOT CARRY OVER FROM THE FLEET.
+
+The fleet's maintenance round-tracking is roughly a thousand lines of a
+bespoke filesystem journal -- owner-only directories, O_NOFOLLOW opens,
+canonical-JSON byte comparisons -- built because the fleet had to make two
+routes (legacy and council) agree on one operation through a protocol it
+invented itself. Section 1 of the design: Ralph needs none of it.
+hermes kanban create --idempotency-key already returns the existing task id
+instead of creating a duplicate, so re-running this against unchanged
+feedback is free -- the same card comes back, nothing new is spent.
+
+THE DEDUPE KEY, KEPT FROM THE FLEET EXACTLY.
+
+Review's identity is the head SHA: a new head is a new thing to review.
+Maintenance's identity cannot be the head SHA, because new feedback arrives
+WITHOUT the head moving -- a maintainer pushes, nobody re-requests review,
+feedback accumulates on the same head, and a head-keyed operation would never
+notice. The fleet's answer, used here unchanged: hash every unresolved
+external review, every unresolved and not-outdated thread, and every failing
+check, sorted and canonicalized, into one digest. Two runs with the same
+digest are the same operation -- an idempotent re-run of a round already
+underway, not a new one -- and get the same card, not a second one.
+
+NO CAP HERE, BY DIRECT INSTRUCTION. The one cap in this design is on review,
+3 rounds per pull request, where a new round is bounded because the fleet's
+own reasoning for it is sound: without a cap, an agent and a human reviewer
+can trade rounds indefinitely. Maintenance does not get a copy of that shape
+-- every PR with real, new feedback gets a round, with no per-PR ceiling and
+no daily ceiling. Throughput is the explicit priority; concurrency
+(kanban.max_in_progress) is the only lever that bounds how much of this runs
+at once.
+"""
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+MAX_RUNTIME = "3600"
+MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
+# still spends the digest once retried, not twice: the retry runs against
+# the same card and the same idempotency key, not a second card.
+
+
+def gh(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=90)
+
+
+def hermes(*args) -> subprocess.CompletedProcess:
+    """Reach the board through the hermes container when RALPH_HERMES_CONTAINER
+    is set, same bridge and same HERMES_HOME fix as bootstrap/publish-review
+    and bootstrap/discover-reviews: this script runs wherever gh lives, not
+    inside the hermes container, which carries neither gh nor a standalone
+    hermes CLI for this to shell out to."""
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    if container:
+        home = os.environ.get("HERMES_HOME")
+        extra = ["-e", f"HERMES_HOME={home}"] if home else []
+        return subprocess.run(["docker", "exec", *extra, container, "hermes", *args],
+                              capture_output=True, text=True)
+    return subprocess.run(["hermes", *args], capture_output=True, text=True)
+
+
+def _parse_json_stream(text: str) -> list:
+    """gh api --paginate without --jq concatenates JSON documents back to
+    back rather than wrapping them in one array; decode them one at a time."""
+    results = []
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(text):
+        stripped = text[pos:].lstrip()
+        if not stripped:
+            break
+        pos = len(text) - len(stripped)
+        obj, end = decoder.raw_decode(text, pos)
+        results.append(obj)
+        pos = end
+    return results
+
+
+def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
+    """The fleet's own shape, reproduced: external reviews with a body,
+    unresolved and not-outdated threads whose comments are external and have
+    a body, and failing checks. 'External' means not authored by the account
+    this runs as -- your own prior maintenance comments do not count as
+    feedback on themselves."""
+    reviews = gh("api", "--paginate", f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+    if reviews.returncode != 0:
+        return None
+    review_list = []
+    for page in _parse_json_stream(reviews.stdout):
+        review_list.extend(page if isinstance(page, list) else [page])
+
+    query = ('query($owner:String!,$name:String!,$number:Int!,$endCursor:String){'
+            'repository(owner:$owner,name:$name){pullRequest(number:$number){'
+            'reviewThreads(first:100,after:$endCursor){nodes{'
+            'id isResolved isOutdated '
+            'comments(last:100){nodes{id databaseId author{login} body createdAt updatedAt}}'
+            '} pageInfo{hasNextPage endCursor}}'
+            '}}}')
+    owner, name = repo.split("/", 1)
+    threads_result = gh("api", "graphql", "--paginate", "-F", f"owner={owner}",
+                        "-F", f"name={name}", "-F", f"number={number}", "-f", f"query={query}")
+    if threads_result.returncode != 0:
+        return None
+    thread_nodes = []
+    for page in _parse_json_stream(threads_result.stdout):
+        try:
+            thread_nodes.extend(page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"])
+        except (KeyError, TypeError):
+            continue
+
+    checks = gh("pr", "checks", str(number), "-R", repo, "--json", "name,bucket,state,link")
+    if checks.returncode != 0:
+        # gh exits 1 with empty output when a PR has no checks at all.
+        if checks.stdout.strip():
+            return None
+        checks_list = []
+    else:
+        try:
+            checks_list = json.loads(checks.stdout)
+        except json.JSONDecodeError:
+            return None
+
+    login_lower = login.lower()
+
+    def external(author):
+        return isinstance(author, str) and author.lower() != login_lower
+
+    snapshot_reviews = sorted(
+        ({"id": r["id"], "author": r["user"]["login"], "body": r["body"],
+          "submittedAt": r.get("submitted_at")}
+         for r in review_list
+         if r.get("id") is not None and external(r.get("user", {}).get("login"))
+         and isinstance(r.get("body"), str) and r["body"].strip()),
+        key=lambda x: str(x["id"]))
+
+    snapshot_threads = []
+    for t in thread_nodes:
+        if not isinstance(t.get("id"), str) or t.get("isResolved") or t.get("isOutdated"):
+            continue
+        comments = sorted(
+            ({"id": c["id"], "databaseId": c.get("databaseId"),
+              "author": c.get("author", {}).get("login") if c.get("author") else None,
+              "body": c["body"]}
+             for c in t.get("comments", {}).get("nodes", [])
+             if isinstance(c.get("id"), str)
+             and external(c.get("author", {}).get("login") if c.get("author") else None)
+             and isinstance(c.get("body"), str) and c["body"].strip()),
+            key=lambda x: (x["id"], str(x["databaseId"])))
+        if comments:
+            snapshot_threads.append({"id": t["id"], "comments": comments})
+    snapshot_threads.sort(key=lambda x: x["id"])
+
+    snapshot_checks = sorted(
+        ({"name": c.get("name"), "bucket": c.get("bucket"), "state": c.get("state"),
+          "link": c.get("link")}
+         for c in checks_list if c.get("bucket") == "fail"),
+        key=lambda x: (x["name"] or "", x["link"] or "", x["state"] or ""))
+
+    return {"reviews": snapshot_reviews, "threads": snapshot_threads, "checks": snapshot_checks}
+
+
+def feedback_digest(snapshot: dict) -> str:
+    """Byte-identical algorithm to the fleet's feedback_snapshot(): hash each
+    review body, each thread comment body, and each failing check, then hash
+    the sorted list of those hashes. Kept exactly so a round this script
+    starts and a round the fleet would have started agree on whether it is
+    the same feedback -- the two systems never need to compare notes,
+    because the hash is the comparison."""
+    def digest(raw: bytes) -> str:
+        return hashlib.sha256(raw).hexdigest()
+
+    items = [["review", str(r["id"]), digest(r["body"].encode())]
+            for r in snapshot["reviews"]]
+    items += [["thread", t["id"], c["id"], digest(c["body"].encode())]
+             for t in snapshot["threads"] for c in t["comments"]]
+    items += [["check", digest(json.dumps(c, sort_keys=True, separators=(",", ":"),
+                                          ensure_ascii=False).encode())]
+             for c in snapshot["checks"]]
+    if not items:
+        return "empty"
+    return digest(json.dumps(sorted(items), separators=(",", ":"), ensure_ascii=False).encode())
+
+
+def operation_id(repo: str, number: int, digest: str) -> str:
+    raw = hashlib.sha256(f"{repo}:{number}:{digest}".encode()).hexdigest()
+    return f"maintain-{raw}"
+
+
+def existing_rounds(board: str, repo: str, number: int) -> int | None:
+    """Counts every maintainer card ever created for this (repo, number),
+    archived included. Nothing gates on this anymore -- there is no cap on
+    maintenance -- so this exists only to label the round number in a card's
+    title and body for a human reading the board. None means the count
+    could not be read; the round is created anyway and labeled '?'."""
+    r = hermes("kanban", "--board", board, "list", "--assignee", "ralph-maintainer",
+              "--archived", "--json")
+    if r.returncode != 0:
+        return None
+    try:
+        cards = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+    needle = f"repo: {repo}\nnumber: {number}\n"
+    return sum(1 for c in cards if needle in (c.get("body") or ""))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--once", action="store_true", required=True,
+                    help="required, so this is never invoked expecting a loop")
+    ap.add_argument("--repo", required=True)
+    ap.add_argument("--pr", required=True, type=int)
+    ap.add_argument("--board", default="queues")
+    ap.add_argument("--login", default=None,
+                    help="GitHub login to exclude as external; defaults to "
+                         "whoever gh authenticates as")
+    args = ap.parse_args()
+
+    login = args.login
+    if login is None:
+        who = gh("api", "user", "--jq", ".login")
+        if who.returncode != 0:
+            print("error: could not resolve the account from `gh api user`",
+                 file=sys.stderr)
+            return 1
+        login = who.stdout.strip()
+
+    snapshot = feedback_snapshot(args.repo, args.pr, login)
+    if snapshot is None:
+        print(f"error: could not read feedback for {args.repo}#{args.pr}", file=sys.stderr)
+        return 1
+
+    digest = feedback_digest(snapshot)
+    if digest == "empty":
+        print(f"skip {args.repo}#{args.pr}: no actionable external feedback")
+        return 0
+
+    op_id = operation_id(args.repo, args.pr, digest)
+
+    rounds = existing_rounds(args.board, args.repo, args.pr)
+    round_label = str(rounds + 1) if rounds is not None else "?"
+
+    pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json", "headRefOid,headRefName")
+    if pr_view.returncode != 0:
+        print(f"error: could not read {args.repo}#{args.pr}'s head", file=sys.stderr)
+        return 1
+    pr_info = json.loads(pr_view.stdout)
+    head_sha, head_branch = pr_info["headRefOid"], pr_info["headRefName"]
+
+    body = (f"operation_id: {op_id}\nrepo: {args.repo}\nnumber: {args.pr}\n"
+           f"head_sha: {head_sha}\nhead_branch: {head_branch}\n"
+           f"feedback_digest: {digest}\nround: {round_label}\n")
+
+    r = hermes("kanban", "--board", args.board, "create",
+              f"Maintain {args.repo}#{args.pr} round {round_label} @ {head_sha[:8]}",
+              "--body", body, "--assignee", "ralph-maintainer",
+              "--idempotency-key", op_id,
+              "--max-runtime", MAX_RUNTIME, "--max-retries", MAX_RETRIES,
+              "--json")
+    if r.returncode != 0:
+        print(f"error creating {op_id}: {r.stderr.strip()[:300]}", file=sys.stderr)
+        return 1
+    try:
+        card_id = json.loads(r.stdout)["id"]
+    except (json.JSONDecodeError, KeyError):
+        print(f"error: unexpected create output: {r.stdout[:200]}", file=sys.stderr)
+        return 1
+
+    print(f"created or already existed: {card_id} (round {round_label}, {op_id})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
