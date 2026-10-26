@@ -34,6 +34,17 @@ Ralph's publisher searching for both markers before writing (PR 5), which
 runs on every post regardless of this tool; re-deriving that check here would
 be a second, divergent implementation of the same guarantee.
 
+WRITE ORDER. The two writes are independent files read by different
+producers on their own schedules, so a crash -- or a failed write -- between
+them is possible. The gaining side is written first and the losing side
+second, so that window, if it happens, leaves the repository in scope for
+*both* systems rather than *neither*. Momentary double coverage is the
+recoverable failure mode: it is exactly what the publisher's duplicate-marker
+check (PR 5) already exists to absorb. A coverage gap would not be
+recoverable the same way -- assigned PRs during that window simply would not
+get reviewed by anyone. If the second write fails, the tool reports the
+partial state and how to finish it by hand instead of exiting 0 silently.
+
 ROLLBACK. Run again with --direction fleet to reverse: removes the repo from
 Ralph's allowlist, restores it to the fleet's authority file. The design
 calls this "swap the two lines back," and that is literally what --direction
@@ -139,10 +150,22 @@ def main() -> int:
         if not args.apply:
             print("\n(dry run: pass --apply to write both files)")
             return 0
-        if matching:
-            write_authority(args.fleet_authority, [e for e in fleet_repos if e != args.repo])
+        # Gaining side first, losing side second: a failure between the two
+        # writes leaves the repo covered by both systems, never by neither.
         if not already_ralph:
             write_allowlist(args.ralph_allowlist, ralph_repos + [args.repo])
+        if matching:
+            try:
+                write_authority(args.fleet_authority,
+                                [e for e in fleet_repos if e != args.repo])
+            except OSError as exc:
+                print(f"\nerror: added {args.repo} to Ralph's allowlist but failed "
+                     f"to remove it from the fleet authority file: {exc}\n"
+                     f"state: both systems currently have {args.repo} in scope "
+                     f"(safe overlap, not a gap) -- remove it from "
+                     f"{args.fleet_authority} by hand to finish the cutover.",
+                     file=sys.stderr)
+                return 1
         print("\napplied. Neither producer was restarted; each picks this up on "
              "its own next tick.")
         return 0
@@ -159,10 +182,22 @@ def main() -> int:
     if not args.apply:
         print("\n(dry run: pass --apply to write both files)")
         return 0
-    if already_ralph:
-        write_allowlist(args.ralph_allowlist, [r for r in ralph_repos if r != args.repo])
+    # Gaining side first, losing side second: a failure between the two
+    # writes leaves the repo covered by both systems, never by neither.
     if not matching:
         write_authority(args.fleet_authority, fleet_repos + [args.repo])
+    if already_ralph:
+        try:
+            write_allowlist(args.ralph_allowlist,
+                            [r for r in ralph_repos if r != args.repo])
+        except OSError as exc:
+            print(f"\nerror: restored {args.repo} to the fleet authority file but "
+                 f"failed to remove it from Ralph's allowlist: {exc}\n"
+                 f"state: both systems currently have {args.repo} in scope "
+                 f"(safe overlap, not a gap) -- remove it from "
+                 f"{args.ralph_allowlist} by hand to finish the rollback.",
+                 file=sys.stderr)
+            return 1
     print("\napplied. Neither producer was restarted; each picks this up on "
          "its own next tick.")
     return 0

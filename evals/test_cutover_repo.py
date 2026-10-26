@@ -158,5 +158,53 @@ class CutoverTests(unittest.TestCase):
             self.assertEqual(2, r.returncode)
 
 
+class PartialWriteFailureTests(unittest.TestCase):
+    """If the second of the two writes fails, the repo must never be left
+    owned by neither system -- the gaining side is written first, and a
+    failure removing it from the losing side is reported, not swallowed."""
+
+    def test_cutover_reports_and_fails_if_fleet_removal_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            authority = pathlib.Path(d) / "authority.yaml"
+            authority.write_text("repos:\n  - owner/repo\n")
+            allowlist = pathlib.Path(d) / "allow.txt"
+            try:
+                authority.chmod(0o444)  # simulate the second write failing
+                r = subprocess.run([sys.executable, str(SCRIPT), "--repo", "owner/repo",
+                                   "--fleet-authority", str(authority),
+                                   "--ralph-allowlist", str(allowlist), "--apply"],
+                                  capture_output=True, text=True)
+            finally:
+                authority.chmod(0o644)
+            self.assertEqual(1, r.returncode)
+            self.assertIn("error:", r.stderr.lower())
+            # The gaining side (Ralph) already has it: no coverage gap.
+            self.assertIn("owner/repo", cutover_repo.read_allowlist(allowlist))
+            # The losing side (fleet) still has it too: safe overlap, not a gap.
+            self.assertIn("owner/repo", cutover_repo.read_authority(authority))
+
+    def test_rollback_reports_and_fails_if_ralph_removal_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            authority = pathlib.Path(d) / "authority.yaml"
+            authority.write_text("repos:\n")
+            allowlist = pathlib.Path(d) / "allow.txt"
+            allowlist.write_text("owner/repo\n")
+            try:
+                allowlist.chmod(0o444)  # simulate the second write failing
+                r = subprocess.run([sys.executable, str(SCRIPT), "--repo", "owner/repo",
+                                   "--fleet-authority", str(authority),
+                                   "--ralph-allowlist", str(allowlist),
+                                   "--direction", "fleet", "--apply"],
+                                  capture_output=True, text=True)
+            finally:
+                allowlist.chmod(0o644)
+            self.assertEqual(1, r.returncode)
+            self.assertIn("error:", r.stderr.lower())
+            # The gaining side (fleet) already has it back: no coverage gap.
+            self.assertIn("owner/repo", cutover_repo.read_authority(authority))
+            # The losing side (Ralph) still has it too: safe overlap, not a gap.
+            self.assertIn("owner/repo", cutover_repo.read_allowlist(allowlist))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
