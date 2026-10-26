@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Discover open pull requests assigned to this account and build their review graphs.
+
+PR 6 of the fleet-into-ralph design. The first thing in this whole design that
+acts without a human present, and the only one that can spend money
+unattended -- which is why it exists last and why every bound below is a hard
+ceiling in code, not a default someone could leave permissive.
+
+    bootstrap/discover-reviews --allow owner/repo [--allow owner/repo2] \\
+        --checkout /path/to/a/local/clone --work-root /var/lib/ralph/review-work
+
+Run on a timer (cron, a sidecar loop) once this has been watched manually for
+a while. --once-for-real is required to let it call build-review-graph; every
+other flag works without it, so a dry run of the discovery and filtering logic
+alone never needs that acknowledgement.
+
+THE RISK THIS PR'S OWN DESIGN NAMES, AND WHY EACH BOUND EXISTS:
+
+"The first discovery run imports the whole backlog -- gh search prs takes up
+to 1000 results. 200 groups x $2.50 = $500 in an hour, and 200 unsolicited bot
+reviews on other people's pull requests, each one undone by hand."
+
+Four bounds, each enforced here rather than left to the caller's judgement:
+
+  --max-per-run (default 10)   caps how many PRs one invocation can admit,
+                                regardless of how many gh search prs returns
+  --daily-cap (default 25)     a state file under --work-root tracks how many
+                                groups this script has admitted today; past
+                                the cap, it stops and says so rather than
+                                admitting the 26th
+  --max-age-days (default 7)   gh search prs' own --updated filter; a PR that
+                                has not moved in a week was not assigned
+                                yesterday, so discovering it today is not
+                                urgent and widens the backlog a cold start
+                                could import
+  --allow (repeatable)         an explicit repo allowlist. No wildcard, no
+                                "all accessible repos" mode exists in this
+                                script at all -- the fleet's board-engine
+                                shape, which searches everything accessible
+                                with no per-repo dial, is the design's
+                                rejected alternative (section 4), not an
+                                option here
+
+A PR already admitted is a no-op, not a re-count against the daily cap. This
+is checked here, not inferred from build-review-graph's output: it gives no
+new-vs-existing signal, since every card line looks the same whether created
+or deduplicated by its own idempotency key. Instead this checks whether the
+operation's staging directory already existed before this run touched it --
+the one thing that is new exactly once -- and reserves a daily-cap slot only
+for the operations that were not already staged.
+
+Admission is reserved, not counted after the fact: a daily-cap slot is spent
+the moment a new-looking PR is selected to build, under a lock held for the
+whole run, before build-review-graph is ever called. Two overlapping
+invocations -- a scheduled tick racing a manual run -- cannot both see the
+same remaining budget, because one holds the lock while the other waits or
+refuses.
+"""
+import argparse
+import datetime
+import errno
+import fcntl
+import json
+import os
+import pathlib
+import subprocess
+import sys
+from contextlib import contextmanager
+
+HERE = pathlib.Path(__file__).resolve().parent
+STATE_FILE = "discover-reviews-admissions.json"
+
+sys.path.insert(0, str(HERE))
+from importlib.machinery import SourceFileLoader
+_stage = SourceFileLoader("stage_review_evidence", str(HERE / "stage-review-evidence")).load_module()
+operation_id = _stage.operation_id
+
+
+def hermes_argv(*args):
+    """Same bridge as bootstrap/publish-review and notifier/poller.py, and the
+    same HERMES_HOME bug fixed there: forward it only when the caller has it
+    set, never blank out a value the target container already has."""
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    if container:
+        home = os.environ.get("HERMES_HOME")
+        extra = ["-e", f"HERMES_HOME={home}"] if home else []
+        return ["docker", "exec", *extra, container, "hermes", *args]
+    return ["hermes", *args]
+
+
+def gh(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=90)
+
+
+def search_assigned_prs(max_age_days: int) -> list[dict] | None:
+    """None means the search itself failed; [] means it succeeded and found
+    nothing. Found by the review council: both used to return [], so a gh
+    auth failure or a network outage under a cron-driven run looked
+    identical to "no PRs assigned today" and main() always exited 0 either
+    way -- a scheduled run silently stops discovering anything and nothing
+    says so."""
+    # Always applied: no zero-disables escape hatch. The age filter is one
+    # of four hard bounds on the one script in this design that spends money
+    # unattended, and max_age_days is now a _positive_int at the argument
+    # parser, so there is no value this function could receive that means
+    # "skip it."
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+    args = ["search", "prs", "--assignee", "@me", "--state", "open",
+           "--json", "number,title,url,repository,updatedAt", "--limit", "1000",
+           "--updated", f">={cutoff}"]
+    r = gh(*args)
+    if r.returncode != 0:
+        print(f"error: gh search prs failed: {r.stderr.strip()[:300]}", file=sys.stderr)
+        return None
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print(f"error: gh search prs returned unparseable output", file=sys.stderr)
+        return None
+
+
+def pr_shas(repo: str, number: int) -> tuple[str, str] | None:
+    r = gh("pr", "view", str(number), "-R", repo, "--json", "baseRefOid,headRefOid")
+    if r.returncode != 0:
+        return None
+    try:
+        data = json.loads(r.stdout)
+        return data["baseRefOid"], data["headRefOid"]
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+@contextmanager
+def admissions_lock(work_root: pathlib.Path):
+    """Hold an exclusive lock on the admission state for one whole run.
+
+    Found by the review council this script's own first run admitted: the
+    daily cap was read once at the top, and written once at the bottom after
+    every build finished, with nothing locking the file in between. Two
+    overlapping runs -- a scheduled tick racing a manual run, two timer
+    ticks overlapping on a slow network -- could each read the same
+    remaining budget, both build past the stated ceiling, and the second
+    save_admissions() call would silently discard the first run's count
+    instead of adding to it.
+
+    Reservation, not after-the-fact counting, is what the lock protects:
+    read_and_reserve() below increments the persisted count the moment a PR
+    is selected to build, before build-review-graph ever runs, so a crash
+    mid-build leaves the cap conservatively spent rather than silently
+    freed for a concurrent run to spend again.
+    """
+    work_root.mkdir(parents=True, exist_ok=True)
+    lock_path = work_root / f"{STATE_FILE}.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                raise SystemExit(
+                    "refused: another discover-reviews is already running "
+                    "against this work root. Not racing it.")
+            raise
+        yield
+    finally:
+        os.close(fd)
+
+
+def load_admissions(work_root: pathlib.Path) -> dict:
+    """Caller must hold admissions_lock() before calling this, and again
+    before any reserve_admission() that follows -- this alone is a read, not
+    a guarantee."""
+    path = work_root / STATE_FILE
+    if not path.is_file():
+        return {"date": None, "count": 0}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"date": None, "count": 0}
+
+
+def save_admissions(work_root: pathlib.Path, state: dict) -> None:
+    (work_root / STATE_FILE).write_text(json.dumps(state))
+
+
+def _staging_dir_exists(path: pathlib.Path) -> bool:
+    """Checks the filesystem build-review-graph actually staged into, not
+    this process's own.
+
+    build-review-graph runs inside the hermes container when
+    RALPH_HERMES_CONTAINER is set (its Kanban workspace paths only resolve
+    there), so a prior run's staging directory lives on the container's
+    filesystem, not the host's -- this script itself runs wherever gh lives,
+    which is the host. --work-root is the same path string on both sides by
+    convention, but the same string is two different directories. Checking
+    path.is_dir() here, on the host, against a directory the container
+    created was always False: 'already staged' never fired, and a repeat
+    discovery of an unchanged head spent a daily-cap slot every single time.
+    """
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    if not container:
+        return path.is_dir()
+    r = subprocess.run(["docker", "exec", container, "test", "-d", str(path)],
+                       capture_output=True, timeout=30)
+    return r.returncode == 0
+
+
+def reserve_admission(work_root: pathlib.Path, state: dict) -> dict:
+    """Persist one more reserved slot immediately, before the build it is
+    reserved for runs. Must be called while admissions_lock() is held."""
+    state = dict(state, count=state["count"] + 1)
+    save_admissions(work_root, state)
+    return state
+
+
+def today() -> str:
+    return datetime.date.today().isoformat()
+
+
+def _positive_int(value: str) -> int:
+    """Every cap in this script is a ceiling, and a nonpositive one is not a
+    smaller ceiling, it is a hole: allowed[:budget] with a negative budget
+    admits almost the entire eligible list instead of enforcing one. Found
+    by the review council this script's own first run admitted -- rejecting
+    the value here means no caller-side check can forget it."""
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    return n
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--allow", action="append", default=[], dest="allowlist",
+                    metavar="owner/repo", required=True,
+                    help="repeatable; a PR outside this list is never admitted, "
+                         "no matter what gh search prs returns")
+    ap.add_argument("--checkout", required=True, type=pathlib.Path,
+                    help="passed through to build-review-graph for each admitted PR; "
+                         "must have every admitted PR's commits reachable")
+    ap.add_argument("--work-root", required=True, type=pathlib.Path)
+    ap.add_argument("--board", default="queues")
+    ap.add_argument("--max-per-run", type=_positive_int, default=10)
+    ap.add_argument("--daily-cap", type=_positive_int, default=25)
+    ap.add_argument("--max-age-days", type=_positive_int, default=7)
+    ap.add_argument("--once-for-real", action="store_true",
+                    help="required to actually call build-review-graph; without it, "
+                         "this reports what it would admit and exits 0")
+    args = ap.parse_args()
+
+    args.work_root.mkdir(parents=True, exist_ok=True)
+
+    with admissions_lock(args.work_root):
+        state = load_admissions(args.work_root)
+        if state.get("date") != today():
+            state = {"date": today(), "count": 0}
+            save_admissions(args.work_root, state)
+        remaining_today = args.daily_cap - state["count"]
+        if remaining_today <= 0:
+            print(f"daily cap of {args.daily_cap} already reached today "
+                 f"({state['count']} admitted); nothing more today.")
+            return 0
+
+        prs = search_assigned_prs(args.max_age_days)
+        if prs is None:
+            # A failed search and "nothing assigned today" must not look the
+            # same to a scheduler: exit non-zero so a cron wrapper notices
+            # and alerts, rather than silently discovering nothing forever.
+            print("error: gh search prs failed; discovering nothing this run",
+                 file=sys.stderr)
+            return 1
+        print(f"gh search found {len(prs)} open assigned PR(s) within "
+             f"{args.max_age_days} day age filter")
+
+        allowed, skipped_not_allowed = [], 0
+        for pr in prs:
+            repo = pr.get("repository", {}).get("nameWithOwner", "")
+            if repo in args.allowlist:
+                allowed.append(pr)
+            else:
+                skipped_not_allowed += 1
+        print(f"  {len(allowed)} in the allowlist, {skipped_not_allowed} skipped "
+             f"(not in --allow)")
+
+        budget = min(args.max_per_run, remaining_today)
+        to_admit = allowed[:budget]
+        if len(allowed) > budget:
+            print(f"  admitting up to {budget} of {len(allowed)} eligible "
+                 f"(per-run cap {args.max_per_run}, {remaining_today} left of daily cap)")
+
+        admitted = 0
+        for pr in to_admit:
+            repo = pr["repository"]["nameWithOwner"]
+            number = pr["number"]
+            shas = pr_shas(repo, number)
+            if shas is None:
+                print(f"  skip {repo}#{number}: could not read base/head SHAs", file=sys.stderr)
+                continue
+            base_sha, head_sha = shas
+            print(f"  {repo}#{number} @ {head_sha[:8]}")
+            if not args.once_for_real:
+                continue
+
+            # Was this operation already staged by an earlier run?
+            # build-review-graph gives no new-vs-existing signal in its own
+            # output -- every card line looks the same whether created or
+            # deduplicated by its idempotency key -- so this checks the one
+            # thing that is new exactly once: the staging directory
+            # stage-review-evidence creates for an operation id it has not
+            # seen before. Found by the review council: without this check,
+            # re-discovering an unchanged PR consumed a daily-cap slot on
+            # every successful idempotent no-op rebuild.
+            op_id = operation_id(repo, number, head_sha)
+            already_staged = _staging_dir_exists(args.work_root / op_id)
+
+            # Reserve before building, under the same lock: a crash mid-build
+            # leaves the slot conservatively spent, which is the safe
+            # direction to fail in, rather than freed for a concurrent run.
+            if not already_staged:
+                state = reserve_admission(args.work_root, state)
+
+            container = os.environ.get("RALPH_HERMES_CONTAINER")
+            graph_cmd = (["docker", "exec", container, "python3",
+                         "/ralph/bootstrap/build-review-graph"] if container
+                        else [sys.executable, str(HERE / "build-review-graph")])
+            r = subprocess.run(
+                [*graph_cmd, "--once",
+                 "--repo", repo, "--pr", str(number),
+                 "--base-sha", base_sha, "--head-sha", head_sha,
+                 "--checkout", str(args.checkout), "--work-root", str(args.work_root),
+                 "--board", args.board],
+                capture_output=True, text=True)
+            print(r.stdout, end="")
+            if r.returncode != 0:
+                print(r.stderr, file=sys.stderr)
+                if not already_staged:
+                    # The reservation was for a build that never happened at
+                    # all; give the slot back rather than spend it on nothing.
+                    state = dict(state, count=state["count"] - 1)
+                    save_admissions(args.work_root, state)
+                continue
+            if not already_staged:
+                admitted += 1
+
+        if args.once_for_real:
+            print(f"\nadmitted {admitted} new operation(s) this run; "
+                 f"{state['count']}/{args.daily_cap} today")
+        else:
+            print(f"\n(dry run: pass --once-for-real to actually build these graphs)")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
