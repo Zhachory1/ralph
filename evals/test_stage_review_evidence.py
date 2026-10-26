@@ -87,6 +87,35 @@ class StageReviewEvidenceTests(unittest.TestCase):
         op_dirs = list(self.work_root.iterdir())
         self.assertEqual(1, len(op_dirs), "same head should stage to the same operation")
 
+    def test_oversized_diff_is_flagged_not_silently_truncated(self):
+        """Found by the first real graph this script produced: three lenses
+        independently reported the staged diff unreadable, because the
+        evidence server's own 1 MiB per-file cap applies to it too."""
+        big = self.checkout / "big.txt"
+        big.write_text("padding padding padding\n" * 100_000)
+        git("add", "-A", cwd=self.checkout)
+        git("commit", "-q", "-m", "oversized", cwd=self.checkout)
+        head_sha = git("rev-parse", "HEAD", cwd=self.checkout).stdout.strip()
+
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--checkout", str(self.checkout),
+             "--repo", "example/repo", "--number", "1",
+             "--base-sha", self.head_sha, "--head-sha", head_sha,
+             "--work-root", str(self.work_root)],
+            capture_output=True, text=True)
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertIn("1 MiB" in r.stderr or "1,048,576" in r.stderr, [True])
+        op_dir = next(self.work_root.iterdir())
+        context = json.loads((op_dir / "evidence" / "context.json").read_text())
+        self.assertTrue(context["diff_oversized"])
+        self.assertGreater(context["diff_bytes"], 1_048_576)
+
+    def test_a_normal_diff_is_not_flagged(self):
+        r = self.run_it()
+        op_dir = next(self.work_root.iterdir())
+        context = json.loads((op_dir / "evidence" / "context.json").read_text())
+        self.assertFalse(context["diff_oversized"])
+
     def test_rejects_a_short_sha(self):
         r = subprocess.run(
             [sys.executable, str(SCRIPT), "--checkout", str(self.checkout),
@@ -96,6 +125,35 @@ class StageReviewEvidenceTests(unittest.TestCase):
             capture_output=True, text=True)
         self.assertEqual(2, r.returncode)
         self.assertIn("not a full commit sha", r.stderr)
+
+    def test_binding_matches_what_lens_tools_expects(self):
+        """Layout parity between stage-review-evidence's output and
+        lens-tools' safe_binding(). A review swarm run on this very PR
+        flagged this integration as untested -- correctly, since neither
+        script imports the other and nothing had checked they agree.
+
+        A lens profile sets LENS_WORKSPACE=$HERMES_KANBAN_WORKSPACE and
+        LENS_EVIDENCE_ROOT=$HERMES_KANBAN_WORKSPACE/evidence. bootstrap/
+        build-review-graph creates each card with --workspace dir:<op_root>,
+        so HERMES_KANBAN_WORKSPACE resolves to op_root at dispatch time. This
+        asserts the binding this script writes is consistent with that
+        without needing a live Hermes task to prove it.
+        """
+        self.run_it()
+        op_root = next(self.work_root.iterdir())
+        workspace = op_root  # what --workspace dir:<...> would be set to
+        evidence_root = workspace / "evidence"  # LENS_EVIDENCE_ROOT
+        binding_path = workspace / ".lens-tools.json"  # safe_binding's BINDING
+
+        self.assertTrue(binding_path.is_file(),
+                        "lens-tools reads workspace/.lens-tools.json; "
+                        "this script must write it there")
+        binding = json.loads(binding_path.read_text())
+        self.assertEqual(str(evidence_root.resolve()),
+                         str(pathlib.Path(binding["evidence_root"]).resolve()),
+                         "the binding's evidence_root must equal "
+                         "$LENS_WORKSPACE/evidence, or safe_binding's "
+                         "relative_to() check fails for every real lens")
 
     def test_never_clones(self):
         """No upstream argument exists; the only network-shaped input is
