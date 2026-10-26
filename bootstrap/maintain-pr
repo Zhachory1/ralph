@@ -10,8 +10,7 @@ same bridge bootstrap/publish-review and bootstrap/discover-reviews already
 use for the same reason.
 
     RALPH_HERMES_CONTAINER=ralph-hermes-1 \
-      bootstrap/maintain-pr --once --repo owner/name --pr 123 \
-        --work-root /var/lib/ralph/maintain-work --board queues
+      bootstrap/maintain-pr --once --repo owner/name --pr 123 --board queues
 
 WHAT THIS DOES NOT CARRY OVER FROM THE FLEET.
 
@@ -21,11 +20,8 @@ canonical-JSON byte comparisons -- built because the fleet had to make two
 routes (legacy and council) agree on one operation through a protocol it
 invented itself. Section 1 of the design: Ralph needs none of it.
 hermes kanban create --idempotency-key already returns the existing task id
-instead of creating a duplicate, so the round count is read directly from
-Kanban: how many maintainer cards already exist for this (repo, number),
-counting archived ones -- a round that happened and finished still counts
-against the cap, because the cap is about how many times a human gets
-interrupted by this PR, not how many are currently open.
+instead of creating a duplicate, so re-running this against unchanged
+feedback is free -- the same card comes back, nothing new is spent.
 
 THE DEDUPE KEY, KEPT FROM THE FLEET EXACTLY.
 
@@ -39,14 +35,16 @@ check, sorted and canonicalized, into one digest. Two runs with the same
 digest are the same operation -- an idempotent re-run of a round already
 underway, not a new one -- and get the same card, not a second one.
 
-THE ROUND CAP. Three rounds per pull request, ten per day across all pull
-requests -- the fleet's numbers, kept, because the design calls the fleet's
-own reasoning for them sound: without a cap, an agent and a human reviewer
-can trade rounds indefinitely, each one a paid card and a notification to a
-person who did not ask for the conversation.
+NO CAP HERE, BY DIRECT INSTRUCTION. The one cap in this design is on review,
+3 rounds per pull request, where a new round is bounded because the fleet's
+own reasoning for it is sound: without a cap, an agent and a human reviewer
+can trade rounds indefinitely. Maintenance does not get a copy of that shape
+-- every PR with real, new feedback gets a round, with no per-PR ceiling and
+no daily ceiling. Throughput is the explicit priority; concurrency
+(kanban.max_in_progress) is the only lever that bounds how much of this runs
+at once.
 """
 import argparse
-import datetime
 import hashlib
 import json
 import os
@@ -55,11 +53,6 @@ import subprocess
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
-STATE_FILE = "maintain-pr-admissions.json"
-MAX_ROUNDS_PER_PR = 2  # every incoming review gets fixed, bounded per PR
-# rather than throttled overall: two rounds of back-and-forth, then a human
-# decides whether a third is warranted. Cheaper to escalate on than the
-# fleet's three, since the operator is optimizing for throughput here.
 MAX_RUNTIME = "3600"
 MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
 # still spends the digest once retried, not twice: the retry runs against
@@ -212,40 +205,20 @@ def operation_id(repo: str, number: int, digest: str) -> str:
     return f"maintain-{raw}"
 
 
-def today() -> str:
-    return datetime.date.today().isoformat()
-
-
-def load_daily(work_root: pathlib.Path) -> dict:
-    path = work_root / STATE_FILE
-    if not path.is_file():
-        return {"date": today(), "count": 0}
-    try:
-        state = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {"date": today(), "count": 0}
-    if state.get("date") != today():
-        return {"date": today(), "count": 0}
-    return state
-
-
-def save_daily(work_root: pathlib.Path, state: dict) -> None:
-    (work_root / STATE_FILE).write_text(json.dumps(state))
-
-
-def existing_rounds(board: str, repo: str, number: int) -> int:
+def existing_rounds(board: str, repo: str, number: int) -> int | None:
     """Counts every maintainer card ever created for this (repo, number),
-    archived included: a round that happened and finished still counts
-    against the cap, because the cap limits how many times a human gets
-    interrupted by this one pull request, not how many cards are open now."""
+    archived included. Nothing gates on this anymore -- there is no cap on
+    maintenance -- so this exists only to label the round number in a card's
+    title and body for a human reading the board. None means the count
+    could not be read; the round is created anyway and labeled '?'."""
     r = hermes("kanban", "--board", board, "list", "--assignee", "ralph-maintainer",
               "--archived", "--json")
     if r.returncode != 0:
-        return MAX_ROUNDS_PER_PR  # fail closed: cannot verify, assume capped
+        return None
     try:
         cards = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return MAX_ROUNDS_PER_PR
+        return None
     needle = f"repo: {repo}\nnumber: {number}\n"
     return sum(1 for c in cards if needle in (c.get("body") or ""))
 
@@ -257,18 +230,11 @@ def main() -> int:
                     help="required, so this is never invoked expecting a loop")
     ap.add_argument("--repo", required=True)
     ap.add_argument("--pr", required=True, type=int)
-    ap.add_argument("--work-root", required=True, type=pathlib.Path)
     ap.add_argument("--board", default="queues")
     ap.add_argument("--login", default=None,
                     help="GitHub login to exclude as external; defaults to "
                          "whoever gh authenticates as")
-    ap.add_argument("--daily-cap", type=int, default=50)  # every PR with
-    # real feedback gets a round; bounded per-PR by MAX_ROUNDS_PER_PR, not
-    # throttled by a total-per-day count set low on purpose. Concurrency
-    # (kanban.max_in_progress) is the throughput lever, not this.
     args = ap.parse_args()
-
-    args.work_root.mkdir(parents=True, exist_ok=True)
 
     login = args.login
     if login is None:
@@ -278,12 +244,6 @@ def main() -> int:
                  file=sys.stderr)
             return 1
         login = who.stdout.strip()
-
-    state = load_daily(args.work_root)
-    if state["count"] >= args.daily_cap:
-        print(f"daily cap of {args.daily_cap} rounds already reached today "
-             f"({state['count']}); nothing more today.")
-        return 0
 
     snapshot = feedback_snapshot(args.repo, args.pr, login)
     if snapshot is None:
@@ -295,24 +255,10 @@ def main() -> int:
         print(f"skip {args.repo}#{args.pr}: no actionable external feedback")
         return 0
 
-    rounds = existing_rounds(args.board, args.repo, args.pr)
     op_id = operation_id(args.repo, args.pr, digest)
 
-    # An idempotent re-run of an in-flight or finished round is free and does
-    # not count against the per-PR cap -- the cap is rounds, not re-checks.
-    existing_check = hermes("kanban", "--board", args.board, "list",
-                            "--assignee", "ralph-maintainer", "--archived", "--json")
-    try:
-        existing_cards = json.loads(existing_check.stdout) if existing_check.returncode == 0 else []
-    except json.JSONDecodeError:
-        existing_cards = []
-    already_exists = any(f"operation_id: {op_id}\n" in (c.get("body") or "")
-                         for c in existing_cards)
-
-    if not already_exists and rounds >= MAX_ROUNDS_PER_PR:
-        print(f"skip {args.repo}#{args.pr}: round cap reached "
-             f"({rounds}/{MAX_ROUNDS_PER_PR} rounds already used on this pull request)")
-        return 0
+    rounds = existing_rounds(args.board, args.repo, args.pr)
+    round_label = str(rounds + 1) if rounds is not None else "?"
 
     pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json", "headRefOid,headRefName")
     if pr_view.returncode != 0:
@@ -323,10 +269,10 @@ def main() -> int:
 
     body = (f"operation_id: {op_id}\nrepo: {args.repo}\nnumber: {args.pr}\n"
            f"head_sha: {head_sha}\nhead_branch: {head_branch}\n"
-           f"feedback_digest: {digest}\nround: {rounds + 1}\n")
+           f"feedback_digest: {digest}\nround: {round_label}\n")
 
     r = hermes("kanban", "--board", args.board, "create",
-              f"Maintain {args.repo}#{args.pr} round {rounds + 1} @ {head_sha[:8]}",
+              f"Maintain {args.repo}#{args.pr} round {round_label} @ {head_sha[:8]}",
               "--body", body, "--assignee", "ralph-maintainer",
               "--idempotency-key", op_id,
               "--max-runtime", MAX_RUNTIME, "--max-retries", MAX_RETRIES,
@@ -340,12 +286,7 @@ def main() -> int:
         print(f"error: unexpected create output: {r.stdout[:200]}", file=sys.stderr)
         return 1
 
-    if not already_exists:
-        state["count"] += 1
-        save_daily(args.work_root, state)
-
-    print(f"{'already existed' if already_exists else 'created'}: {card_id} "
-         f"(round {rounds + 1}/{MAX_ROUNDS_PER_PR}, {op_id})")
+    print(f"created or already existed: {card_id} (round {round_label}, {op_id})")
     return 0
 
 

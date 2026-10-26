@@ -1,12 +1,15 @@
 """Reacting to review feedback on a pull request you authored.
 
 No network for the digest/identity logic -- those are pure functions tested
-against hand-built snapshots. Round-cap and daily-cap logic mock the two
-subprocess boundaries (gh, hermes). The real end-to-end path -- feedback
-read from a live PR, a real card created, a real maintainer round that
-pushed a commit and posted a comment -- was proven live against
-Zhachory1/ralph#23; see the PR body for that record, including the commit
-it produced and the review it was responding to.
+against hand-built snapshots. The round-label logic (existing_rounds) mocks
+the two subprocess boundaries (gh, hermes). There is no cap here by direct
+instruction -- the one cap in this design is on review, not maintenance --
+so these tests check that nothing in this file gates on a count, not that a
+count stays under some number. The real end-to-end path -- feedback read
+from a live PR, a real card created, a real maintainer round that pushed a
+commit and posted a comment -- was proven live against Zhachory1/ralph#23;
+see the PR body for that record, including the commit it produced and the
+review it was responding to.
 
     python3 evals/test_maintain_pr.py
 """
@@ -91,40 +94,30 @@ class OperationIdTests(unittest.TestCase):
         self.assertNotEqual(a, b)
 
 
-class DailyCapTests(unittest.TestCase):
-    def test_fresh_state_starts_at_zero(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            state = maintain_pr.load_daily(pathlib.Path(d))
-            self.assertEqual(0, state["count"])
+class NoCapTests(unittest.TestCase):
+    """By direct instruction: maintenance has no per-PR cap and no daily
+    cap. The one cap in this design is on review. These assert the absence
+    stays absent, not that a count stays under some number."""
 
-    def test_a_stale_date_resets_the_count(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            maintain_pr.save_daily(work_root, {"date": "2020-01-01", "count": 9})
-            state = maintain_pr.load_daily(work_root)
-            self.assertEqual(0, state["count"])
+    def test_no_round_cap_constant_exists(self):
+        self.assertFalse(hasattr(maintain_pr, "MAX_ROUNDS_PER_PR"))
 
-    def test_same_day_count_persists(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            maintain_pr.save_daily(work_root, {"date": maintain_pr.today(), "count": 3})
-            state = maintain_pr.load_daily(work_root)
-            self.assertEqual(3, state["count"])
+    def test_no_daily_cap_state_functions_exist(self):
+        self.assertFalse(hasattr(maintain_pr, "load_daily"))
+        self.assertFalse(hasattr(maintain_pr, "save_daily"))
+
+    def test_main_has_no_daily_cap_argument(self):
+        import subprocess
+        help_text = subprocess.run(["python3", str(SCRIPT), "--help"],
+                                   capture_output=True, text=True).stdout
+        self.assertNotIn("--daily-cap", help_text)
 
 
-class RoundCapTests(unittest.TestCase):
-    """Two rounds per pull request, lowered from the fleet's three: the
-    operator wants every incoming review fixed, bounded per PR rather than
-    throttled overall, and is willing to escalate to a human one round
-    sooner in exchange for throughput."""
+class RoundLabelTests(unittest.TestCase):
+    """existing_rounds is a label for a human reading the board now, not a
+    gate: nothing in main() compares its return value against anything."""
 
-    def test_the_cap_is_two_not_the_fleets_three(self):
-        self.assertEqual(2, maintain_pr.MAX_ROUNDS_PER_PR)
-
-    def test_existing_rounds_counts_matching_cards_only(self):
+    def test_counts_matching_cards_only(self):
         cards = [
             {"body": "repo: owner/repo\nnumber: 1\nother: x\n"},
             {"body": "repo: owner/repo\nnumber: 1\nother: y\n"},
@@ -135,12 +128,13 @@ class RoundCapTests(unittest.TestCase):
             count = maintain_pr.existing_rounds("queues", "owner/repo", 1)
         self.assertEqual(2, count)
 
-    def test_a_hermes_failure_fails_closed_at_the_cap(self):
-        """Cannot verify the round count -> assume capped, never assume zero."""
+    def test_a_hermes_failure_returns_none_not_a_fabricated_count(self):
+        """No cap means no 'fail closed at the cap' -- a read failure just
+        means the label is imprecise, nothing is blocked by it."""
         with mock.patch.object(maintain_pr, "hermes") as hermes_mock:
             hermes_mock.return_value = mock.Mock(returncode=1, stdout="")
             count = maintain_pr.existing_rounds("queues", "owner/repo", 1)
-        self.assertEqual(maintain_pr.MAX_ROUNDS_PER_PR, count)
+        self.assertIsNone(count)
 
 
 class HermesArgvTests(unittest.TestCase):
