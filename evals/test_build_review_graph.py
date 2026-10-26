@@ -1,13 +1,17 @@
-"""The already-built guard: --idempotency-key does not survive archival.
+"""The graph-completeness guard: absent, partial, and complete are different things.
 
 Hermes' own --help: "If a non-archived task with this key exists, its id is
 returned instead of creating a duplicate." Confirmed live: archiving a card
-and recreating one with the exact same key creates a SECOND task, not the
-first one back. Nothing in this design archives a review card today, so this
-was dormant -- a cleanup pass, a GC sweep, or a human tidying the board is
-all it takes to turn an already-reviewed head into one the next discovery
-tick pays for again. already_built() closes that by checking archived cards
-too, independent of the create-time dedup Hermes already does.
+and recreating one with its exact key creates a SECOND task, not the first
+back. graph_status() closes that by checking archived cards too, independent
+of the create-time dedup Hermes already does.
+
+Two findings from a real review of this file fixed here: "any card with this
+operation id" was too coarse -- a crash after the first role's card left
+exactly that, and the old check declared the whole graph built, permanently
+blocking a retry from creating the missing roles. And a read/parse failure
+used to return the same thing as "confirmed absent", so a transient failure
+could let the script recreate an already-archived operation.
 
     python3 evals/test_build_review_graph.py
 """
@@ -28,35 +32,92 @@ build_review_graph = importlib.util.module_from_spec(_spec)
 _loader.exec_module(build_review_graph)
 
 
-class AlreadyBuiltTests(unittest.TestCase):
-    def test_finds_a_matching_operation_id_in_an_archived_card(self):
-        cards = [{"body": "operation_id: review-abc123\nrole: generalist\n"}]
-        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
-            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
-            self.assertTrue(build_review_graph.already_built("queues", "review-abc123"))
+def card(op_id: str, role: str) -> dict:
+    return {"body": f"operation_id: {op_id}\nrepo: a/b\nnumber: 1\nrole: {role}\n"}
 
-    def test_a_different_operation_id_is_not_a_match(self):
-        cards = [{"body": "operation_id: review-other\nrole: generalist\n"}]
-        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
-            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
-            self.assertFalse(build_review_graph.already_built("queues", "review-abc123"))
 
-    def test_no_cards_at_all_is_not_built(self):
+class AbsentTests(unittest.TestCase):
+    def test_no_matching_cards_is_absent(self):
         with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
             hermes_mock.return_value = mock.Mock(returncode=0, stdout="[]")
-            self.assertFalse(build_review_graph.already_built("queues", "review-abc123"))
+            status = build_review_graph.graph_status("queues", "review-abc", {"generalist"})
+        self.assertEqual("absent", status)
 
-    def test_a_hermes_read_failure_does_not_block_a_real_build(self):
-        """Cannot verify -> fall through to create_card(), which carries its
-        own idempotency key and is the real guard when this one cannot see."""
+    def test_a_different_operation_id_is_not_a_match(self):
+        cards = [card("review-other", "generalist")]
         with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
-            hermes_mock.return_value = mock.Mock(returncode=1, stdout="")
-            self.assertFalse(build_review_graph.already_built("queues", "review-abc123"))
+            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
+            status = build_review_graph.graph_status("queues", "review-abc", {"generalist"})
+        self.assertEqual("absent", status)
 
-    def test_malformed_json_does_not_block_a_real_build(self):
+
+class PartialGraphTests(unittest.TestCase):
+    """The review's central finding: a crash mid-graph must resume, not be
+    mistaken for a finished graph."""
+
+    def test_one_role_out_of_three_is_partial_not_complete(self):
+        cards = [card("review-abc", "generalist")]
+        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
+            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
+            status = build_review_graph.graph_status(
+                "queues", "review-abc", {"generalist", "reliability", "mvp"})
+        self.assertEqual("partial", status)
+
+    def test_all_roles_but_missing_synthesis_is_partial(self):
+        cards = [card("review-abc", r) for r in ("generalist", "reliability", "mvp")]
+        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
+            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
+            status = build_review_graph.graph_status(
+                "queues", "review-abc", {"generalist", "reliability", "mvp"})
+        self.assertEqual("partial", status)
+
+
+class CompleteGraphTests(unittest.TestCase):
+    def test_every_role_plus_synthesis_is_complete(self):
+        cards = [card("review-abc", r) for r in
+                ("generalist", "reliability", "mvp", "synthesis")]
+        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
+            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
+            status = build_review_graph.graph_status(
+                "queues", "review-abc", {"generalist", "reliability", "mvp"})
+        self.assertEqual("complete", status)
+
+    def test_the_security_lens_is_part_of_the_expected_set_when_passed(self):
+        """Complete means all EXPECTED roles -- security only counts as
+        missing when it was actually expected (the conditional lens)."""
+        cards = [card("review-abc", r) for r in
+                ("generalist", "reliability", "mvp", "synthesis")]
+        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
+            hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
+            status = build_review_graph.graph_status(
+                "queues", "review-abc", {"generalist", "reliability", "mvp", "security"})
+        self.assertEqual("partial", status, "security was expected and is missing")
+
+
+class ReadFailureTests(unittest.TestCase):
+    """The review's second finding: a failure to read must never be treated
+    as confirmed absence, or a transient hiccup can recreate an already-
+    archived operation."""
+
+    def test_a_failed_hermes_call_raises_rather_than_returning_absent(self):
+        with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
+            hermes_mock.return_value = mock.Mock(returncode=1, stdout="", stderr="boom")
+            with self.assertRaises(build_review_graph.GraphReadError):
+                build_review_graph.graph_status("queues", "review-abc", {"generalist"})
+
+    def test_malformed_json_raises_rather_than_returning_absent(self):
         with mock.patch.object(build_review_graph, "hermes") as hermes_mock:
             hermes_mock.return_value = mock.Mock(returncode=0, stdout="not json")
-            self.assertFalse(build_review_graph.already_built("queues", "review-abc123"))
+            with self.assertRaises(build_review_graph.GraphReadError):
+                build_review_graph.graph_status("queues", "review-abc", {"generalist"})
+
+    def test_main_exits_nonzero_on_a_read_failure_rather_than_rebuilding(self):
+        """The integration point: main() must not catch GraphReadError and
+        silently fall through to building a duplicate graph."""
+        import subprocess
+        source = SCRIPT.read_text()
+        self.assertIn("GraphReadError", source)
+        self.assertIn("return 1", source)
 
 
 if __name__ == "__main__":

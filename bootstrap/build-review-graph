@@ -73,27 +73,64 @@ def hermes(*args):
     return subprocess.run(["hermes", *args], capture_output=True, text=True)
 
 
-def already_built(board: str, op_id: str) -> bool:
-    """True if any card -- archived included -- already carries this
-    operation id in its body.
+class GraphReadError(Exception):
+    """hermes kanban list failed or returned something unparseable.
+
+    Raised rather than returned, so a caller cannot forget to check it: the
+    original version returned False on both "confirmed absent" and "could
+    not tell", and a transient read failure that looked like absence would
+    let the script recreate an already-archived operation, duplicating
+    review work or a published review -- found in review, not by running
+    into it."""
+
+
+def graph_status(board: str, op_id: str, expected_roles: set) -> str:
+    """'absent' | 'partial' | 'complete'.
+
+    'any card with this operation id exists' was too coarse: graph creation
+    is sequential, and a crash after the first role's card but before the
+    rest leaves exactly that -- one card bearing the operation id. The
+    original check saw it, declared the whole graph already built, and
+    returned success, which meant a retry could never create the missing
+    roles or synthesis; the per-card idempotency keys that exist precisely
+    to make a retry safe never got the chance to run. Found in review, not
+    by hitting it in production.
+
+    Complete means every expected role's card AND the synthesis card exist
+    for this operation id -- only then is skipping the rebuild correct.
+    Partial means some do and some do not: the caller should proceed, and
+    each create_card() call below is itself idempotent, so already-created
+    roles are returned, not duplicated, and only the missing ones are made.
 
     --idempotency-key on `hermes kanban create` only dedupes against
     non-archived tasks (Hermes' own --help: "If a non-archived task with
-    this key exists..."). Confirmed live: archiving a card and recreating
-    one with its exact key creates a second task rather than returning the
-    first. Nothing in this script archives a card today, so this is dormant
-    now and would stay dormant forever on luck alone -- a cleanup pass, a GC
-    sweep, or a human tidying the board is all it takes to turn a review
-    that already ran into one the next discovery tick pays for again."""
+    this key exists..."), so archived cards are checked here too -- the
+    reason this function exists instead of relying on create-time dedupe
+    alone."""
     r = hermes("kanban", "--board", board, "list", "--archived", "--json")
     if r.returncode != 0:
-        return False  # cannot verify; create() below still carries its own key
+        raise GraphReadError(f"hermes kanban list failed: {r.stderr.strip()[:200]}")
     try:
         cards = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return False
+    except json.JSONDecodeError as exc:
+        raise GraphReadError(f"hermes kanban list returned unparseable JSON: {exc}")
+
+    found_roles = set()
     needle = f"operation_id: {op_id}\n"
-    return any(needle in (c.get("body") or "") for c in cards)
+    for c in cards:
+        body = c.get("body") or ""
+        if needle not in body:
+            continue
+        for line in body.splitlines():
+            if line.startswith("role: "):
+                found_roles.add(line[len("role: "):].strip())
+                break
+
+    if not found_roles:
+        return "absent"
+    if (expected_roles | {"synthesis"}) <= found_roles:
+        return "complete"
+    return "partial"
 
 
 def create_card(board, title, body, assignee, idem_key, workspace_dir, parents=()):
@@ -165,12 +202,24 @@ def main() -> int:
                     f"instead of evidence_read, or report needs-info.\n")
         return body
 
-    if already_built(args.board, op_id):
-        print(f"already built: {op_id} has an archived or live card already -- "
+    roles = list(ROLES) + (["security"] if security_relevant else [])
+
+    try:
+        status = graph_status(args.board, op_id, set(roles))
+    except GraphReadError as exc:
+        print(f"error: could not verify {op_id}'s existing cards, refusing to "
+             f"build (a read failure must never be treated as confirmed "
+             f"absence): {exc}", file=sys.stderr)
+        return 1
+
+    if status == "complete":
+        print(f"already built: {op_id} has a complete archived or live graph -- "
              f"this head was processed before, not rebuilding it")
         return 0
+    if status == "partial":
+        print(f"resuming: {op_id} has a partial graph -- creating only the "
+             f"missing cards (each create below is itself idempotent)")
 
-    roles = list(ROLES) + (["security"] if security_relevant else [])
     parent_ids = []
     print(f"\nbuilding graph for {op_id} ({'with' if security_relevant else 'without'} security lens)")
     for role in roles:
