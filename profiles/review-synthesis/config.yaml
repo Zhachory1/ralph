@@ -1,0 +1,31 @@
+# Ported from the fleet's pr-review-synthesis-v2. One line differs: provider
+# (openai-codex -> openai-api). Model is unchanged: gpt-6-sol, matching the
+# fleet's production use for this role.
+model:
+  provider: openai-api
+  default: gpt-6-sol
+platform_toolsets:
+  # file-only. Synthesis reads each lens's staged result and the diff; it
+  # does not read live GitHub and does not post. The publisher -- a
+  # deterministic process, not an agent -- owns the one GitHub write and
+  # re-checks the head before making it. This profile cannot bypass that
+  # even if it wanted to: it has no network and no GitHub credential.
+  cli:
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  creation_nudge_interval: 0
+agent:
+  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 80
+  run_budget_seconds: 480
+  api_max_retries: 0

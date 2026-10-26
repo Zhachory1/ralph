@@ -83,6 +83,21 @@ hermes config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory
 # forwarded: the model key and the chat webhook stay outside it.
 hermes config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN"]' >/dev/null
 
+# The review lenses (PR 2 of the fleet-into-ralph design) run on an OpenAI
+# credential Ralph's other nine profiles never touch -- those stay on
+# Anthropic. An API key is used rather than the fleet's device-code OAuth
+# flow because it is scriptable here and does not expire mid-stack-restart.
+# Optional: a host with no review queue running yet has no RALPH_OPENAI_API_KEY
+# and this step is skipped, same as any other profile that is not installed.
+if [ -n "${RALPH_OPENAI_API_KEY:-}" ]; then
+    if ! hermes auth list 2>/dev/null | grep -q "^openai-api"; then
+        hermes auth add openai-api --type api-key --api-key "$RALPH_OPENAI_API_KEY" --label ralph-review-lenses >/dev/null
+        echo "  added openai-api credential for the review lenses"
+    else
+        echo "  openai-api credential already present"
+    fi
+fi
+
 hermes kanban init >/dev/null 2>&1 || true
 if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
     hermes kanban boards create "$BOARD" \
