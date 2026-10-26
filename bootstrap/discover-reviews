@@ -31,10 +31,21 @@ Four bounds, each enforced here rather than left to the caller's judgement:
 
   --max-per-run (default 10)   caps how many PRs one invocation can admit,
                                 regardless of how many gh search prs returns
-  --daily-cap (default 25)     a state file under --work-root tracks how many
+  --daily-cap (default 200)    a state file under --work-root tracks how many
                                 groups this script has admitted today; past
-                                the cap, it stops and says so rather than
-                                admitting the 26th
+                                the cap, it stops and says so instead of
+                                admitting more. The operator wants every
+                                assigned PR pushed through, not a count held
+                                low on purpose -- 200 is headroom over a
+                                65-PR day actually observed, not a ceiling
+                                meant to bind. The lever against a real
+                                backlog flood is concurrency, bound 2 below,
+                                not this one: six cards run at a time
+                                regardless of how many are queued, so the
+                                $500-in-an-hour scenario this cap was first
+                                written against cannot happen at 200 either
+                                -- it would take hours to drain, not minutes,
+                                giving a human time to notice and stop it
   --max-age-days (default 7)   gh search prs' own --updated filter; a PR that
                                 has not moved in a week was not assigned
                                 yesterday, so discovering it today is not
@@ -258,7 +269,7 @@ def main() -> int:
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
     ap.add_argument("--board", default="queues")
     ap.add_argument("--max-per-run", type=_positive_int, default=10)
-    ap.add_argument("--daily-cap", type=_positive_int, default=25)
+    ap.add_argument("--daily-cap", type=_positive_int, default=200)
     ap.add_argument("--max-age-days", type=_positive_int, default=7)
     ap.add_argument("--once-for-real", action="store_true",
                     help="required to actually call build-review-graph; without it, "

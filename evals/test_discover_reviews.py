@@ -297,5 +297,18 @@ class AllowFileTests(unittest.TestCase):
                 self.assertEqual(2, len(calls), "both a/repo and b/repo should be admitted")
 
 
+class DailyCapDefaultTests(unittest.TestCase):
+    """The operator wants every assigned PR pushed through, bounded by
+    concurrency (max_in_progress, not this). 200 is headroom over a 65-PR
+    day actually observed, not a throttle meant to bind."""
+
+    def test_default_daily_cap_is_200_not_the_original_25(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--daily-cap", type=discover_reviews._positive_int, default=200)
+        args = ap.parse_args([])
+        self.assertEqual(200, args.daily_cap)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

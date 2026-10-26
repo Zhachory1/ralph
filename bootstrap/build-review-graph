@@ -73,6 +73,29 @@ def hermes(*args):
     return subprocess.run(["hermes", *args], capture_output=True, text=True)
 
 
+def already_built(board: str, op_id: str) -> bool:
+    """True if any card -- archived included -- already carries this
+    operation id in its body.
+
+    --idempotency-key on `hermes kanban create` only dedupes against
+    non-archived tasks (Hermes' own --help: "If a non-archived task with
+    this key exists..."). Confirmed live: archiving a card and recreating
+    one with its exact key creates a second task rather than returning the
+    first. Nothing in this script archives a card today, so this is dormant
+    now and would stay dormant forever on luck alone -- a cleanup pass, a GC
+    sweep, or a human tidying the board is all it takes to turn a review
+    that already ran into one the next discovery tick pays for again."""
+    r = hermes("kanban", "--board", board, "list", "--archived", "--json")
+    if r.returncode != 0:
+        return False  # cannot verify; create() below still carries its own key
+    try:
+        cards = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return False
+    needle = f"operation_id: {op_id}\n"
+    return any(needle in (c.get("body") or "") for c in cards)
+
+
 def create_card(board, title, body, assignee, idem_key, workspace_dir, parents=()):
     args = ["kanban", "--board", board, "create", title,
            "--body", body, "--assignee", assignee,
@@ -141,6 +164,11 @@ def main() -> int:
                     f"evidence server's per-file read cap. Read it with evidence_search "
                     f"instead of evidence_read, or report needs-info.\n")
         return body
+
+    if already_built(args.board, op_id):
+        print(f"already built: {op_id} has an archived or live card already -- "
+             f"this head was processed before, not rebuilding it")
+        return 0
 
     roles = list(ROLES) + (["security"] if security_relevant else [])
     parent_ids = []
