@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Discover open pull requests assigned to this account and build their review graphs.
+
+PR 6 of the fleet-into-ralph design. The first thing in this whole design that
+acts without a human present, and the only one that can spend money
+unattended -- which is why it exists last and why every bound below is a hard
+ceiling in code, not a default someone could leave permissive.
+
+    bootstrap/discover-reviews --allow owner/repo [--allow owner/repo2] \\
+        --checkout /path/to/a/local/clone --work-root /var/lib/ralph/review-work
+
+Run on a timer (cron, a sidecar loop) once this has been watched manually for
+a while. --once-for-real is required to let it call build-review-graph; every
+other flag works without it, so a dry run of the discovery and filtering logic
+alone never needs that acknowledgement.
+
+THE RISK THIS PR'S OWN DESIGN NAMES, AND WHY EACH BOUND EXISTS:
+
+"The first discovery run imports the whole backlog -- gh search prs takes up
+to 1000 results. 200 groups x $2.50 = $500 in an hour, and 200 unsolicited bot
+reviews on other people's pull requests, each one undone by hand."
+
+Four bounds, each enforced here rather than left to the caller's judgement:
+
+  --max-per-run (default 10)   caps how many PRs one invocation can admit,
+                                regardless of how many gh search prs returns
+  --daily-cap (default 25)     a state file under --work-root tracks how many
+                                groups this script has admitted today; past
+                                the cap, it stops and says so rather than
+                                admitting the 26th
+  --max-age-days (default 7)   gh search prs' own --updated filter; a PR that
+                                has not moved in a week was not assigned
+                                yesterday, so discovering it today is not
+                                urgent and widens the backlog a cold start
+                                could import
+  --allow (repeatable)         an explicit repo allowlist. No wildcard, no
+                                "all accessible repos" mode exists in this
+                                script at all -- the fleet's board-engine
+                                shape, which searches everything accessible
+                                with no per-repo dial, is the design's
+                                rejected alternative (section 4), not an
+                                option here
+
+A PR already admitted is a no-op, not a re-count against the daily cap:
+build-review-graph's own idempotency keys make a second discovery of the same
+head free, and the daily cap tracks admissions, which an idempotent re-run of
+an already-staged operation is not.
+"""
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+STATE_FILE = "discover-reviews-admissions.json"
+
+
+def hermes_argv(*args):
+    """Same bridge as bootstrap/publish-review and notifier/poller.py, and the
+    same HERMES_HOME bug fixed there: forward it only when the caller has it
+    set, never blank out a value the target container already has."""
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    if container:
+        home = os.environ.get("HERMES_HOME")
+        extra = ["-e", f"HERMES_HOME={home}"] if home else []
+        return ["docker", "exec", *extra, container, "hermes", *args]
+    return ["hermes", *args]
+
+
+def gh(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=90)
+
+
+def search_assigned_prs(max_age_days: int) -> list[dict]:
+    args = ["search", "prs", "--assignee", "@me", "--state", "open",
+           "--json", "number,title,url,repository,updatedAt", "--limit", "1000"]
+    if max_age_days > 0:
+        cutoff = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+        args += ["--updated", f">={cutoff}"]
+    r = gh(*args)
+    if r.returncode != 0:
+        print(f"error: gh search prs failed: {r.stderr.strip()[:300]}", file=sys.stderr)
+        return []
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print(f"error: gh search prs returned unparseable output", file=sys.stderr)
+        return []
+
+
+def pr_shas(repo: str, number: int) -> tuple[str, str] | None:
+    r = gh("pr", "view", str(number), "-R", repo, "--json", "baseRefOid,headRefOid")
+    if r.returncode != 0:
+        return None
+    try:
+        data = json.loads(r.stdout)
+        return data["baseRefOid"], data["headRefOid"]
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def load_admissions(work_root: pathlib.Path) -> dict:
+    path = work_root / STATE_FILE
+    if not path.is_file():
+        return {"date": None, "count": 0}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"date": None, "count": 0}
+
+
+def save_admissions(work_root: pathlib.Path, state: dict) -> None:
+    (work_root / STATE_FILE).write_text(json.dumps(state))
+
+
+def today() -> str:
+    return datetime.date.today().isoformat()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--allow", action="append", default=[], dest="allowlist",
+                    metavar="owner/repo", required=True,
+                    help="repeatable; a PR outside this list is never admitted, "
+                         "no matter what gh search prs returns")
+    ap.add_argument("--checkout", required=True, type=pathlib.Path,
+                    help="passed through to build-review-graph for each admitted PR; "
+                         "must have every admitted PR's commits reachable")
+    ap.add_argument("--work-root", required=True, type=pathlib.Path)
+    ap.add_argument("--board", default="queues")
+    ap.add_argument("--max-per-run", type=int, default=10)
+    ap.add_argument("--daily-cap", type=int, default=25)
+    ap.add_argument("--max-age-days", type=int, default=7)
+    ap.add_argument("--once-for-real", action="store_true",
+                    help="required to actually call build-review-graph; without it, "
+                         "this reports what it would admit and exits 0")
+    args = ap.parse_args()
+
+    args.work_root.mkdir(parents=True, exist_ok=True)
+    state = load_admissions(args.work_root)
+    if state.get("date") != today():
+        state = {"date": today(), "count": 0}
+    remaining_today = args.daily_cap - state["count"]
+    if remaining_today <= 0:
+        print(f"daily cap of {args.daily_cap} already reached today "
+             f"({state['count']} admitted); nothing more today.")
+        return 0
+
+    prs = search_assigned_prs(args.max_age_days)
+    print(f"gh search found {len(prs)} open assigned PR(s) within "
+         f"{args.max_age_days or 'no'} day age filter")
+
+    allowed, skipped_not_allowed = [], 0
+    for pr in prs:
+        repo = pr.get("repository", {}).get("nameWithOwner", "")
+        if repo in args.allowlist:
+            allowed.append(pr)
+        else:
+            skipped_not_allowed += 1
+    print(f"  {len(allowed)} in the allowlist, {skipped_not_allowed} skipped "
+         f"(not in --allow)")
+
+    budget = min(args.max_per_run, remaining_today)
+    to_admit = allowed[:budget]
+    if len(allowed) > budget:
+        print(f"  admitting {budget} of {len(allowed)} eligible "
+             f"(per-run cap {args.max_per_run}, {remaining_today} left of daily cap)")
+
+    admitted = 0
+    for pr in to_admit:
+        repo = pr["repository"]["nameWithOwner"]
+        number = pr["number"]
+        shas = pr_shas(repo, number)
+        if shas is None:
+            print(f"  skip {repo}#{number}: could not read base/head SHAs", file=sys.stderr)
+            continue
+        base_sha, head_sha = shas
+        print(f"  {repo}#{number} @ {head_sha[:8]}")
+        if not args.once_for_real:
+            continue
+        # build-review-graph must run where the Kanban workspace paths it
+        # sets with --workspace dir: resolve -- inside the hermes container,
+        # not here. Same bridge as hermes_argv, applied to a script rather
+        # than to the bare hermes binary.
+        container = os.environ.get("RALPH_HERMES_CONTAINER")
+        graph_cmd = (["docker", "exec", container, "python3",
+                     "/ralph/bootstrap/build-review-graph"] if container
+                    else [sys.executable, str(HERE / "build-review-graph")])
+        r = subprocess.run(
+            [*graph_cmd, "--once",
+             "--repo", repo, "--pr", str(number),
+             "--base-sha", base_sha, "--head-sha", head_sha,
+             "--checkout", str(args.checkout), "--work-root", str(args.work_root),
+             "--board", args.board],
+            capture_output=True, text=True)
+        print(r.stdout, end="")
+        if r.returncode != 0:
+            print(r.stderr, file=sys.stderr)
+            continue
+        admitted += 1
+
+    if args.once_for_real and admitted:
+        state["count"] += admitted
+        save_admissions(args.work_root, state)
+        print(f"\nadmitted {admitted} this run; {state['count']}/{args.daily_cap} today")
+    elif not args.once_for_real:
+        print(f"\n(dry run: pass --once-for-real to actually build these graphs)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
