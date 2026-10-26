@@ -6,7 +6,7 @@ acts without a human present, and the only one that can spend money
 unattended.
 
     bootstrap/discover-reviews --allow owner/repo [--allow owner/repo2] \
-        --checkout /path/to/a/local/clone --work-root /var/lib/ralph/review-work
+        --checkout-root /workspaces/repo-cache --work-root /workspaces/review-work
 
 --allow-file <path> is an alternative to repeated --allow flags: a flat file
 of owner/repo lines, read fresh on every invocation. bootstrap/cutover-repo
@@ -118,6 +118,31 @@ def pr_shas(repo: str, number: int) -> tuple[str, str] | None:
         return None
 
 
+def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
+                    head_sha: str) -> pathlib.Path | None:
+    """One cached clone per repository under root, fetched on demand.
+
+    Cloned without a working tree -- stage-review-evidence only needs the
+    two commits to diff, never a checked-out file. --checkout-root must be
+    the same path inside the hermes container, where build-review-graph
+    reads it (the compose stack mounts ./workspaces at /workspaces in both).
+    """
+    path = root / repo
+    if not (path / ".git").exists() and not (path / "HEAD").exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        r = gh("repo", "clone", repo, str(path), "--", "--no-checkout", "--filter=blob:none")
+        if r.returncode != 0:
+            print(f"  skip {repo}#{number}: clone failed: {r.stderr.strip()[:200]}", file=sys.stderr)
+            return None
+    r = subprocess.run(["git", "-C", str(path), "fetch", "--quiet", "origin",
+                        base_sha, f"+refs/pull/{number}/head:refs/remotes/pr/{number}"],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        print(f"  skip {repo}#{number}: fetch failed: {r.stderr.strip()[:200]}", file=sys.stderr)
+        return None
+    return path
+
+
 def _staging_dir_exists(path: pathlib.Path) -> bool:
     """Checks the filesystem build-review-graph actually staged into, not
     this process's own.
@@ -164,9 +189,10 @@ def main() -> int:
                          "no restart, the same way the fleet's own authority "
                          "file is re-read on its own schedule. Merged with "
                          "--allow if both are given.")
-    ap.add_argument("--checkout", required=True, type=pathlib.Path,
-                    help="passed through to build-review-graph for each admitted PR; "
-                         "must have every admitted PR's commits reachable")
+    ap.add_argument("--checkout-root", required=True, type=pathlib.Path,
+                    help="directory holding one cached clone per repository, "
+                         "created and fetched on demand; must be the same path "
+                         "inside the hermes container")
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
     ap.add_argument("--board", default="queues")
     ap.add_argument("--max-per-run", type=_positive_int, default=10)
@@ -240,6 +266,9 @@ def main() -> int:
         # seen before.
         op_id = operation_id(repo, number, head_sha)
         already_staged = _staging_dir_exists(args.work_root / op_id)
+        checkout = ensure_checkout(args.checkout_root, repo, number, base_sha, head_sha)
+        if checkout is None:
+            continue
 
         container = os.environ.get("RALPH_HERMES_CONTAINER")
         graph_cmd = (["docker", "exec", container, "python3",
@@ -249,7 +278,7 @@ def main() -> int:
             [*graph_cmd, "--once",
              "--repo", repo, "--pr", str(number),
              "--base-sha", base_sha, "--head-sha", head_sha,
-             "--checkout", str(args.checkout), "--work-root", str(args.work_root),
+             "--checkout", str(checkout), "--work-root", str(args.work_root),
              "--board", args.board],
             capture_output=True, text=True)
         print(r.stdout, end="")

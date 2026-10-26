@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Review, unattended: discover assigned PRs, build their graphs, publish
+# finished verdicts. One loop, same shape as run-notifier: a crash is a
+# restarting container, not a silently missing cron job.
+#
+# Scope is the allowlist file bootstrap/cutover-repo writes; empty or absent
+# means discover-reviews refuses and nothing is admitted. publish-review is
+# idempotent by its marker, so re-running it on an already-posted card is a
+# no-op; cards are never archived here, because archiving frees their keys
+# and would review the same head again.
+
+set -uo pipefail
+
+BOARD=${RALPH_REVIEW_BOARD:-queues}
+INTERVAL=${RALPH_REVIEW_POLL_SECONDS:-900}
+ALLOW=${RALPH_REVIEW_ALLOWLIST:-/workspaces/review-allowlist.txt}
+CACHE=${RALPH_REPO_CACHE:-/workspaces/repo-cache}
+WORK=${RALPH_REVIEW_WORK:-/workspaces/review-work}
+
+echo "ralph review loop: board=${BOARD} every ${INTERVAL}s allowlist=${ALLOW}"
+
+while true; do
+    python3 /ralph/bootstrap/discover-reviews --allow-file "$ALLOW" \
+        --checkout-root "$CACHE" --work-root "$WORK" --board "$BOARD" --once-for-real \
+        || echo "review loop: discover failed (rc=$?), will retry" >&2
+
+    ids=$(docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" list \
+            --assignee ralph-review-synthesis --status done --json 2>/dev/null \
+          | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(t["id"]) for t in (d if isinstance(d,list) else d.get("tasks",[]))]' \
+          || true)
+    for id in $ids; do
+        python3 /ralph/bootstrap/publish-review --task "$id" --board "$BOARD" --post \
+            || echo "review loop: publish $id returned $?" >&2
+    done
+
+    sleep "$INTERVAL"
+done
