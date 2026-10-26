@@ -1,0 +1,49 @@
+# Writes code, unlike every review lens: a checkout, a terminal, and the same
+# write-capable GH_TOKEN the sandbox already forwards to every profile
+# (compose/docker-compose.yml TERMINAL_DOCKER_FORWARD_ENV). Section 7 of the
+# design: maintenance needs the builder's shape, not the lenses'.
+#
+# terminal, not code_execution. code_execution scrubs any env var whose name
+# contains TOKEN/KEY/SECRET before spawning its kernel, and the intended
+# escape hatch (terminal.env_passthrough) cannot re-allow GH_TOKEN -- it is
+# hardcoded into a provider-credential blocklist meant for model keys
+# (ralph#24). terminal does not scrub the same way, and an interactive
+# session on this profile confirms GH_TOKEN reaches it.
+#
+# Necessary, not sufficient. A real Kanban-dispatched card on this exact
+# profile, same terminal tool, still reports GH_TOKEN absent -- a second,
+# separate gap in the dispatch path itself, not the toolset choice (ralph#25).
+# bootstrap/maintain-pr is written and tested against this gap; a maintainer
+# card will claim the round and correctly report it cannot push until #25 is
+# resolved, which is a safe failure mode (no partial push, one clear block),
+# not a silent one.
+#
+# Anthropic, not openai-api: the model decision named the review specialists
+# and synthesis. Maintenance is the same job as Ralph's builder -- write
+# code, push it -- on the model that already does that job here (dissent 6).
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    - terminal
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  external_dirs:
+    - /ralph/skills/code
+    - /ralph/skills/debug
+  creation_nudge_interval: 0
+agent:
+  max_turns: 120
+  run_budget_seconds: 3600
+  api_max_retries: 0
