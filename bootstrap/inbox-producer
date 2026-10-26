@@ -21,7 +21,7 @@ The idempotency key is the thread id plus its latest message id, so a new
 message on a labeled thread is a new card and an unchanged thread is a
 no-op. Archiving a card frees its key, so archived work runs again.
 """
-import argparse, base64, json, os, pathlib, subprocess, sys
+import argparse, base64, json, os, pathlib, subprocess, sys, tempfile
 
 DEFAULT_QUERY = "in:inbox is:unread -from:me"
 
@@ -54,6 +54,25 @@ def body_text(payload) -> str:
         if text:
             return text
     return ""
+
+
+def stage_once(path: pathlib.Path, text: str, mode: int) -> None:
+    """Write path atomically, only if absent. A unique temp file per call,
+    so two producers never share one; the hard link fails if the other
+    already won, and the existing file is left exactly as it was."""
+    if path.exists():
+        return
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(tmp)
 
 
 def header(msg, name):
@@ -116,17 +135,11 @@ def main() -> int:
         evidence = args.work_root / op_id / "evidence"
         evidence.mkdir(parents=True, exist_ok=True)
         if not (evidence / "thread.json").exists():
-            tmp = evidence / ".thread.json.tmp"
-            tmp.write_text(json.dumps(staged, indent=2))
-            os.replace(tmp, evidence / "thread.json")
-        binding = args.work_root / op_id / ".lens-tools.json"
-        if not binding.exists():
-            tmp = args.work_root / op_id / ".lens-tools.json.tmp"
-            tmp.write_text(json.dumps({"schema_version": 1,
-                                       "evidence_root": str(container_root / op_id / "evidence")},
-                                      separators=(",", ":")))
-            os.chmod(tmp, 0o440)
-            os.replace(tmp, binding)
+            stage_once(evidence / "thread.json", json.dumps(staged, indent=2), 0o644)
+        stage_once(args.work_root / op_id / ".lens-tools.json",
+                   json.dumps({"schema_version": 1,
+                               "evidence_root": str(container_root / op_id / "evidence")},
+                              separators=(",", ":")), 0o440)
 
         # Card body carries ids only; the thread text stays in the workspace.
         r = hermes("kanban", "--board", args.board, "create",
