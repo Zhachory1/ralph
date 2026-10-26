@@ -33,7 +33,8 @@ def fake_pr(repo, number, title="x"):
 
 class AllowlistTests(unittest.TestCase):
     """The rejected alternative is the fleet's board-engine shape: no
-    wildcard, no "all accessible repos" exists anywhere in this script."""
+    "all accessible repos" exists anywhere in this script. owner/* covers
+    one owner only."""
 
     def test_only_allowlisted_repos_are_admitted(self):
         with tempfile.TemporaryDirectory() as d:
@@ -52,6 +53,25 @@ class AllowlistTests(unittest.TestCase):
                 calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
                 self.assertEqual(1, len(calls))
                 self.assertIn("a/allowed", calls[0].args[0])
+
+
+    def test_owner_wildcard_covers_that_owner_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(discover_reviews, "search_assigned_prs",
+                                   return_value=[fake_pr("a/one", 1), fake_pr("a/two", 2),
+                                                 fake_pr("ab/x", 3), fake_pr("b/y", 4)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a")), \
+                mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+                import sys
+                argv = ["discover-reviews", "--allow", "a/*", "--checkout-root", "/x",
+                       "--work-root", d, "--once-for-real"]
+                with mock.patch.object(sys, "argv", argv):
+                    discover_reviews.main()
+                repos = [c.args[0][c.args[0].index("--repo") + 1] for c in run.call_args_list
+                         if "build-review-graph" in " ".join(c.args[0])]
+                self.assertEqual(["a/one", "a/two"], repos)
 
 
 class PerRunCapTests(unittest.TestCase):

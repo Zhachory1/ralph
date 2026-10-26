@@ -115,6 +115,17 @@ class CutoverTests(unittest.TestCase):
             self.assertIn("other/thing", cutover_repo.read_authority(authority))
             self.assertIn("owner/repo", cutover_repo.read_allowlist(allowlist))
 
+    def test_a_whole_owner_grant_moves_as_one_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            authority, allowlist = self._files(d, ["owner/*", "other/*", "owner2/repo"])
+            r = subprocess.run([sys.executable, str(SCRIPT), "--repo", "owner/*",
+                               "--fleet-authority", str(authority),
+                               "--ralph-allowlist", str(allowlist), "--apply"],
+                              capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+            self.assertEqual(["other/*", "owner2/repo"], cutover_repo.read_authority(authority))
+            self.assertEqual(["owner/*"], cutover_repo.read_allowlist(allowlist))
+
     def test_unrelated_repos_are_untouched(self):
         with tempfile.TemporaryDirectory() as d:
             authority, allowlist = self._files(d, ["owner/repo", "owner/other", "third/x"])

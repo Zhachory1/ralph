@@ -55,7 +55,9 @@ import pathlib
 import re
 import sys
 
-REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+# owner/* is accepted: moving a whole owner grant is an exact-entry move, not
+# narrowing -- narrowing (cutting one repo out of a wildcard) stays refused.
+REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/(\*|[A-Za-z0-9._-]+)$")
 
 
 def read_authority(path: pathlib.Path) -> list[str]:
