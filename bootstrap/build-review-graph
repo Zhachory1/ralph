@@ -143,6 +143,12 @@ def main() -> int:
         return body
 
     roles = list(ROLES) + (["security"] if security_relevant else [])
+
+    # No archived-card guard: archiving a completed review's cards is the
+    # operator's own signal that the work should be free to run again, and
+    # create_card()'s --idempotency-key is the only dedup mechanism needed --
+    # a non-archived card with this key is returned unchanged (true no-op);
+    # an archived one is exactly what the operator wants this to rebuild.
     parent_ids = []
     print(f"\nbuilding graph for {op_id} ({'with' if security_relevant else 'without'} security lens)")
     for role in roles:
