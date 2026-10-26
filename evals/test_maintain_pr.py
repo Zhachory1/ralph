@@ -116,8 +116,13 @@ class DailyCapTests(unittest.TestCase):
 
 
 class RoundCapTests(unittest.TestCase):
-    """Three rounds per pull request -- the fleet's cap, kept, so an agent
-    and a reviewer cannot trade rounds indefinitely."""
+    """Two rounds per pull request, lowered from the fleet's three: the
+    operator wants every incoming review fixed, bounded per PR rather than
+    throttled overall, and is willing to escalate to a human one round
+    sooner in exchange for throughput."""
+
+    def test_the_cap_is_two_not_the_fleets_three(self):
+        self.assertEqual(2, maintain_pr.MAX_ROUNDS_PER_PR)
 
     def test_existing_rounds_counts_matching_cards_only(self):
         cards = [

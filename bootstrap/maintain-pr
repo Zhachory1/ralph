@@ -56,7 +56,10 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 STATE_FILE = "maintain-pr-admissions.json"
-MAX_ROUNDS_PER_PR = 3
+MAX_ROUNDS_PER_PR = 2  # every incoming review gets fixed, bounded per PR
+# rather than throttled overall: two rounds of back-and-forth, then a human
+# decides whether a third is warranted. Cheaper to escalate on than the
+# fleet's three, since the operator is optimizing for throughput here.
 MAX_RUNTIME = "3600"
 MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
 # still spends the digest once retried, not twice: the retry runs against
@@ -259,7 +262,10 @@ def main() -> int:
     ap.add_argument("--login", default=None,
                     help="GitHub login to exclude as external; defaults to "
                          "whoever gh authenticates as")
-    ap.add_argument("--daily-cap", type=int, default=10)
+    ap.add_argument("--daily-cap", type=int, default=50)  # every PR with
+    # real feedback gets a round; bounded per-PR by MAX_ROUNDS_PER_PR, not
+    # throttled by a total-per-day count set low on purpose. Concurrency
+    # (kanban.max_in_progress) is the throughput lever, not this.
     args = ap.parse_args()
 
     args.work_root.mkdir(parents=True, exist_ok=True)
