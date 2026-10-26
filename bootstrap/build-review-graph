@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Build one pull request's review graph: four or five cards, explicit, idempotent.
+
+PR 4 of the fleet-into-ralph design. Takes one named pull request and produces
+the graph section 2 describes -- it does not discover pull requests (PR 6) and
+it does not publish anything (PR 5). Run by hand for now, with --once, FROM
+INSIDE the hermes container, where bootstrap/ is mounted and the hermes CLI
+lives:
+
+    docker compose exec hermes python3 /ralph/bootstrap/build-review-graph \
+        --once --repo owner/name --pr 123 \
+        --checkout /some/local/clone/inside/the/container --board queues
+
+A lens reads evidence only from inside its own card workspace --
+bootstrap/lens-tools trusts `LENS_EVIDENCE_ROOT=$HERMES_KANBAN_WORKSPACE/evidence`
+and nothing else -- and a workspace is a path on the hermes container's own
+filesystem. Staging on the host and creating cards from the host, as a first
+version of this script did, produced cards whose evidence_root the container
+could not see: caught by running it against a real board before this script
+shipped, not inferred from reading the code. Each card is created with
+`--workspace dir:<staged path>`, fixed at creation time rather than left to
+the scratch default, so the evidence is already where the lens's workspace
+will be before the lens ever runs.
+
+`hermes kanban swarm` is the obvious tool for "several cards, one goal" and is
+the wrong one here, per the design: it takes one idempotency key for the root
+card only, so a crash mid-graph cannot be guaranteed to recreate the same
+worker set on retry, and it always wants a verifier and a synthesizer, which
+is a different shape from the one this graph needs. So this calls `hermes
+kanban create` once per role, each with its own key:
+
+    <operation-id>-generalist
+    <operation-id>-reliability
+    <operation-id>-mvp
+    <operation-id>-security      (only when a changed path warrants it)
+    <operation-id>-synthesis     (--parent on every card created above)
+
+A second run against the same head is a no-op by construction, not by a check
+this script performs: `--idempotency-key` on an existing non-archived task
+returns that task's id instead of creating a duplicate, so re-running this
+after a crash, or twice by accident, produces the same ids every time.
+Staging is idempotent too (bootstrap/stage-review-evidence), so the directory
+a repeat run points `--workspace dir:` at is the same directory with the same
+content, every time.
+
+Card bodies carry identifiers and a staged-evidence path. Never a diff, never
+a line of code: the design's own privacy rule ("private code must not reach a
+card body, a log, or shared memory") is satisfied by a path staying a path.
+"""
+import argparse
+import json
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+
+ROLES = ("generalist", "reliability", "mvp")
+PROFILE_FOR_ROLE = {
+    "generalist": "ralph-lens-generalist",
+    "reliability": "ralph-lens-reliability",
+    "mvp": "ralph-lens-mvp",
+    "security": "ralph-lens-security",
+}
+# Per-card cost bound, section 5 of the design: 8 minutes, no retry. A timed-
+# out card re-queuing itself is the thing that makes queue spend
+# non-deterministic, which for a review lens is the wrong failure mode.
+MAX_RUNTIME = "480"
+MAX_RETRIES = "1"
+
+
+def hermes(*args):
+    return subprocess.run(["hermes", *args], capture_output=True, text=True)
+
+
+def create_card(board, title, body, assignee, idem_key, workspace_dir, parents=()):
+    args = ["kanban", "--board", board, "create", title,
+           "--body", body, "--assignee", assignee,
+           "--idempotency-key", idem_key,
+           "--workspace", f"dir:{workspace_dir}",
+           "--max-runtime", MAX_RUNTIME, "--max-retries", MAX_RETRIES,
+           "--json"]
+    for p in parents:
+        args += ["--parent", p]
+    r = hermes(*args)
+    if r.returncode != 0:
+        print(f"error creating {idem_key}: {r.stderr.strip()[:300]}", file=sys.stderr)
+        return None
+    try:
+        return json.loads(r.stdout)["id"]
+    except (json.JSONDecodeError, KeyError):
+        print(f"error: unexpected create output for {idem_key}: {r.stdout[:200]}", file=sys.stderr)
+        return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--once", action="store_true", required=True,
+                    help="required, so this is never invoked expecting a loop; "
+                         "PR 6 is the thing that calls this on a schedule")
+    ap.add_argument("--repo", required=True)
+    ap.add_argument("--pr", required=True, type=int)
+    ap.add_argument("--base-sha", required=True)
+    ap.add_argument("--head-sha", required=True)
+    ap.add_argument("--checkout", required=True, type=pathlib.Path,
+                    help="an existing local clone with both SHAs reachable, "
+                         "on the same filesystem this script runs on")
+    ap.add_argument("--work-root", required=True, type=pathlib.Path)
+    ap.add_argument("--board", default="queues")
+    args = ap.parse_args()
+
+    stage = subprocess.run(
+        [sys.executable, str(HERE / "stage-review-evidence"),
+         "--checkout", str(args.checkout), "--repo", args.repo, "--number", str(args.pr),
+         "--base-sha", args.base_sha, "--head-sha", args.head_sha,
+         "--work-root", str(args.work_root)],
+        capture_output=True, text=True)
+    if stage.returncode != 0:
+        print(stage.stderr, file=sys.stderr)
+        return stage.returncode
+    print(stage.stdout, end="")
+
+    op_id = None
+    for line in stage.stdout.splitlines():
+        if line.strip().startswith("operation id:"):
+            op_id = line.split(":", 1)[1].strip()
+    if op_id is None:
+        print("error: could not read operation id from staging output", file=sys.stderr)
+        return 1
+
+    op_root = args.work_root.resolve() / op_id
+    context = json.loads((op_root / "evidence" / "context.json").read_text())
+    security_relevant = context["security_relevant"]
+
+    def body_for(role: str) -> str:
+        body = (f"operation_id: {op_id}\nrepo: {args.repo}\nnumber: {args.pr}\n"
+               f"base_sha: {args.base_sha}\nhead_sha: {args.head_sha}\nrole: {role}\n")
+        if context.get("diff_oversized"):
+            body += (f"note: diff.patch is {context['diff_bytes']:,} bytes, over the "
+                    f"evidence server's per-file read cap. Read it with evidence_search "
+                    f"instead of evidence_read, or report needs-info.\n")
+        return body
+
+    roles = list(ROLES) + (["security"] if security_relevant else [])
+    parent_ids = []
+    print(f"\nbuilding graph for {op_id} ({'with' if security_relevant else 'without'} security lens)")
+    for role in roles:
+        key = f"{op_id}-{role}"
+        card_id = create_card(args.board,
+                              f"{role.capitalize()} review {args.repo}#{args.pr} @ {args.head_sha[:8]}",
+                              body_for(role), PROFILE_FOR_ROLE[role], key, op_root)
+        if card_id is None:
+            return 1
+        print(f"  {role:12} {card_id}  ({key})")
+        parent_ids.append(card_id)
+
+    synth_key = f"{op_id}-synthesis"
+    synth_id = create_card(args.board,
+                           f"Synthesize review {args.repo}#{args.pr} @ {args.head_sha[:8]}",
+                           body_for("synthesis"), "ralph-review-synthesis", synth_key,
+                           op_root, parents=parent_ids)
+    if synth_id is None:
+        return 1
+    print(f"  {'synthesis':12} {synth_id}  ({synth_key})")
+    print(f"\n{len(roles) + 1} cards total. Synthesis is promoted by Hermes once every parent is done.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
