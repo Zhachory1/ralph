@@ -74,6 +74,41 @@ class DigestTests(unittest.TestCase):
         self.assertNotEqual(with_thread, with_check)
 
 
+class ApprovalSupersedesTests(unittest.TestCase):
+    """Only each reviewer's latest review is feedback, and an approval is none."""
+
+    def _snapshot(self, reviews):
+        def fake_gh(*args):
+            if args[:2] == ("api", "graphql"):
+                return mock.Mock(returncode=0, stdout=json.dumps(
+                    {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}))
+            if args[0] == "api":
+                return mock.Mock(returncode=0, stdout=json.dumps(reviews))
+            return mock.Mock(returncode=1, stdout="")
+        with mock.patch.object(maintain_pr, "gh", side_effect=fake_gh):
+            return maintain_pr.feedback_snapshot("a/b", 1, "author")
+
+    def r(self, i, state, who="reviewer"):
+        return {"id": i, "user": {"login": who}, "state": state, "body": f"review {i}"}
+
+    def test_an_approved_pr_has_no_feedback(self):
+        """The live case: canary#6, changes requested, fixed, then approved."""
+        snap = self._snapshot([self.r(1, "CHANGES_REQUESTED"), self.r(2, "APPROVED")])
+        self.assertEqual("empty", maintain_pr.feedback_digest(snap))
+
+    def test_a_later_change_request_is_feedback(self):
+        snap = self._snapshot([self.r(1, "APPROVED"), self.r(2, "CHANGES_REQUESTED")])
+        self.assertEqual([2], [x["id"] for x in snap["reviews"]])
+
+    def test_one_reviewers_approval_does_not_hide_anothers_request(self):
+        snap = self._snapshot([self.r(1, "CHANGES_REQUESTED", "a"), self.r(2, "APPROVED", "b")])
+        self.assertEqual([1], [x["id"] for x in snap["reviews"]])
+
+    def test_a_comment_review_is_still_feedback(self):
+        snap = self._snapshot([self.r(1, "COMMENTED")])
+        self.assertEqual([1], [x["id"] for x in snap["reviews"]])
+
+
 class OperationIdTests(unittest.TestCase):
     def test_deterministic(self):
         a = maintain_pr.operation_id("owner/repo", 1, "digest123")

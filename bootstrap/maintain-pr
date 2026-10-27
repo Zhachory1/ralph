@@ -144,11 +144,20 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     def external(author):
         return isinstance(author, str) and author.lower() != login_lower
 
+    # Each reviewer's latest review only, and none if that is an approval:
+    # a change request a later approval superseded is not feedback to act
+    # on, and neither is the approval. Without this an approved PR got a
+    # maintenance round. GitHub returns reviews oldest first.
+    latest = {}
+    for r in review_list:
+        author = (r.get("user") or {}).get("login")
+        if r.get("id") is not None and external(author) and r.get("state") != "PENDING":
+            latest[author.lower()] = r
     snapshot_reviews = sorted(
         ({"id": r["id"], "author": r["user"]["login"], "body": r["body"],
           "submittedAt": r.get("submitted_at")}
-         for r in review_list
-         if r.get("id") is not None and external(r.get("user", {}).get("login"))
+         for r in latest.values()
+         if r.get("state") != "APPROVED"
          and isinstance(r.get("body"), str) and r["body"].strip()),
         key=lambda x: str(x["id"]))
 
