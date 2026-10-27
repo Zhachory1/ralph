@@ -17,7 +17,6 @@ import subprocess
 import unittest
 
 COMPOSE = pathlib.Path(__file__).resolve().parent.parent / "compose"
-SANDBOX_IMAGE = "nousresearch/hermes-sandbox"
 
 
 def compose(*args, timeout=120):
@@ -39,18 +38,15 @@ def terminal_backend():
 
 
 def live_sandbox():
-    """A running sandbox container, started on demand if none exists."""
-    found = docker(
-        "ps", "--filter", f"ancestor={SANDBOX_IMAGE}:desktop",
-        "--format", "{{.Names}}").stdout.split()
-    if found:
-        return found[0]
+    """A running sandbox container, or None.
 
-    compose("exec", "-T", "hermes", "hermes", "--profile", "ralph-author",
-            "-z", "Run the shell command: true", "--cli", timeout=240)
-    found = docker(
-        "ps", "--filter", f"ancestor={SANDBOX_IMAGE}:desktop",
-        "--format", "{{.Names}}").stdout.split()
+    Found by the label Hermes puts on every sandbox it creates, not by image
+    name: the image is whatever TERMINAL_DOCKER_IMAGE says, and matching a
+    hard-coded upstream name found nothing in this stack, so these tests
+    skipped every run. Never started here: starting one takes a model call,
+    and a test should not spend. Use any profile's shell once and re-run."""
+    found = docker("ps", "--filter", "label=hermes-agent=1",
+                   "--format", "{{.Names}}").stdout.split()
     return found[0] if found else None
 
 
@@ -63,7 +59,7 @@ class SandboxEscapeTests(unittest.TestCase):
             raise unittest.SkipTest("terminal backend is 'local'; no sandbox in use")
         cls.sandbox = live_sandbox()
         if not cls.sandbox:
-            raise unittest.SkipTest("could not start a sandbox container")
+            raise unittest.SkipTest("no running sandbox; use a profile's shell once, then re-run")
 
     def inside(self, script: str) -> str:
         result = docker("exec", self.sandbox, "sh", "-c", script)
@@ -104,12 +100,18 @@ class SandboxScopeTests(unittest.TestCase):
             raise unittest.SkipTest("terminal backend is 'local'; no sandbox in use")
         cls.sandbox = live_sandbox()
         if not cls.sandbox:
-            raise unittest.SkipTest("could not start a sandbox container")
+            raise unittest.SkipTest("no running sandbox; use a profile's shell once, then re-run")
         cls.mounts = json.loads(docker(
             "inspect", cls.sandbox, "--format", "{{json .Mounts}}").stdout or "[]")
 
     def test_every_mount_is_profile_scoped(self):
+        """Profile-scoped, or a public skill lane mounted read-only: the
+        shipped skills under /ralph/skills (external_dirs), never the
+        private overlay and never writable."""
         for mount in self.mounts:
+            if mount["Source"].startswith("/ralph/skills/"):
+                self.assertFalse(mount.get("RW"), mount["Source"])
+                continue
             self.assertIn("/profiles/", mount["Source"], mount["Source"])
 
     def test_writable_mounts_are_workspace_and_home_only(self):
