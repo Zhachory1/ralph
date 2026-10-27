@@ -16,6 +16,10 @@ INTERVAL=${RALPH_REVIEW_POLL_SECONDS:-900}
 ALLOW=${RALPH_REVIEW_ALLOWLIST:-/workspaces/review-allowlist.txt}
 CACHE=${RALPH_REPO_CACHE:-/workspaces/repo-cache}
 WORK=${RALPH_REVIEW_WORK:-/workspaces/review-work}
+# Maintenance pushes code, so it can be scoped tighter than review. Defaults
+# to the review allowlist.
+MAINTAIN_ALLOW=${RALPH_MAINTAIN_ALLOWLIST:-/workspaces/maintain-allowlist.txt}
+[ -f "$MAINTAIN_ALLOW" ] || MAINTAIN_ALLOW=$ALLOW
 
 echo "ralph review loop: board=${BOARD} every ${INTERVAL}s allowlist=${ALLOW}"
 
@@ -36,12 +40,12 @@ while true; do
     # Maintenance: PRs authored by RALPH_MAINTAIN_LOGIN in allowlisted repos.
     # maintain-pr excludes that login's own feedback, so Ralph's reviews (as
     # the stack account) are what it acts on. Unset login: no maintenance.
-    if [ -n "${RALPH_MAINTAIN_LOGIN:-}" ] && [ -s "$ALLOW" ]; then
+    if [ -n "${RALPH_MAINTAIN_LOGIN:-}" ] && [ -s "$MAINTAIN_ALLOW" ]; then
         gh search prs --author "$RALPH_MAINTAIN_LOGIN" --state open --limit 200 \
             --json repository,number --jq '.[] | "\(.repository.nameWithOwner) \(.number)"' 2>/dev/null \
         | while read -r repo num; do
             owner=${repo%%/*}
-            grep -qxF -e "$repo" -e "$owner/*" "$ALLOW" || continue
+            grep -qxF -e "$repo" -e "$owner/*" "$MAINTAIN_ALLOW" || continue
             python3 /ralph/bootstrap/maintain-pr --once --repo "$repo" --pr "$num" \
                 --board "$BOARD" --login "$RALPH_MAINTAIN_LOGIN" \
                 || echo "review loop: maintain $repo#$num returned $?" >&2
