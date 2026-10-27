@@ -42,6 +42,7 @@ class AllowlistTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/allowed", 1), fake_pr("b/not-allowed", 2)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -61,6 +62,7 @@ class AllowlistTests(unittest.TestCase):
                                    return_value=[fake_pr("a/one", 1), fake_pr("a/two", 2),
                                                  fake_pr("ab/x", 3), fake_pr("b/y", 4)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -74,6 +76,38 @@ class AllowlistTests(unittest.TestCase):
                 self.assertEqual(["a/one", "a/two"], repos)
 
 
+class ReviewRoundCapTests(unittest.TestCase):
+    """The only cap: 3 review rounds per PR."""
+
+    def _admitted(self, heads):
+        import sys
+        with tempfile.TemporaryDirectory() as d, \
+            mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[fake_pr("a/repo", 1)]), \
+            mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+            mock.patch.object(discover_reviews, "reviewed_heads", return_value=heads), \
+            mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+            mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real"]
+            with mock.patch.object(sys, "argv", argv):
+                discover_reviews.main()
+            return len([c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])])
+
+    def test_third_round_is_admitted(self):
+        self.assertEqual(1, self._admitted({"a" * 40, "b" * 40}))
+
+    def test_fourth_round_is_skipped(self):
+        self.assertEqual(0, self._admitted({"a" * 40, "b" * 40, "c" * 40}))
+
+    def test_a_head_already_reviewed_is_not_blocked_by_the_cap(self):
+        """Rebuilding an already-reviewed head is idempotent, not a new round."""
+        self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "1" * 40}))
+
+    def test_unreadable_reviews_skip_rather_than_spend(self):
+        self.assertEqual(0, self._admitted(None))
+
+
 class PerRunCapTests(unittest.TestCase):
     """The one remaining admission bound: how many PRs one invocation can
     build, regardless of how many gh search prs returns."""
@@ -82,6 +116,7 @@ class PerRunCapTests(unittest.TestCase):
         import sys
         with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=prs), \
             mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
             mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -140,6 +175,7 @@ class DryRunTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/repo", 1)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
@@ -192,6 +228,7 @@ class RepeatDiscoveryTests(unittest.TestCase):
 
             with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[pr]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -246,6 +283,7 @@ class AllowFileTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/repo", 1)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -282,6 +320,7 @@ class AllowFileTests(unittest.TestCase):
             with mock.patch.object(discover_reviews, "search_assigned_prs",
                                    return_value=[fake_pr("a/repo", 1), fake_pr("b/repo", 2)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "reviewed_heads", return_value=set()), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
                 mock.patch("subprocess.run") as run:
                 run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
