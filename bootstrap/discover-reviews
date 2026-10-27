@@ -127,18 +127,25 @@ def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
     """One cached clone per repository under root, fetched on demand.
 
     Cloned without a working tree -- stage-review-evidence only needs the
-    two commits to diff, never a checked-out file. --checkout-root must be
+    two commits to diff, never a checked-out file -- but with every blob. --checkout-root must be
     the same path inside the hermes container, where build-review-graph
     reads it (the compose stack mounts ./workspaces at /workspaces in both).
     """
     path = root / repo
     if not (path / ".git").exists() and not (path / "HEAD").exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        r = gh("repo", "clone", repo, str(path), "--", "--no-checkout", "--filter=blob:none")
+        # Full objects, not --filter=blob:none: the diff runs later inside the
+        # hermes container, which has no GitHub credential, so a lazy blob
+        # fetch there fails on any private repository.
+        r = gh("repo", "clone", repo, str(path), "--", "--no-checkout")
         if r.returncode != 0:
             print(f"  skip {repo}#{number}: clone failed: {r.stderr.strip()[:200]}", file=sys.stderr)
             return None
-    r = subprocess.run(["git", "-C", str(path), "fetch", "--quiet", "origin",
+    # gh as the credential helper, per call: gh repo clone authenticates
+    # the clone itself but leaves no helper behind, so a plain git fetch of
+    # a private repository fails asking for a username.
+    r = subprocess.run(["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+                        "-C", str(path), "fetch", "--quiet", "origin",
                         base_sha, f"+refs/pull/{number}/head:refs/remotes/pr/{number}"],
                        capture_output=True, text=True, timeout=300)
     if r.returncode != 0:
