@@ -14,6 +14,12 @@ What it writes, under a fresh directory below --work-root:
                                    checkout, only what is staged
         evidence/context.json     repo, number, base_sha, head_sha, and the
                                    changed file list; never code
+        evidence/pr.md            the PR title and description, when
+                                   --pr-text is given
+        evidence/docs/<path>      each repository file the description
+                                   names that ends in .md, read at head_sha:
+                                   the design a PR implements is what tells
+                                   "unfinished" from "out of scope on purpose"
         .lens-tools.json          the binding file bootstrap/lens-tools reads,
                                    mode 0440, owned by the user running this
 
@@ -36,6 +42,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import stat
 import subprocess
 import sys
@@ -43,6 +50,10 @@ import sys
 # bootstrap/lens-tools' own MAX_FILE_BYTES -- kept in sync by the test that
 # imports both, not by eye.
 LENS_TOOLS_MAX_FILE_BYTES = 1_048_576
+MAX_PR_TEXT_BYTES = 65_536
+MAX_DOCS = 5
+# A repo-relative .md path: no leading slash, no "..", no scheme.
+DOC_REF = re.compile(r"(?<![\w./:-])((?:[\w-]+/)*[\w.-]+\.md)(?![\w/])")
 
 
 def operation_id(repo: str, number: int, head_sha: str) -> str:
@@ -69,6 +80,8 @@ def main() -> int:
     ap.add_argument("--base-sha", required=True)
     ap.add_argument("--head-sha", required=True)
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
+    ap.add_argument("--pr-text", type=pathlib.Path,
+                    help="a file holding the PR title and description; untrusted, staged as-is")
     args = ap.parse_args()
 
     for sha in (args.base_sha, args.head_sha):
@@ -103,6 +116,21 @@ def main() -> int:
     names = git("diff", "--name-status", f"{args.base_sha}...{args.head_sha}", "--", cwd=checkout)
     changed = [line.split("\t", 1)[1] for line in names.stdout.splitlines() if "\t" in line]
 
+    docs = []
+    if args.pr_text is not None:
+        text = args.pr_text.read_text()[:MAX_PR_TEXT_BYTES]
+        (evidence / "pr.md").write_text(text)
+        for ref in sorted(set(DOC_REF.findall(text)))[:MAX_DOCS]:
+            # Read from the head commit, never the filesystem: a name in
+            # untrusted text resolves only inside the repository's own tree.
+            blob = git("show", f"{args.head_sha}:{ref}", cwd=checkout)
+            if blob.returncode != 0 or len(blob.stdout) > LENS_TOOLS_MAX_FILE_BYTES:
+                continue
+            dest = evidence / "docs" / ref
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(blob.stdout)
+            docs.append(ref)
+
     context = {
         "repo": args.repo,
         "number": args.number,
@@ -112,6 +140,8 @@ def main() -> int:
         "security_relevant": security_relevant(changed),
         "diff_bytes": diff_bytes,
         "diff_oversized": oversized,
+        "pr_text": args.pr_text is not None,
+        "docs": docs,
     }
     (evidence / "context.json").write_text(json.dumps(context, indent=2, sort_keys=True) + "\n")
 

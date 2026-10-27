@@ -122,6 +122,19 @@ def pr_shas(repo: str, number: int) -> tuple[str, str] | None:
         return None
 
 
+def pr_text(repo: str, number: int) -> str:
+    """Title and description, for the lenses: what the PR says it does and
+    does not do. Empty on failure -- the review still runs on the diff."""
+    r = gh("pr", "view", str(number), "-R", repo, "--json", "title,body")
+    if r.returncode != 0:
+        return ""
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return ""
+    return f"# {data.get('title') or ''}\n\n{data.get('body') or ''}\n"
+
+
 def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
                     head_sha: str) -> pathlib.Path | None:
     """One cached clone per repository under root, fetched on demand.
@@ -313,6 +326,10 @@ def main() -> int:
         checkout = ensure_checkout(args.checkout_root, repo, number, base_sha, head_sha)
         if checkout is None:
             continue
+        # In the work root (shared /workspaces mount), so the container-side
+        # stager can read it.
+        text_file = args.work_root / f".pr-text-{op_id}.md"
+        text_file.write_text(pr_text(repo, number))
 
         container = os.environ.get("RALPH_HERMES_CONTAINER")
         graph_cmd = (["docker", "exec", container, "python3",
@@ -323,7 +340,7 @@ def main() -> int:
              "--repo", repo, "--pr", str(number),
              "--base-sha", base_sha, "--head-sha", head_sha,
              "--checkout", str(checkout), "--work-root", str(args.work_root),
-             "--board", args.board],
+             "--board", args.board, "--pr-text", str(text_file)],
             capture_output=True, text=True)
         print(r.stdout, end="")
         if r.returncode != 0:
