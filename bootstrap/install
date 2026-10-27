@@ -98,6 +98,32 @@ if [ -n "${RALPH_OPENAI_API_KEY:-}" ]; then
     fi
 fi
 
+# The maintainer pushes as the PR author, not as the account that reviews:
+# maintain-pr ignores feedback from its own login, so a maintainer pushing as
+# the reviewer would ignore every Ralph review. A profile-scoped GH_TOKEN in
+# that profile's own .env overrides the stack-wide one for it alone; the
+# explicit docker_forward_env above carries it into the sandbox. Optional:
+# without it the maintainer uses the stack token, as before.
+if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
+    # Through the hermes container, where the profile's .env lives. The token
+    # travels as an env var to the exec, never on a command line.
+    docker exec -i -u hermes -e RALPH_MAINTAIN_TOKEN -e "RALPH_MAINTAIN_LOGIN=${RALPH_MAINTAIN_LOGIN:-}" \
+        "${RALPH_HERMES_CONTAINER:-ralph-hermes-1}" sh -eu -c '
+        f="${HERMES_HOME:-$HOME/.hermes}/profiles/ralph-maintainer/.env"
+        [ -f "$f" ] || exit 0
+        tmp=$(mktemp "$f.XXXXXX")
+        grep -vE "^(GH_TOKEN|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))=" "$f" > "$tmp" || true
+        printf "GH_TOKEN=%s\n" "$RALPH_MAINTAIN_TOKEN" >> "$tmp"
+        if [ -n "$RALPH_MAINTAIN_LOGIN" ]; then
+            for k in AUTHOR COMMITTER; do
+                printf "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s@users.noreply.github.com\n" \
+                    "$k" "$RALPH_MAINTAIN_LOGIN" "$k" "$RALPH_MAINTAIN_LOGIN" >> "$tmp"
+            done
+        fi
+        chmod 600 "$tmp" && mv "$tmp" "$f"'
+    echo "  maintainer pushes with RALPH_MAINTAIN_TOKEN"
+fi
+
 hermes kanban init >/dev/null 2>&1 || true
 if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
     hermes kanban boards create "$BOARD" \

@@ -233,6 +233,8 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_REVIEW_POLL_SECONDS: ${RALPH_REVIEW_POLL_SECONDS:-900}
+      # The PR author maintenance acts for; unset disables maintenance.
+      RALPH_MAINTAIN_LOGIN: ${RALPH_MAINTAIN_LOGIN:-}
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
       RALPH_HERMES_CONTAINER: ralph-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375

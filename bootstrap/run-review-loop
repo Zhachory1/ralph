@@ -33,5 +33,20 @@ while true; do
             || echo "review loop: publish $id returned $?" >&2
     done
 
+    # Maintenance: PRs authored by RALPH_MAINTAIN_LOGIN in allowlisted repos.
+    # maintain-pr excludes that login's own feedback, so Ralph's reviews (as
+    # the stack account) are what it acts on. Unset login: no maintenance.
+    if [ -n "${RALPH_MAINTAIN_LOGIN:-}" ] && [ -s "$ALLOW" ]; then
+        gh search prs --author "$RALPH_MAINTAIN_LOGIN" --state open --limit 200 \
+            --json repository,number --jq '.[] | "\(.repository.nameWithOwner) \(.number)"' 2>/dev/null \
+        | while read -r repo num; do
+            owner=${repo%%/*}
+            grep -qxF -e "$repo" -e "$owner/*" "$ALLOW" || continue
+            python3 /ralph/bootstrap/maintain-pr --once --repo "$repo" --pr "$num" \
+                --board "$BOARD" --login "$RALPH_MAINTAIN_LOGIN" \
+                || echo "review loop: maintain $repo#$num returned $?" >&2
+        done
+    fi
+
     sleep "$INTERVAL"
 done
