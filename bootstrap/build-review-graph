@@ -108,13 +108,15 @@ def main() -> int:
                          "on the same filesystem this script runs on")
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
     ap.add_argument("--board", default="queues")
+    ap.add_argument("--pr-text", type=pathlib.Path, help="passed through to stage-review-evidence")
     args = ap.parse_args()
 
     stage = subprocess.run(
         [sys.executable, str(HERE / "stage-review-evidence"),
          "--checkout", str(args.checkout), "--repo", args.repo, "--number", str(args.pr),
          "--base-sha", args.base_sha, "--head-sha", args.head_sha,
-         "--work-root", str(args.work_root)],
+         "--work-root", str(args.work_root),
+         *(["--pr-text", str(args.pr_text)] if args.pr_text else [])],
         capture_output=True, text=True)
     if stage.returncode != 0:
         print(stage.stderr, file=sys.stderr)

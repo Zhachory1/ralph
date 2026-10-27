@@ -45,13 +45,51 @@ class StageReviewEvidenceTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_it(self):
+    def run_it(self, pr_text=None):
+        extra = []
+        if pr_text is not None:
+            f = self.d / "pr.md"
+            f.write_text(pr_text)
+            extra = ["--pr-text", str(f)]
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--checkout", str(self.checkout),
              "--repo", "example/repo", "--number", "1",
              "--base-sha", self.base_sha, "--head-sha", self.head_sha,
-             "--work-root", str(self.work_root)],
+             "--work-root", str(self.work_root), *extra],
             capture_output=True, text=True)
+
+    def evidence(self):
+        return next(self.work_root.iterdir()) / "evidence"
+
+    def test_pr_text_and_the_doc_it_names_are_staged(self):
+        """The case that produced a false finding: a PR scoped by a design
+        doc, reviewed without seeing either."""
+        (self.checkout / "docs").mkdir()
+        (self.checkout / "docs" / "dd.md").write_text("Callers wire this in a later PR.\n")
+        git("add", "-A", cwd=self.checkout)
+        git("commit", "-q", "-m", "doc", cwd=self.checkout)
+        self.head_sha = git("rev-parse", "HEAD", cwd=self.checkout).stdout.strip()
+        r = self.run_it("# Add filter\n\nImplements docs/dd.md. Wiring is out of scope.\n")
+        self.assertEqual(0, r.returncode, r.stderr)
+        ev = self.evidence()
+        self.assertIn("out of scope", (ev / "pr.md").read_text())
+        self.assertIn("later PR", (ev / "docs" / "docs" / "dd.md").read_text())
+        self.assertEqual(["docs/dd.md"], json.loads((ev / "context.json").read_text())["docs"])
+
+    def test_doc_names_resolve_only_inside_the_repository(self):
+        """Untrusted text naming a path outside the tree, or one that does
+        not exist at head, stages nothing for it."""
+        outside = self.d / "secret.md"
+        outside.write_text("host file\n")
+        r = self.run_it(f"see ../secret.md and {outside} and missing/nope.md\n")
+        self.assertEqual(0, r.returncode, r.stderr)
+        ev = self.evidence()
+        self.assertFalse((ev / "docs").exists())
+        self.assertEqual([], json.loads((ev / "context.json").read_text())["docs"])
+
+    def test_without_pr_text_nothing_extra_is_staged(self):
+        self.assertEqual(0, self.run_it().returncode)
+        self.assertFalse((self.evidence() / "pr.md").exists())
 
     def test_stages_diff_and_context(self):
         r = self.run_it()
