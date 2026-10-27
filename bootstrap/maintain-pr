@@ -95,6 +95,13 @@ def _parse_json_stream(text: str) -> list:
     return results
 
 
+def _comment_approval(review: dict) -> bool:
+    """A review posted as COMMENTED only because GitHub refuses self-approval,
+    whose body says it approves -- the fleet's own convention. Not feedback."""
+    body = review.get("body") or ""
+    return review.get("state") == "COMMENTED" and "Verdict: APPROVE" in body[:2000]
+
+
 def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     """The fleet's own shape, reproduced: external reviews with a body,
     unresolved and not-outdated threads whose comments are external and have
@@ -157,7 +164,7 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
         ({"id": r["id"], "author": r["user"]["login"], "body": r["body"],
           "submittedAt": r.get("submitted_at")}
          for r in latest.values()
-         if r.get("state") != "APPROVED"
+         if r.get("state") != "APPROVED" and not _comment_approval(r)
          and isinstance(r.get("body"), str) and r["body"].strip()),
         key=lambda x: str(x["id"]))
 
