@@ -111,6 +111,16 @@ class ApprovalSupersedesTests(unittest.TestCase):
         r["body"] = "**Verdict: APPROVE** (submitted as COMMENT -- self-authored PR)"
         self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
 
+    def test_a_dismissed_review_is_not_feedback(self):
+        """The live case: canary#5 and #6, a duplicate approval dismissed. A
+        dismissed review asks for nothing, so it must not start a round."""
+        snap = self._snapshot([self.r(1, "DISMISSED")])
+        self.assertEqual("empty", maintain_pr.feedback_digest(snap))
+
+    def test_a_dismissed_approval_does_not_hide_an_earlier_request(self):
+        snap = self._snapshot([self.r(1, "CHANGES_REQUESTED"), self.r(2, "DISMISSED")])
+        self.assertEqual([1], [x["id"] for x in snap["reviews"]])
+
     def test_a_comment_review_is_still_feedback(self):
         snap = self._snapshot([self.r(1, "COMMENTED")])
         self.assertEqual([1], [x["id"] for x in snap["reviews"]])

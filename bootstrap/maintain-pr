@@ -155,10 +155,15 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     # a change request a later approval superseded is not feedback to act
     # on, and neither is the approval. Without this an approved PR got a
     # maintenance round. GitHub returns reviews oldest first.
+    #
+    # DISMISSED is skipped before picking the latest: a dismissed review asks
+    # for nothing, and dismissing a duplicate approval on canary#5 and #6
+    # started a maintenance round on each.
     latest = {}
     for r in review_list:
         author = (r.get("user") or {}).get("login")
-        if r.get("id") is not None and external(author) and r.get("state") != "PENDING":
+        if (r.get("id") is not None and external(author)
+                and r.get("state") not in ("PENDING", "DISMISSED")):
             latest[author.lower()] = r
     snapshot_reviews = sorted(
         ({"id": r["id"], "author": r["user"]["login"], "body": r["body"],
