@@ -1,0 +1,29 @@
+# perso.localhost / work.localhost in front of each instance's UIs.
+# Separate from the instance stacks: either instance can be down or
+# recreated without touching this, and this needs neither instance's env.
+#
+#   docker compose -f compose/proxy/docker-compose.yml up -d
+#
+# Joins each instance's default network to reach its containers by name.
+# Both networks must exist, so start both instances once before this.
+
+name: ralph-proxy
+
+services:
+  nginx:
+    image: nginx:1.29-alpine
+    ports:
+      # Localhost only, like the dashboards behind it.
+      - "127.0.0.1:${RALPH_PROXY_PORT:-80}:80"
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/conf.d/default.conf:ro
+    networks: [personal, work]
+    restart: unless-stopped
+
+networks:
+  personal:
+    external: true
+    name: ralph-personal_default
+  work:
+    external: true
+    name: ralph-work_default

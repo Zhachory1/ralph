@@ -1,0 +1,48 @@
+# One name per instance UI: <instance>.localhost is the dashboard,
+# chat.<instance>.localhost is hermes-webui. *.localhost resolves to
+# 127.0.0.1 in every modern browser and on macOS, so no hosts file.
+#
+# Upstreams resolve at request time through Docker's DNS, so a stopped
+# instance is a 502 for its names, not a proxy that will not start.
+
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+# The upstream each request went to, so routing can be checked from the log.
+log_format routed '$host -> $upstream_addr $status "$request"';
+access_log /dev/stdout routed;
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    # <ui>.<name>.localhost or <name>.localhost; <name> maps to an instance.
+    server_name ~^(?:(?<ui>chat)\.)?(?<name>[a-z0-9-]+)\.localhost$;
+
+    set $instance "";
+    if ($name = perso) { set $instance ralph-personal; }
+    if ($name = work)  { set $instance ralph-work; }
+    if ($instance = "") { return 404 "no Ralph instance named $name\n"; }
+
+    set $upstream "http://$instance-hermes-1:9219";
+    if ($ui = chat) { set $upstream "http://$instance-hermes-webui-1:8787"; }
+
+    location / {
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        # Both UIs stream (chat, live board), so keep upgrades and long reads.
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+}
+
+server {
+    listen 80 default_server;
+    return 404 "unknown host; try perso.localhost or work.localhost\n";
+}
