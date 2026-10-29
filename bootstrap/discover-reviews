@@ -64,6 +64,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -241,17 +242,30 @@ def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
 MAX_ROUNDS = 3
 
 
-def reviewed_heads(repo: str, number: int) -> set[str] | None:
-    """Heads this account has already submitted a review on: one per round.
-    Any review counts, not only marked ones -- the fleet posts under the same
-    account without Ralph's marker, and its rounds are rounds too. None
-    means the read failed."""
+# A moving PR is reviewed at most once per this many hours, then at its
+# latest head: op3#15139 got three reviews in three hours, one per push.
+REVIEW_SPACING_HOURS = float(os.environ.get("RALPH_REVIEW_SPACING_HOURS", "24"))
+
+
+def reviews_by_me(repo: str, number: int) -> dict[str, float] | None:
+    """Heads this account has already submitted a review on, one per round,
+    each with its newest review's epoch time. Any review counts, not only
+    marked ones -- the fleet posts under the same account without Ralph's
+    marker, and its rounds are rounds too. None means the read failed."""
     r = gh("api", "--paginate", f"repos/{repo}/pulls/{number}/reviews", "--jq",
            f'.[] | select(.state != "PENDING") | select(.user.login == "{_login()}") '
-           f'| .commit_id')
+           f'| "\\(.commit_id) \\(.submitted_at)"')
     if r.returncode != 0:
         return None
-    return set(r.stdout.split())
+    heads: dict[str, float] = {}
+    for line in r.stdout.splitlines():
+        sha, _, at = line.partition(" ")
+        try:
+            when = datetime.datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            when = 0.0
+        heads[sha] = max(heads.get(sha, 0.0), when)
+    return heads
 
 
 _LOGIN = None
@@ -374,13 +388,21 @@ def main() -> int:
             print(f"  skip {repo}#{number}: could not read base/head SHAs", file=sys.stderr)
             continue
         base_sha, head_sha = shas
-        heads = reviewed_heads(repo, number)
+        heads = reviews_by_me(repo, number)
         if heads is None:
             print(f"  skip {repo}#{number}: could not read its reviews", file=sys.stderr)
             continue
         if head_sha not in heads and len(heads) >= MAX_ROUNDS:
             print(f"  skip {repo}#{number}: review cap reached ({len(heads)} rounds)")
             continue
+        # Waits rather than skips: the PR is found again next pass, and the
+        # head it is reviewed at is whichever is latest by then.
+        if head_sha not in heads and heads:
+            since = (time.time() - max(heads.values())) / 3600
+            if since < REVIEW_SPACING_HOURS:
+                print(f"  wait {repo}#{number}: reviewed {since:.1f}h ago, "
+                      f"next review after {REVIEW_SPACING_HOURS:g}h")
+                continue
         print(f"  {repo}#{number} @ {head_sha[:8]}")
         if not args.once_for_real:
             continue
