@@ -340,5 +340,50 @@ class AllowFileTests(unittest.TestCase):
                 self.assertEqual(2, len(calls), "both a/repo and b/repo should be admitted")
 
 
+class CloneTimeoutTests(unittest.TestCase):
+    """The live case: ROKT/ml took longer than gh's 90s to clone, the
+    TimeoutExpired escaped, and the whole pass crashed -- every pass, since
+    the next one hit the same clone first."""
+
+    def test_a_gh_timeout_is_a_failed_call_not_an_exception(self):
+        import subprocess
+        with mock.patch("subprocess.run",
+                        side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=90)):
+            r = discover_reviews.gh("repo", "clone", "o/r", "/x")
+        self.assertNotEqual(0, r.returncode)
+
+    def test_clone_gets_the_long_timeout(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 1, "", "x")) as run:
+            discover_reviews.ensure_checkout(pathlib.Path(d), "o/r", 1, "a" * 40, "b" * 40)
+        self.assertEqual(discover_reviews.CLONE_TIMEOUT, run.call_args.kwargs["timeout"])
+
+    def test_a_failed_clone_leaves_nothing_behind(self):
+        """A half-written clone has .git, so the next pass would skip the
+        clone and fetch into a broken repository forever."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+
+            def half_clone(argv, **kw):
+                (root / "o" / "r" / ".git").mkdir(parents=True)
+                raise subprocess.TimeoutExpired(cmd="gh", timeout=kw["timeout"])
+
+            with mock.patch("subprocess.run", side_effect=half_clone):
+                self.assertIsNone(discover_reviews.ensure_checkout(root, "o/r", 1, "a" * 40, "b" * 40))
+            self.assertFalse((root / "o" / "r").exists())
+
+    def test_a_fetch_timeout_skips_the_pr(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / "o" / "r" / ".git").mkdir(parents=True)
+            with mock.patch("subprocess.run",
+                            side_effect=subprocess.TimeoutExpired(cmd="git", timeout=300)):
+                self.assertIsNone(discover_reviews.ensure_checkout(root, "o/r", 1, "a" * 40, "b" * 40))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

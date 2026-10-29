@@ -61,6 +61,7 @@ import datetime
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -84,8 +85,17 @@ def hermes_argv(*args):
     return ["hermes", *args]
 
 
-def gh(*args) -> subprocess.CompletedProcess:
-    return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=90)
+def gh(*args, timeout: int = 90) -> subprocess.CompletedProcess:
+    """A timeout is a failed call, not an exception: one slow clone of a
+    large repository (ROKT/ml) used to crash the whole pass, every pass."""
+    try:
+        return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr=f"gh timed out after {timeout}s")
+
+
+# A first clone of a multi-GB repository takes minutes, not seconds.
+CLONE_TIMEOUT = 1200
 
 
 def search_assigned_prs(max_age_days: int) -> list[dict] | None:
@@ -150,17 +160,23 @@ def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
         # Full objects, not --filter=blob:none: the diff runs later inside the
         # hermes container, which has no GitHub credential, so a lazy blob
         # fetch there fails on any private repository.
-        r = gh("repo", "clone", repo, str(path), "--", "--no-checkout")
+        r = gh("repo", "clone", repo, str(path), "--", "--no-checkout", timeout=CLONE_TIMEOUT)
         if r.returncode != 0:
             print(f"  skip {repo}#{number}: clone failed: {r.stderr.strip()[:200]}", file=sys.stderr)
+            # A half-written clone has .git, so the next pass would skip the
+            # clone and fetch into a broken repository.
+            shutil.rmtree(path, ignore_errors=True)
             return None
     # gh as the credential helper, per call: gh repo clone authenticates
     # the clone itself but leaves no helper behind, so a plain git fetch of
     # a private repository fails asking for a username.
-    r = subprocess.run(["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
-                        "-C", str(path), "fetch", "--quiet", "origin",
-                        base_sha, f"+refs/pull/{number}/head:refs/remotes/pr/{number}"],
-                       capture_output=True, text=True, timeout=300)
+    try:
+        r = subprocess.run(["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+                            "-C", str(path), "fetch", "--quiet", "origin",
+                            base_sha, f"+refs/pull/{number}/head:refs/remotes/pr/{number}"],
+                           capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        r = subprocess.CompletedProcess([], 1, stdout="", stderr="git fetch timed out after 300s")
     if r.returncode != 0:
         print(f"  skip {repo}#{number}: fetch failed: {r.stderr.strip()[:200]}", file=sys.stderr)
         return None
