@@ -14,6 +14,11 @@ compose/workspaces-*/
 # the repository holds 50 skills and the mounted tree resolves 53. Each
 # install leaves a .third-party.json naming its upstream and commit.
 skills/*/*/.third-party.json
+# Fetched by install-third-party-skills at the pinned commit; never committed.
+skills/voice/stop-slop/
+skills/voice/caveman/
+skills/debug/debug-investigation/
+skills/review/pr-review/
 skills/write/stop-slop/
 skills/debug/debug-investigation/
 skills/review/pr-review/

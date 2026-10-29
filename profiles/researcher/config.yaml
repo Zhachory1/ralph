@@ -26,6 +26,8 @@ auxiliary:
   background_review:
     enabled: false
 skills:
+  external_dirs:
+    - /ralph/skills/voice
   # No lane. This profile's work is reading and reporting, and an
   # index it never uses is prompt it always pays for.
   creation_nudge_interval: 0

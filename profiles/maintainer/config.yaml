@@ -40,6 +40,7 @@ auxiliary:
     enabled: false
 skills:
   external_dirs:
+    - /ralph/skills/voice
     - /ralph/skills/code
     - /ralph/skills/debug
   creation_nudge_interval: 0

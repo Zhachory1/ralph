@@ -157,6 +157,11 @@ def install(entry: dict, check: bool) -> tuple[str, str]:
 
         staged = pathlib.Path(tmp) / "staged"
         shutil.copytree(src, staged, ignore=shutil.ignore_patterns(".git"))
+        # A subdir install leaves the repository's LICENSE and NOTICE behind;
+        # Apache-2.0 requires the NOTICE to travel with the copy.
+        for legal in ("LICENSE", "NOTICE"):
+            if (clone / legal).is_file() and not (staged / legal).exists():
+                shutil.copy(clone / legal, staged / legal)
         (staged / STAMP).write_text(json.dumps({
             "name": name,
             "upstream": entry["upstream"],

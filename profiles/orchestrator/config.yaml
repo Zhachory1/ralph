@@ -28,6 +28,7 @@ auxiliary:
     enabled: false
 skills:
   external_dirs:
+    - /ralph/skills/voice
     - /ralph/skills/plan
     - /ralph/skills/meta
   creation_nudge_interval: 0

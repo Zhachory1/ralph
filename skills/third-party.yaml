@@ -2,8 +2,8 @@
 #
 # Rule 2 of skills/README.md: a skill with a LICENSE naming another copyright
 # holder, or a git remote outside this account, is pinned here instead of being
-# copied into a lane. The repository holds 50 skills; the mounted tree resolves
-# 53, because these three are fetched at build time into the lane named below.
+# copied into a lane. The skills listed here are fetched at build time into
+# the lane each names, so the mounted tree holds more than the repository does.
 #
 # Pins are commits, not tags or branches, so what the agents load is the thing
 # that was reviewed rather than whatever upstream has since become.
@@ -13,11 +13,21 @@
 
 skills:
   - name: stop-slop
-    lane: write
+    lane: voice
     upstream: https://github.com/hardikpandya/stop-slop
     commit: 8da1f030185bdfe8471220585162991eaeb970e9
     license: MIT
     copyright: Hardik Pandya
+
+  - name: caveman
+    lane: voice
+    upstream: https://github.com/JuliusBrussee/caveman
+    # The skill only. The upstream also ships Claude Code hooks and commands;
+    # Ralph loads skills, not plugins, so none of those come along.
+    subdir: skills/caveman
+    commit: 9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4
+    license: Apache-2.0
+    copyright: Julius Brussee
 
   - name: debug-investigation
     lane: debug
