@@ -141,7 +141,7 @@ def main() -> int:
         if context.get("diff_oversized"):
             body += (f"note: diff.patch is {context['diff_bytes']:,} bytes, over the "
                     f"evidence server's per-file read cap. Read it with evidence_search "
-                    f"instead of evidence_read, or report needs-info.\n")
+                    f"instead of evidence_read.\n")
         return body
 
     roles = list(ROLES) + (["security"] if security_relevant else [])
