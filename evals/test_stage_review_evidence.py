@@ -17,6 +17,13 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "bootstrap" / "stage-review-evidence"
 
+import importlib.machinery  # noqa: E402
+import importlib.util  # noqa: E402
+_loader = importlib.machinery.SourceFileLoader("stage_review_evidence", str(SCRIPT))
+_spec = importlib.util.spec_from_loader("stage_review_evidence", _loader)
+stage = importlib.util.module_from_spec(_spec)
+_loader.exec_module(stage)
+
 
 def git(*args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
@@ -45,12 +52,20 @@ class StageReviewEvidenceTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_it(self, pr_text=None):
+    def run_it(self, pr_text=None, checks=None, threads=None):
         extra = []
         if pr_text is not None:
             f = self.d / "pr.md"
             f.write_text(pr_text)
             extra = ["--pr-text", str(f)]
+        if checks is not None:
+            f = self.d / "checks.json"
+            f.write_text(checks)
+            extra += ["--checks", str(f)]
+        if threads is not None:
+            f = self.d / "threads.md"
+            f.write_text(threads)
+            extra += ["--threads", str(f)]
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--checkout", str(self.checkout),
              "--repo", "example/repo", "--number", "1",
@@ -86,6 +101,33 @@ class StageReviewEvidenceTests(unittest.TestCase):
         ev = self.evidence()
         self.assertFalse((ev / "docs").exists())
         self.assertEqual([], json.loads((ev / "context.json").read_text())["docs"])
+
+    def test_checks_and_threads_are_staged(self):
+        """Lenses asked for CI results and review discussion they could not
+        see; both were on the PR, never staged."""
+        checks = '[{"name": "Validate", "bucket": "pass"}]'
+        r = self.run_it(checks=checks, threads="## reviewer\nlooks fine\n")
+        self.assertEqual(0, r.returncode, r.stderr)
+        ev = self.evidence()
+        self.assertEqual(checks, (ev / "checks.json").read_text())
+        self.assertIn("looks fine", (ev / "threads.md").read_text())
+        ctx = json.loads((ev / "context.json").read_text())
+        self.assertTrue(ctx["checks"])
+        self.assertTrue(ctx["threads"])
+
+    def test_oversized_threads_are_cut_not_dropped(self):
+        big = "x" * (stage.MAX_THREADS_BYTES + 5000)
+        self.assertEqual(0, self.run_it(threads=big).returncode)
+        self.assertEqual(stage.MAX_THREADS_BYTES, len((self.evidence() / "threads.md").read_text()))
+
+    def test_without_checks_or_threads_neither_file_exists(self):
+        self.assertEqual(0, self.run_it().returncode)
+        ev = self.evidence()
+        self.assertFalse((ev / "checks.json").exists())
+        self.assertFalse((ev / "threads.md").exists())
+        ctx = json.loads((ev / "context.json").read_text())
+        self.assertFalse(ctx["checks"])
+        self.assertFalse(ctx["threads"])
 
     def test_without_pr_text_nothing_extra_is_staged(self):
         self.assertEqual(0, self.run_it().returncode)

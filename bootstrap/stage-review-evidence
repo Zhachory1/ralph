@@ -20,6 +20,12 @@ What it writes, under a fresh directory below --work-root:
                                    names that ends in .md, read at head_sha:
                                    the design a PR implements is what tells
                                    "unfinished" from "out of scope on purpose"
+        evidence/checks.json      CI checks on head_sha (name, outcome,
+                                   link; never logs), when --checks is given
+        evidence/threads.md       review threads and comments by people
+                                   other than this instance's account, when
+                                   --threads is given. Lenses asked for both
+                                   as missing evidence before they were staged.
         .lens-tools.json          the binding file bootstrap/lens-tools reads,
                                    mode 0440, owned by the user running this
 
@@ -51,6 +57,8 @@ import sys
 # imports both, not by eye.
 LENS_TOOLS_MAX_FILE_BYTES = 1_048_576
 MAX_PR_TEXT_BYTES = 65_536
+MAX_CHECKS_BYTES = 65_536
+MAX_THREADS_BYTES = 131_072
 MAX_DOCS = 5
 # A repo-relative .md path: no leading slash, no "..", no scheme.
 DOC_REF = re.compile(r"(?<![\w./:-])((?:[\w-]+/)*[\w.-]+\.md)(?![\w/])")
@@ -82,6 +90,10 @@ def main() -> int:
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
     ap.add_argument("--pr-text", type=pathlib.Path,
                     help="a file holding the PR title and description; untrusted, staged as-is")
+    ap.add_argument("--checks", type=pathlib.Path,
+                    help="a JSON file of CI checks on head_sha; untrusted, staged as-is")
+    ap.add_argument("--threads", type=pathlib.Path,
+                    help="a markdown file of review threads and comments; untrusted, staged as-is")
     args = ap.parse_args()
 
     for sha in (args.base_sha, args.head_sha):
@@ -131,6 +143,14 @@ def main() -> int:
             dest.write_text(blob.stdout)
             docs.append(ref)
 
+    # Untrusted like pr.md, and cut to a size a lens can read whole.
+    staged = {}
+    for name, src, cap in (("checks.json", args.checks, MAX_CHECKS_BYTES),
+                           ("threads.md", args.threads, MAX_THREADS_BYTES)):
+        staged[name] = src is not None
+        if src is not None:
+            (evidence / name).write_text(src.read_text()[:cap])
+
     context = {
         "repo": args.repo,
         "number": args.number,
@@ -142,6 +162,8 @@ def main() -> int:
         "diff_oversized": oversized,
         "pr_text": args.pr_text is not None,
         "docs": docs,
+        "checks": staged["checks.json"],
+        "threads": staged["threads.md"],
     }
     (evidence / "context.json").write_text(json.dumps(context, indent=2, sort_keys=True) + "\n")
 

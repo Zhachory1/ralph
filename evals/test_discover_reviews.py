@@ -385,5 +385,59 @@ class CloneTimeoutTests(unittest.TestCase):
                 self.assertIsNone(discover_reviews.ensure_checkout(root, "o/r", 1, "a" * 40, "b" * 40))
 
 
+class ChecksAndThreadsTests(unittest.TestCase):
+    """Lenses asked for CI results and review discussion that were on the PR
+    but never staged. These fetch both; a failure only drops that file."""
+
+    def gh_returning(self, stdout, code=0):
+        import subprocess
+        return mock.patch.object(discover_reviews, "gh",
+                                 return_value=subprocess.CompletedProcess([], code, stdout, ""))
+
+    def test_checks_are_kept_even_while_pending(self):
+        """gh exits 8 while checks are pending; its JSON is still valid."""
+        with self.gh_returning('[{"name": "Validate", "bucket": "pending"}]', code=8):
+            out = discover_reviews.pr_checks("o/r", 1)
+        self.assertIn("Validate", out)
+
+    def test_unreadable_checks_are_none(self):
+        with self.gh_returning("not json", code=1):
+            self.assertIsNone(discover_reviews.pr_checks("o/r", 1))
+
+    def graphql(self, threads=(), comments=(), reviews=()):
+        import json
+        return json.dumps({"data": {"repository": {"pullRequest": {
+            "reviewThreads": {"nodes": list(threads)},
+            "comments": {"nodes": list(comments)},
+            "reviews": {"nodes": list(reviews)}}}}})
+
+    def test_own_account_is_excluded(self):
+        """Re-reading its own earlier findings would echo them back as someone else's."""
+        body = self.graphql(
+            comments=[{"author": {"login": "zhach1"}, "body": "mine"},
+                      {"author": {"login": "colleague"}, "body": "theirs"}],
+            reviews=[{"author": {"login": "ZHACH1"}, "state": "COMMENTED", "body": "mine too"}],
+            threads=[{"isResolved": False, "isOutdated": False, "path": "a.py", "line": 3,
+                      "comments": {"nodes": [{"author": {"login": "zhach1"}, "body": "x"}]}}])
+        with self.gh_returning(body), mock.patch.object(discover_reviews, "_login", return_value="zhach1"):
+            out = discover_reviews.pr_threads("o/r", 1)
+        self.assertIn("theirs", out)
+        self.assertNotIn("mine", out)
+        self.assertNotIn("a.py", out, "a thread with only our own comments is dropped")
+
+    def test_thread_state_is_shown(self):
+        body = self.graphql(threads=[{"isResolved": True, "isOutdated": False, "path": "a.py",
+                                      "line": 3, "comments": {"nodes": [
+                                          {"author": {"login": "c"}, "body": "fix this"}]}}])
+        with self.gh_returning(body), mock.patch.object(discover_reviews, "_login", return_value="me"):
+            out = discover_reviews.pr_threads("o/r", 1)
+        self.assertIn("a.py:3 (resolved)", out)
+        self.assertIn("fix this", out)
+
+    def test_a_failed_read_is_none(self):
+        with self.gh_returning("", code=1):
+            self.assertIsNone(discover_reviews.pr_threads("o/r", 1))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
