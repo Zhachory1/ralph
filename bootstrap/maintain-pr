@@ -69,7 +69,12 @@ MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
 
 
 def gh(*args) -> subprocess.CompletedProcess:
-    return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=90)
+    """A timeout is a failed read, not an exception: run-review-loop calls
+    this once per PR, and an uncaught TimeoutExpired skipped the rest."""
+    try:
+        return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="gh timed out after 90s")
 
 
 def hermes(*args) -> subprocess.CompletedProcess:
