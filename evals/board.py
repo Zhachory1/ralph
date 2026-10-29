@@ -8,21 +8,33 @@ CLI behaviour fails a test instead of surprising a live run.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 
 class Board:
-    def __init__(self, slug: str, binary: str = "hermes"):
+    """A board by slug, or a private database file when ``db_path`` is set.
+
+    The gateway's dispatcher ticks every board it can list, so a card on a
+    listed board is claimed and spawned by a real worker within seconds,
+    mid-test. A private file is never listed, so only ``dispatch --dry-run``
+    ever sees its cards. ``--board`` outranks ``HERMES_KANBAN_DB``, so it is
+    omitted when pinning.
+    """
+
+    def __init__(self, slug: str, binary: str = "hermes", db_path: str | None = None):
         self.slug = slug
         self.binary = binary
+        self.db_path = db_path
 
     def run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [self.binary, "kanban", "--board", self.slug, *args],
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+        if self.db_path:
+            argv = [self.binary, "kanban", *args]
+            env = {**os.environ, "HERMES_KANBAN_DB": self.db_path}
+        else:
+            argv = [self.binary, "kanban", "--board", self.slug, *args]
+            env = None
+        return subprocess.run(argv, capture_output=True, text=True, check=check, env=env)
 
     def json(self, *args: str):
         out = self.run(*args, "--json").stdout.strip()
