@@ -121,5 +121,49 @@ class DeclarationTests(unittest.TestCase):
             self.assertNotIn(forbidden, declared, forbidden)
 
 
+class VoiceTests(unittest.TestCase):
+    """Every profile is Ralph, mounts the voice lane, and writes for its
+    reader: lenses talk to agents (caveman), everything else may reach a
+    person (simplified-technical-english and stop-slop)."""
+
+    AGENT_ONLY = {"lens-generalist", "lens-mvp", "lens-reliability", "lens-security"}
+    VOICE = ("caveman", "stop-slop", "simplified-technical-english", "i-have-adhd")
+
+    def profiles(self):
+        return sorted(p for p in (ROOT / "profiles").iterdir() if (p / "SOUL.md").is_file())
+
+    def test_there_are_profiles(self):
+        self.assertGreaterEqual(len(self.profiles()), 16)
+
+    def test_every_profile_mounts_the_voice_lane(self):
+        for p in self.profiles():
+            with self.subTest(profile=p.name):
+                self.assertIn("/ralph/skills/voice", (p / "config.yaml").read_text())
+
+    def test_every_profile_is_known_as_ralph(self):
+        for p in self.profiles():
+            with self.subTest(profile=p.name):
+                self.assertIn("You are Ralph", (p / "SOUL.md").read_text())
+
+    def test_voice_follows_the_reader(self):
+        for p in self.profiles():
+            soul = (p / "SOUL.md").read_text()
+            with self.subTest(profile=p.name):
+                self.assertIn("i-have-adhd", soul)
+                if p.name in self.AGENT_ONLY:
+                    self.assertIn("Follow the `caveman`", soul)
+                else:
+                    self.assertIn("simplified-technical-english", soul)
+                    self.assertIn("Do not use `caveman`", soul)
+
+    def test_the_voice_lane_holds_the_four_skills(self):
+        lane = ROOT / "skills" / "voice"
+        tracked = {d.name for d in lane.iterdir() if d.is_dir()}
+        manifest = (ROOT / "skills" / "third-party.yaml").read_text()
+        for s in self.VOICE:
+            with self.subTest(skill=s):
+                self.assertTrue(s in tracked or f"name: {s}\n    lane: voice" in manifest)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

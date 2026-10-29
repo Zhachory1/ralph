@@ -24,6 +24,7 @@ auxiliary:
     enabled: false
 skills:
   external_dirs:
+    - /ralph/skills/voice
     - /ralph/skills/code
     - /ralph/skills/debug
     - /ralph/skills/ui

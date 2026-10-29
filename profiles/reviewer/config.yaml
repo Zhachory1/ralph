@@ -24,6 +24,7 @@ auxiliary:
     enabled: false
 skills:
   external_dirs:
+    - /ralph/skills/voice
     - /ralph/skills/review
   creation_nudge_interval: 0
 agent:

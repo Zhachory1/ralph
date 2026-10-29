@@ -24,6 +24,7 @@ auxiliary:
     enabled: false
 skills:
   external_dirs:
+    - /ralph/skills/voice
     - /ralph/skills/plan
     - /ralph/skills/write
   # Tier 2: shadows a public skill of the same name, deterministically.

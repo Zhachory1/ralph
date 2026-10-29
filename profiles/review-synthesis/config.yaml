@@ -45,6 +45,8 @@ mcp_servers:
       # by omitting it from another profile's include list alone.
       include: [evidence_read, evidence_search, kanban_show, kanban_parent_handoffs, kanban_heartbeat, kanban_complete, kanban_block]
 skills:
+  external_dirs:
+    - /ralph/skills/voice
   creation_nudge_interval: 0
 agent:
   disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]

@@ -58,6 +58,7 @@ and not a list.
 | Lane | For |
 | --- | --- |
 | `plan/` | Deciding what to do: planning, prompts, deliberation, session continuity |
+| `voice/` | How every profile writes: mounted by all of them, nothing else lives here |
 | `write/` | Producing prose: documents, summaries, controlled language |
 | `code/` | Changing code: tests, shipping, branches, pull requests |
 | `debug/` | Finding out why something is broken, per stack |
