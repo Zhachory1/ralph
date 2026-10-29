@@ -35,11 +35,16 @@ check, sorted and canonicalized, into one digest. Two runs with the same
 digest are the same operation -- an idempotent re-run of a round already
 underway, not a new one -- and get the same card, not a second one.
 
-A CIRCUIT BREAKER, NOT A CAP. More than BREAKER_ROUNDS rounds for one PR in
-BREAKER_WINDOW_SECONDS means something is looping -- usually CI failures
-that change every run -- not a reviewer at human pace. The next round is
-created blocked instead of runnable, and one chat alert goes out. A human
-unblocks the card to let it run. Rounds are not limited otherwise.
+BOTS ARE NOT FEEDBACK. A review or comment from a GitHub App or bot account
+(type Bot) never starts a round. On op3#15144, claude[bot] re-reviewed every
+push Ralph made and each review started another round: 9 of 11 in a day.
+Ralph's own reviewers still read bot findings from the staged threads.
+
+A CIRCUIT BREAKER, NOT A CAP. When the last BREAKER_ROUNDS rounds all
+answered the same human feedback, Ralph is looping on its own pushes or on
+CI, not on a person. The next round is created blocked, and one chat alert
+goes out; a human unblocks it. New human feedback always runs, so a busy PR
+with people reviewing never trips this. Rounds are not limited otherwise.
 
 NO CAP HERE, BY DIRECT INSTRUCTION. The one cap in this design is on review,
 3 rounds per pull request, where a new round is bounded because the fleet's
@@ -57,12 +62,10 @@ import os
 import pathlib
 import subprocess
 import sys
-import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 MAX_RUNTIME = "3600"
-BREAKER_ROUNDS = int(os.environ.get("RALPH_MAINTAIN_BREAKER_ROUNDS", "5"))
-BREAKER_WINDOW_SECONDS = 24 * 3600
+BREAKER_ROUNDS = int(os.environ.get("RALPH_MAINTAIN_BREAKER_ROUNDS", "3"))
 MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
 # still spends the digest once retried, not twice: the retry runs against
 # the same card and the same idempotency key, not a second card.
@@ -133,7 +136,7 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
             'repository(owner:$owner,name:$name){pullRequest(number:$number){'
             'reviewThreads(first:100,after:$endCursor){nodes{'
             'id isResolved isOutdated '
-            'comments(last:100){nodes{id databaseId author{login} body createdAt updatedAt}}'
+            'comments(last:100){nodes{id databaseId author{login __typename} body createdAt updatedAt}}'
             '} pageInfo{hasNextPage endCursor}}'
             '}}}')
     owner, name = repo.split("/", 1)
@@ -165,6 +168,13 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     def external(author):
         return isinstance(author, str) and author.lower() != login_lower
 
+    def is_bot(user) -> bool:
+        # REST says type "Bot" and keeps the [bot] suffix; GraphQL says
+        # __typename "Bot" and drops it. Either marks an app, not a person.
+        user = user or {}
+        return (user.get("type") == "Bot" or user.get("__typename") == "Bot"
+                or str(user.get("login") or "").endswith("[bot]"))
+
     # Each reviewer's latest review only, and none if that is an approval:
     # a change request a later approval superseded is not feedback to act
     # on, and neither is the approval. Without this an approved PR got a
@@ -176,7 +186,7 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     latest = {}
     for r in review_list:
         author = (r.get("user") or {}).get("login")
-        if (r.get("id") is not None and external(author)
+        if (r.get("id") is not None and external(author) and not is_bot(r.get("user"))
                 and r.get("state") not in ("PENDING", "DISMISSED")):
             latest[author.lower()] = r
     snapshot_reviews = sorted(
@@ -198,6 +208,7 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
              for c in t.get("comments", {}).get("nodes", [])
              if isinstance(c.get("id"), str)
              and external(c.get("author", {}).get("login") if c.get("author") else None)
+             and not is_bot(c.get("author"))
              and isinstance(c.get("body"), str) and c["body"].strip()),
             key=lambda x: (x["id"], str(x["databaseId"])))
         if comments:
@@ -257,13 +268,21 @@ def prior_rounds(board: str, repo: str, number: int) -> list[dict] | None:
     return [c for c in cards if needle in (c.get("body") or "")]
 
 
-def breaker_tripped(cards: list[dict] | None, now: float) -> bool:
-    if cards is None:
+def human_digest(snapshot: dict) -> str:
+    """The digest of the people's part of the feedback: reviews and thread
+    comments, not CI. It changes only when a person says something new."""
+    return feedback_digest({"reviews": snapshot["reviews"], "threads": snapshot["threads"],
+                            "checks": []})
+
+
+def breaker_tripped(cards: list[dict] | None, human: str) -> bool:
+    """True when the last BREAKER_ROUNDS rounds, and this one, all answer the
+    same human feedback. Cards from before human_digest was recorded carry
+    none, so they cannot prove a loop."""
+    if cards is None or len(cards) < BREAKER_ROUNDS:
         return False
-    recent = [c for c in cards
-              if isinstance(c.get("created_at"), (int, float))
-              and now - c["created_at"] < BREAKER_WINDOW_SECONDS]
-    return len(recent) >= BREAKER_ROUNDS
+    last = sorted(cards, key=lambda c: c.get("created_at") or 0)[-BREAKER_ROUNDS:]
+    return all(f"human_digest: {human}\n" in (c.get("body") or "") for c in last)
 
 
 def notify(text: str) -> None:
@@ -320,7 +339,8 @@ def main() -> int:
     # Never re-trip on a re-run of the same feedback: its card already exists.
     already = cards is not None and any(f"operation_id: {op_id}\n" in (c.get("body") or "")
                                         for c in cards)
-    hold = not already and breaker_tripped(cards, time.time())
+    human = human_digest(snapshot)
+    hold = not already and breaker_tripped(cards, human)
 
     pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json", "headRefOid,headRefName")
     if pr_view.returncode != 0:
@@ -331,7 +351,7 @@ def main() -> int:
 
     body = (f"operation_id: {op_id}\nrepo: {args.repo}\nnumber: {args.pr}\n"
            f"head_sha: {head_sha}\nhead_branch: {head_branch}\n"
-           f"feedback_digest: {digest}\nround: {round_label}\n")
+           f"feedback_digest: {digest}\nhuman_digest: {human}\nround: {round_label}\n")
 
     r = hermes("kanban", "--board", args.board, "create",
               f"Maintain {args.repo}#{args.pr} round {round_label} @ {head_sha[:8]}",
@@ -351,14 +371,15 @@ def main() -> int:
     if hold:
         # Blocked right after create: the dispatcher can claim a ready card on
         # its next tick, so this narrows the window rather than closing it.
-        reason = (f"circuit breaker: {BREAKER_ROUNDS}+ maintenance rounds on "
-                  f"{args.repo}#{args.pr} in 24h. Unblock to let this round run.")
+        reason = (f"circuit breaker: {BREAKER_ROUNDS} maintenance rounds on "
+                  f"{args.repo}#{args.pr} with no new human feedback. "
+                  f"Unblock to let this round run.")
         b = hermes("kanban", "--board", args.board, "block", card_id, reason)
         if b.returncode != 0:
             print(f"error: could not hold {card_id}: {b.stderr.strip()[:300]}", file=sys.stderr)
             return 1
         notify(f"Ralph paused maintenance on {args.repo}#{args.pr}: "
-               f"{BREAKER_ROUNDS}+ rounds in 24h. Card {card_id} is blocked; "
+               f"{BREAKER_ROUNDS} rounds with no new human feedback. Card {card_id} is blocked; "
                f"unblock it to continue.")
         print(f"held: {card_id} (round {round_label}, {op_id}) -- {reason}")
         return 0

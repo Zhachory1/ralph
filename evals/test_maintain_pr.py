@@ -111,6 +111,33 @@ class ApprovalSupersedesTests(unittest.TestCase):
         r["body"] = "**Verdict: APPROVE** (submitted as COMMENT -- self-authored PR)"
         self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
 
+    def test_a_bot_review_is_not_feedback(self):
+        """The live case: op3#15144, claude[bot] re-reviewed every push and each
+        review started a maintenance round, 9 of 11 in a day."""
+        r = self.r(1, "COMMENTED", "claude[bot]")
+        r["user"]["type"] = "Bot"
+        self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
+
+    def test_a_bot_does_not_hide_a_person(self):
+        bot = self.r(1, "COMMENTED", "claude[bot]"); bot["user"]["type"] = "Bot"
+        person = self.r(2, "CHANGES_REQUESTED", "apenmetcha-rokt")
+        self.assertEqual([2], [x["id"] for x in self._snapshot([bot, person])["reviews"]])
+
+    def test_a_bot_thread_comment_is_not_feedback(self):
+        """GraphQL drops the [bot] suffix; __typename still says Bot."""
+        def fake_gh(*args):
+            if args[:2] == ("api", "graphql"):
+                return mock.Mock(returncode=0, stdout=json.dumps({"data": {"repository": {"pullRequest": {
+                    "reviewThreads": {"nodes": [{"id": "T1", "isResolved": False, "isOutdated": False,
+                        "comments": {"nodes": [{"id": "C1", "databaseId": 1, "body": "nit",
+                                                "author": {"login": "claude", "__typename": "Bot"}}]}}]}}}}}))
+            if args[0] == "api":
+                return mock.Mock(returncode=0, stdout="[]")
+            return mock.Mock(returncode=1, stdout="")
+        with mock.patch.object(maintain_pr, "gh", side_effect=fake_gh):
+            snap = maintain_pr.feedback_snapshot("a/b", 1, "author")
+        self.assertEqual("empty", maintain_pr.feedback_digest(snap))
+
     def test_a_dismissed_review_is_not_feedback(self):
         """The live case: canary#5 and #6, a duplicate approval dismissed. A
         dismissed review asks for nothing, so it must not start a round."""
@@ -190,34 +217,50 @@ class RoundLabelTests(unittest.TestCase):
 
 
 class CircuitBreakerTests(unittest.TestCase):
-    """5+ rounds on one PR in 24h is a runaway (usually CI failures that change
-    every run), not a reviewer. The next round is created blocked."""
+    """Holds a round only when the last BREAKER_ROUNDS rounds all answered the
+    same human feedback: Ralph is looping on itself, bots, or CI, not on a
+    person. A busy PR with active human reviewers never trips it."""
 
     NOW = 1_800_000_000
 
-    def cards(self, *ages_hours):
-        return [{"created_at": self.NOW - h * 3600, "body": ""} for h in ages_hours]
+    def cards(self, *humans):
+        return [{"created_at": self.NOW - i * 3600, "body": f"human_digest: {h}\n"}
+                for i, h in enumerate(reversed(humans))]
 
-    def test_four_recent_rounds_do_not_trip(self):
-        self.assertFalse(maintain_pr.breaker_tripped(self.cards(1, 2, 3, 4), self.NOW))
+    def test_no_human_change_across_three_rounds_trips(self):
+        self.assertTrue(maintain_pr.breaker_tripped(self.cards("a", "a", "a"), "a"))
 
-    def test_five_recent_rounds_trip(self):
-        self.assertTrue(maintain_pr.breaker_tripped(self.cards(1, 2, 3, 4, 5), self.NOW))
+    def test_new_human_feedback_never_trips(self):
+        self.assertFalse(maintain_pr.breaker_tripped(self.cards("a", "a", "a"), "b"))
 
-    def test_old_rounds_do_not_count(self):
-        self.assertFalse(maintain_pr.breaker_tripped(self.cards(1, 2, 30, 40, 50, 60), self.NOW))
+    def test_a_busy_pr_with_people_reviewing_never_trips(self):
+        self.assertFalse(maintain_pr.breaker_tripped(self.cards(*"abcdefghij"), "k"))
+
+    def test_fewer_rounds_than_the_threshold_never_trip(self):
+        self.assertFalse(maintain_pr.breaker_tripped(self.cards("a", "a"), "a"))
+
+    def test_rounds_from_before_this_change_do_not_count(self):
+        """Old cards carry no human_digest, so they cannot prove a loop."""
+        old = [{"created_at": self.NOW - i, "body": ""} for i in range(10)]
+        self.assertFalse(maintain_pr.breaker_tripped(old, "a"))
 
     def test_an_unreadable_board_does_not_trip(self):
-        self.assertFalse(maintain_pr.breaker_tripped(None, self.NOW))
+        self.assertFalse(maintain_pr.breaker_tripped(None, "a"))
 
-    def run_main(self, prior, op_seen=False):
-        """main() with GitHub and the board stubbed; returns the hermes calls."""
+    def run_main(self, prior_humans, op_seen=False):
+        """main() with GitHub and the board stubbed; returns the hermes calls.
+        prior_humans: each earlier round's human digest, oldest first. The
+        current snapshot's human feedback hashes to human_digest(SNAPSHOT)."""
         import sys
-        snapshot = {"reviews": [{"id": 9, "body": "fix it"}], "threads": [], "checks": []}
+        snapshot = {"reviews": [{"id": 9, "author": "person", "body": "fix it"}],
+                    "threads": [], "checks": []}
         op = maintain_pr.operation_id("o/r", 1, maintain_pr.feedback_digest(snapshot))
-        cards = [{"created_at": c["created_at"], "body": f"repo: o/r\nnumber: 1\n"
-                  + (f"operation_id: {op}\n" if op_seen and i == 0 else "")}
-                 for i, c in enumerate(prior)]
+        now_human = maintain_pr.human_digest(snapshot)
+        cards = [{"created_at": self.NOW - (len(prior_humans) - i) * 60,
+                  "body": f"repo: o/r\nnumber: 1\n"
+                          f"human_digest: {now_human if h == 'same' else h}\n"
+                          + (f"operation_id: {op}\n" if op_seen and i == len(prior_humans) - 1 else "")}
+                 for i, h in enumerate(prior_humans)]
         calls = []
 
         def fake_hermes(*args):
@@ -235,29 +278,35 @@ class CircuitBreakerTests(unittest.TestCase):
                 mock.patch.object(maintain_pr, "feedback_snapshot", return_value=snapshot), \
                 mock.patch.object(maintain_pr, "gh", return_value=gh_view), \
                 mock.patch.object(maintain_pr, "hermes", side_effect=fake_hermes), \
-                mock.patch.object(maintain_pr, "notify") as notify, \
-                mock.patch.object(maintain_pr.time, "time", return_value=self.NOW):
+                mock.patch.object(maintain_pr, "notify") as notify:
             self.assertEqual(0, maintain_pr.main())
         # hermes("kanban", "--board", board, VERB, ...)
-        return [c[3] for c in calls if len(c) > 3], notify
+        create = [c for c in calls if len(c) > 3 and c[3] == "create"]
+        return [c[3] for c in calls if len(c) > 3], notify, create
 
     def test_a_tripped_breaker_blocks_the_new_card_and_alerts_once(self):
-        verbs, notify = self.run_main(self.cards(1, 2, 3, 4, 5))
+        verbs, notify, _ = self.run_main(["same", "same", "same"])
         self.assertIn("create", verbs)
         self.assertIn("block", verbs)
         notify.assert_called_once()
 
-    def test_below_the_threshold_the_card_runs(self):
-        verbs, notify = self.run_main(self.cards(1, 2))
+    def test_new_human_feedback_runs(self):
+        verbs, notify, _ = self.run_main(["x", "y", "z"])
         self.assertNotIn("block", verbs)
         notify.assert_not_called()
 
     def test_a_rerun_of_existing_feedback_is_never_held_again(self):
         """The same digest returns the same card every pass; re-blocking and
         re-alerting it every 15 minutes would be the runaway this prevents."""
-        verbs, notify = self.run_main(self.cards(1, 2, 3, 4, 5), op_seen=True)
+        verbs, notify, _ = self.run_main(["same", "same", "same"], op_seen=True)
         self.assertNotIn("block", verbs)
         notify.assert_not_called()
+
+    def test_each_card_records_its_human_digest(self):
+        """The breaker reads this back on the next round."""
+        _, _, create = self.run_main([])
+        body = create[0][create[0].index("--body") + 1]
+        self.assertIn("human_digest: ", body)
 
 
 class HermesArgvTests(unittest.TestCase):
