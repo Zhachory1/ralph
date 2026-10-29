@@ -1,11 +1,11 @@
 """Reacting to review feedback on a pull request you authored.
 
 No network for the digest/identity logic -- those are pure functions tested
-against hand-built snapshots. The round-label logic (existing_rounds) mocks
+against hand-built snapshots. The round-label logic (prior_rounds) mocks
 the two subprocess boundaries (gh, hermes). There is no cap here by direct
-instruction -- the one cap in this design is on review, not maintenance --
-so these tests check that nothing in this file gates on a count, not that a
-count stays under some number. The real end-to-end path -- feedback read
+instruction -- the one cap in this design is on review, not maintenance.
+The circuit breaker holds a runaway (5+ rounds in 24h) for a human; it does
+not cap throughput. The real end-to-end path -- feedback read
 from a live PR, a real card created, a real maintainer round that pushed a
 commit and posted a comment -- was proven live against Zhachory1/ralph#23;
 see the PR body for that record, including the commit it produced and the
@@ -166,8 +166,8 @@ class NoCapTests(unittest.TestCase):
 
 
 class RoundLabelTests(unittest.TestCase):
-    """existing_rounds is a label for a human reading the board now, not a
-    gate: nothing in main() compares its return value against anything."""
+    """prior_rounds labels the round for a human reading the board, and feeds
+    the circuit breaker. It is never a throughput cap."""
 
     def test_counts_matching_cards_only(self):
         cards = [
@@ -177,7 +177,7 @@ class RoundLabelTests(unittest.TestCase):
         ]
         with mock.patch.object(maintain_pr, "hermes") as hermes_mock:
             hermes_mock.return_value = mock.Mock(returncode=0, stdout=json.dumps(cards))
-            count = maintain_pr.existing_rounds("queues", "owner/repo", 1)
+            count = len(maintain_pr.prior_rounds("queues", "owner/repo", 1))
         self.assertEqual(2, count)
 
     def test_a_hermes_failure_returns_none_not_a_fabricated_count(self):
@@ -185,8 +185,79 @@ class RoundLabelTests(unittest.TestCase):
         means the label is imprecise, nothing is blocked by it."""
         with mock.patch.object(maintain_pr, "hermes") as hermes_mock:
             hermes_mock.return_value = mock.Mock(returncode=1, stdout="")
-            count = maintain_pr.existing_rounds("queues", "owner/repo", 1)
+            count = maintain_pr.prior_rounds("queues", "owner/repo", 1)
         self.assertIsNone(count)
+
+
+class CircuitBreakerTests(unittest.TestCase):
+    """5+ rounds on one PR in 24h is a runaway (usually CI failures that change
+    every run), not a reviewer. The next round is created blocked."""
+
+    NOW = 1_800_000_000
+
+    def cards(self, *ages_hours):
+        return [{"created_at": self.NOW - h * 3600, "body": ""} for h in ages_hours]
+
+    def test_four_recent_rounds_do_not_trip(self):
+        self.assertFalse(maintain_pr.breaker_tripped(self.cards(1, 2, 3, 4), self.NOW))
+
+    def test_five_recent_rounds_trip(self):
+        self.assertTrue(maintain_pr.breaker_tripped(self.cards(1, 2, 3, 4, 5), self.NOW))
+
+    def test_old_rounds_do_not_count(self):
+        self.assertFalse(maintain_pr.breaker_tripped(self.cards(1, 2, 30, 40, 50, 60), self.NOW))
+
+    def test_an_unreadable_board_does_not_trip(self):
+        self.assertFalse(maintain_pr.breaker_tripped(None, self.NOW))
+
+    def run_main(self, prior, op_seen=False):
+        """main() with GitHub and the board stubbed; returns the hermes calls."""
+        import sys
+        snapshot = {"reviews": [{"id": 9, "body": "fix it"}], "threads": [], "checks": []}
+        op = maintain_pr.operation_id("o/r", 1, maintain_pr.feedback_digest(snapshot))
+        cards = [{"created_at": c["created_at"], "body": f"repo: o/r\nnumber: 1\n"
+                  + (f"operation_id: {op}\n" if op_seen and i == 0 else "")}
+                 for i, c in enumerate(prior)]
+        calls = []
+
+        def fake_hermes(*args):
+            calls.append(args)
+            if "list" in args:
+                return mock.Mock(returncode=0, stdout=json.dumps(cards))
+            if "create" in args:
+                return mock.Mock(returncode=0, stdout=json.dumps({"id": "t_new"}))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        gh_view = mock.Mock(returncode=0, stdout=json.dumps(
+            {"headRefOid": "a" * 40, "headRefName": "b"}))
+        with mock.patch.object(sys, "argv", ["maintain-pr", "--once", "--repo", "o/r",
+                                             "--pr", "1", "--login", "me"]), \
+                mock.patch.object(maintain_pr, "feedback_snapshot", return_value=snapshot), \
+                mock.patch.object(maintain_pr, "gh", return_value=gh_view), \
+                mock.patch.object(maintain_pr, "hermes", side_effect=fake_hermes), \
+                mock.patch.object(maintain_pr, "notify") as notify, \
+                mock.patch.object(maintain_pr.time, "time", return_value=self.NOW):
+            self.assertEqual(0, maintain_pr.main())
+        # hermes("kanban", "--board", board, VERB, ...)
+        return [c[3] for c in calls if len(c) > 3], notify
+
+    def test_a_tripped_breaker_blocks_the_new_card_and_alerts_once(self):
+        verbs, notify = self.run_main(self.cards(1, 2, 3, 4, 5))
+        self.assertIn("create", verbs)
+        self.assertIn("block", verbs)
+        notify.assert_called_once()
+
+    def test_below_the_threshold_the_card_runs(self):
+        verbs, notify = self.run_main(self.cards(1, 2))
+        self.assertNotIn("block", verbs)
+        notify.assert_not_called()
+
+    def test_a_rerun_of_existing_feedback_is_never_held_again(self):
+        """The same digest returns the same card every pass; re-blocking and
+        re-alerting it every 15 minutes would be the runaway this prevents."""
+        verbs, notify = self.run_main(self.cards(1, 2, 3, 4, 5), op_seen=True)
+        self.assertNotIn("block", verbs)
+        notify.assert_not_called()
 
 
 class HermesArgvTests(unittest.TestCase):

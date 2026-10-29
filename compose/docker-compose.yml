@@ -247,6 +247,8 @@ services:
       # overrides the allowlist files bootstrap/cutover-repo writes.
       RALPH_REVIEW_ALLOW: ${RALPH_REVIEW_ALLOW:-}
       RALPH_MAINTAIN_ALLOW: ${RALPH_MAINTAIN_ALLOW:-}
+      # The maintenance circuit breaker posts its one alert here.
+      RALPH_NOTIFY_URL: ${RALPH_NOTIFY_URL:-${GCHAT_WEBHOOK_URL:-}}
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     volumes:
