@@ -10,6 +10,10 @@
 #
 #   ./bootstrap/login            # defaults to anthropic
 #   ./bootstrap/login openai-codex
+#   RALPH_ENV_FILE=.env.work ./bootstrap/login   # another instance
+#
+# Each instance signs in separately: credentials live in that instance's own
+# volume, so a new instance starts with none.
 #
 # Skip this entirely if you use an API key: put it in .env instead.
 
@@ -17,6 +21,10 @@ set -euo pipefail
 
 PROVIDER=${1:-anthropic}
 cd "$(dirname "$0")/../compose"
+ENV_FILE=${RALPH_ENV_FILE:-.env}
+export RALPH_ENV_FILE=$ENV_FILE
+# Interpolation reads the project name from the file, not RALPH_ENV_FILE.
+docker() { if [ "$1" = compose ]; then shift; command docker compose --env-file "$ENV_FILE" "$@"; else command docker "$@"; fi; }
 
 if ! docker compose ps --status running --services 2>/dev/null | grep -q '^hermes$'; then
     echo "ralph: the hermes service is not running. Start it with 'docker compose up -d' first." >&2
