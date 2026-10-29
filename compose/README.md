@@ -61,11 +61,20 @@ docker compose exec hermes hermes auth list
 
 ## Configuration
 
-Everything is in `.env`; see [`.env.example`](.env.example). Two notes:
+Everything is in `.env`; see [`.env.example`](.env.example), which groups it into instance, identity, scope, model provider, channels, stack secrets, versions and tuning. Three notes:
 
 **`HERMES_VERSION` has no default.** Compose refuses to start without it, by design — `latest` turns an upgrade into a surprise. Pin a version and change it deliberately.
 
 **Secrets stay out of the repo.** `.env` is gitignored. The chat webhook in particular is a credential: anyone holding it can post into your space. Point `RALPH_ENV_FILE` at a file outside the repo if you prefer, for example one generated from your OS keychain at startup.
+
+**One file per instance.** Two Ralphs (say personal and work) run side by side from one checkout, each from its own env file. `RALPH_INSTANCE` names the compose project, so containers, network and volumes; it, both ports and `RALPH_WORKSPACES` must differ between instances. Pass the file to compose twice, once for interpolation and once for the containers:
+
+```sh
+RALPH_ENV_FILE=.env.work docker compose --env-file .env.work up -d
+RALPH_ENV_FILE=.env.work ./bootstrap/stop --drill   # the kill switch, per instance
+```
+
+Changing `RALPH_INSTANCE` on a running instance does not rename it: it starts a new one with empty volumes.
 
 ## It does not disturb an existing Hermes
 
@@ -210,7 +219,7 @@ repository's scope between a `repos:` grant file (the shape a scope-of-attention
 uses) and `bootstrap/discover-reviews --allow-file`, never both at once.
 
 The `review-loop` service runs review unattended, every `RALPH_REVIEW_POLL_SECONDS` (default 900).
-Each tick it runs `discover-reviews` against `workspaces/review-allowlist.txt`, then calls
+Each tick it runs `discover-reviews` against `RALPH_REVIEW_ALLOW` when set, else `workspaces/review-allowlist.txt`, then calls
 `publish-review --post` for every finished synthesis card. An absent or empty allowlist means it
 admits nothing. Clones are cached per repository under `workspaces/repo-cache`, fetched on demand.
 `docker compose stop review-loop` stops all of it.
