@@ -70,7 +70,7 @@ class ApplyTests(unittest.TestCase):
 
 ALL = (
     "orchestrator", "author", "reviewer", "builder", "researcher",
-    "analyst", "experimenter", "auditor", "watcher",
+    "analyst", "experimenter", "auditor", "watcher", "chat-maintainer",
 )
 
 
@@ -119,6 +119,30 @@ class DeclarationTests(unittest.TestCase):
         self.assertIn("web", declared)
         for forbidden in ("kanban", "terminal", "code_execution"):
             self.assertNotIn(forbidden, declared, forbidden)
+
+    def test_the_chat_maintainer_reads_untrusted_chat_and_holds_nothing_else(self):
+        """It reads what strangers wrote to the owner, so it gets the drafter's
+        shape: staged files in, a decision out. No shell, no network, no board
+        write, and the lens-tools allowlist names no tool that could send."""
+        import yaml
+        config = yaml.safe_load((ROOT / "profiles" / "chat-maintainer" / "config.yaml").read_text())
+        self.assertEqual(["file"], self.toolsets("chat-maintainer"))
+        disabled = config["agent"]["disabled_toolsets"]
+        for withheld in ("terminal", "code_execution", "web", "browser", "kanban", "delegation"):
+            self.assertIn(withheld, disabled, withheld)
+        allowed = config["mcp_servers"]["lens-tools"]["tools"]["include"]
+        self.assertEqual(
+            {"evidence_read", "evidence_search", "kanban_show", "kanban_heartbeat",
+             "kanban_complete", "kanban_block"},
+            set(allowed),
+        )
+
+    def test_the_chat_maintainer_holds_no_chat_credential(self):
+        """The Google Chat token lives on the host, like the Gmail token. A
+        profile that cannot reach it cannot be talked into using it."""
+        text = (ROOT / "profiles" / "chat-maintainer" / "config.yaml").read_text()
+        for needle in ("GCHAT", "WEBHOOK", "chat_token", "client_secret", "TOKEN"):
+            self.assertNotIn(needle, text.replace("HERMES_KANBAN", ""), needle)
 
 
 if __name__ == "__main__":

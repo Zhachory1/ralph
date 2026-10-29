@@ -1,0 +1,57 @@
+# Reads one staged Google Chat item and returns a routing decision. Nothing
+# else. Same shape as inbox-drafter, for the same reason: what it reads was
+# written by people who are not the owner.
+#
+# Holding no chat credential is enforced by where the credential lives, not by
+# this file or the SOUL. The Google Chat OAuth credential stays on the host.
+# A host-side producer (not in this change) stages items as files and creates
+# the card; a host-side writer (not in this change) reads this profile's
+# completed decision and acts on it. This profile sees only lens-tools: read
+# staged files, complete or block its own card. No terminal, no network, no
+# board write, no credential, so there is no send call here to be talked into.
+#
+# Until that producer and writer exist this profile is inert: nothing feeds it
+# and nothing acts on what it decides.
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  # `file` reaches only this card's own workspace. The empty list would leave
+  # the lens-tools MCP server nothing to attach to (see inbox-drafter).
+  cli:
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+mcp_servers:
+  lens-tools:
+    command: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    args: ["/ralph/bootstrap/lens-tools"]
+    enabled: true
+    worker_only: true
+    env:
+      LENS_TASK_ID: "${HERMES_KANBAN_TASK}"
+      LENS_RUN_ID: "${HERMES_KANBAN_RUN_ID}"
+      LENS_CLAIM_LOCK: "${HERMES_KANBAN_CLAIM_LOCK}"
+      LENS_BOARD: "${HERMES_KANBAN_BOARD}"
+      LENS_DB: "${HERMES_KANBAN_DB}"
+      LENS_WORKSPACE: "${HERMES_KANBAN_WORKSPACE}"
+      LENS_EVIDENCE_ROOT: "${HERMES_KANBAN_WORKSPACE}/evidence"
+      LENS_PROFILE: "${HERMES_PROFILE}"
+      LENS_TOOLS_PYTHON: "${HERMES_PYTHON:-/opt/hermes/.venv/bin/python3}"
+    tools:
+      include: [evidence_read, evidence_search, kanban_show, kanban_heartbeat, kanban_complete, kanban_block]
+skills:
+  creation_nudge_interval: 0
+agent:
+  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 40
+  run_budget_seconds: 480
+  api_max_retries: 0
