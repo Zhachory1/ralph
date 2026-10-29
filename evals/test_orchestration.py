@@ -8,16 +8,16 @@ that only appear in a live run.
 Every test here exists because something broke, or because the design makes
 a claim a reader should be able to check. They assert behaviour, not prose.
 
-    docker compose exec hermes python3 /ralph/evals/test_orchestration.py
+    docker compose exec -u hermes hermes python3 /ralph/evals/test_orchestration.py
 """
 
 import os
+import tempfile
 import unittest
 import uuid
 
 from board import Board
 
-BOARD = os.environ.get("RALPH_EVAL_BOARD", "ralph-evals")
 AUTHOR = "ralph-author"
 REVIEWER = "ralph-reviewer"
 PR_URL = "https://github.com/example/repo/pull/1"
@@ -28,8 +28,14 @@ class BoardTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.board = Board(BOARD)
-        cls.board.run("boards", "create", BOARD, "--name", "Ralph evals", check=False)
+        # A private DB the gateway never ticks: on a listed board the live
+        # dispatcher spawned real workers on these cards mid-test.
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.board = Board("ralph-evals", db_path=os.path.join(cls.tmp.name, "kanban.db"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
 
     def setUp(self):
         self.created = []

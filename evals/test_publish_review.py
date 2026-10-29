@@ -175,6 +175,32 @@ class LoginAssertionTests(unittest.TestCase):
         self.assertIn("never trusted", r.stdout)
 
 
+class MovedHeadTests(unittest.TestCase):
+    """The review loop re-runs every done synthesis card each pass and never
+    archives them, so a card whose PR moved on is seen forever. Refusing it
+    with a non-zero exit logged an error every pass, for every stale card."""
+
+    def test_moved_head_posts_nothing_and_exits_zero(self):
+        import json, os, subprocess, sys, tempfile
+        head, live = "1" * 40, "2" * 40
+        show = {"task": {"status": "done",
+                         "body": f"repo: owner/name\nnumber: 7\nhead_sha: {head}\n"},
+                "runs": [{"outcome": "completed", "metadata": {"verdict": "approve"}}],
+                "latest_summary": "ok"}
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"TMPDIR": d}), \
+                mock.patch.object(sys, "argv", ["publish-review", "--task", "t_moved", "--post"]), \
+                mock.patch.object(publish_review.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 0, json.dumps(show), "")), \
+                mock.patch.object(publish_review, "gh",
+                                  return_value=subprocess.CompletedProcess([], 0, "bot\n", "")), \
+                mock.patch.object(publish_review, "existing_marker_state", return_value="absent"), \
+                mock.patch.object(publish_review, "current_head", return_value=live), \
+                mock.patch.object(publish_review, "post_review") as post:
+            self.assertEqual(0, publish_review.main())
+        post.assert_not_called()
+
+
 class OperationLockTests(unittest.TestCase):
     """Found by a review swarm: the marker check and the POST were two
     separate gh calls with nothing between them, so two concurrent

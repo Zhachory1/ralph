@@ -310,11 +310,14 @@ def main() -> int:
         if live_head is None:
             print(f"error: could not read the current head of {repo}#{number}", file=sys.stderr)
             return 1
+        # Exit 0: a moved head is final, not a failure. The review loop re-runs
+        # every done synthesis card each pass and never archives one, so a
+        # non-zero exit here logged an error every pass, forever.
         if live_head != head_sha:
-            print(f"refused: {repo}#{number}'s head moved from {head_sha[:8]} to "
+            print(f"no-op: {repo}#{number}'s head moved from {head_sha[:8]} to "
                  f"{live_head[:8]} since this operation was built. No review is "
-                 f"posted against a head that is no longer current.", file=sys.stderr)
-            return 2
+                 f"posted against a head that is no longer current.")
+            return 0
 
         body = f"{summary}\n\n{marker_for(head_sha)}"
 

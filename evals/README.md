@@ -8,10 +8,10 @@ They run against a **real** Kanban board and the **real** dispatcher, but never 
 
 ```bash
 cd compose
-docker compose exec hermes python3 /ralph/evals/test_orchestration.py
+docker compose exec -u hermes hermes python3 /ralph/evals/test_orchestration.py
 ```
 
-They use a throwaway `ralph-evals` board, created on first run, and archive every card they create. Set `RALPH_EVAL_BOARD` to use a different one. Never point them at a board carrying real work.
+They use a private Kanban database in a temp directory (`HERMES_KANBAN_DB`), deleted after the run. The gateway's dispatcher ticks every listed board, so on a listed board it spawned real workers on these cards mid-test; a private file is never listed. Run as `hermes` so nothing under the Hermes home becomes root-owned.
 
 Expect roughly two minutes: each dispatch probe waits on a real dispatcher tick.
 
