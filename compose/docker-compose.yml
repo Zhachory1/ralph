@@ -71,6 +71,10 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
+      # Concurrency and sandbox memory, per instance. Instances share one VM,
+      # so their RALPH_MAX_IN_PROGRESS values add up.
+      RALPH_MAX_IN_PROGRESS: ${RALPH_MAX_IN_PROGRESS:-6}
+      RALPH_SANDBOX_MEMORY_MB: ${RALPH_SANDBOX_MEMORY_MB:-3072}
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
