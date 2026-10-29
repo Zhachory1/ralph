@@ -242,6 +242,8 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_REVIEW_POLL_SECONDS: ${RALPH_REVIEW_POLL_SECONDS:-900}
+      # Hours between reviews of one PR; a moving PR is reviewed at its latest head.
+      RALPH_REVIEW_SPACING_HOURS: ${RALPH_REVIEW_SPACING_HOURS:-24}
       # The PR author maintenance acts for; unset disables maintenance.
       RALPH_MAINTAIN_LOGIN: ${RALPH_MAINTAIN_LOGIN:-}
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
