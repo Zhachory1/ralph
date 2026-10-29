@@ -31,7 +31,13 @@ done
 
 cd "$(dirname "$0")/../compose"
 BOARD=${RALPH_BOARD:-ralph}
-[ -f .env ] && set -a && . ./.env && set +a
+# Which instance to stop: RALPH_ENV_FILE=.env.work stops the work instance.
+# Compose reads the same variable, so `docker compose` below targets it too.
+ENV_FILE=${RALPH_ENV_FILE:-.env}
+export RALPH_ENV_FILE=$ENV_FILE
+[ -f "$ENV_FILE" ] && set -a && . "./$ENV_FILE" && set +a
+# Compose's project name; without it every command below hits the default.
+export COMPOSE_PROJECT_NAME=${RALPH_INSTANCE:-ralph}
 
 # GH_TOKEN in .env is a model credential (Hermes reads it as GitHub Copilot),
 # not a repository one, and `gh` would silently pick it up and fail with 401.
@@ -99,9 +105,9 @@ fi
 #    `hermes kanban dispatch`, which bypasses the pause sentinel entirely.
 step "Stopping containers"
 if [ "$DRILL" = 1 ]; then
-    act docker compose stop hermes notifier
-elif confirm "Stop the hermes and notifier containers?" || [ "$ASSUME_YES" = 1 ]; then
-    act docker compose stop hermes notifier && say "  containers stopped"
+    act docker compose stop hermes notifier review-loop
+elif confirm "Stop the hermes, notifier and review-loop containers?" || [ "$ASSUME_YES" = 1 ]; then
+    act docker compose stop hermes notifier review-loop && say "  containers stopped"
 else
     say "  skipped"
 fi
@@ -109,21 +115,22 @@ fi
 # 4. Take the credentials away. Everything above is reversible; this is the
 #    step that forces a deliberate restart.
 step "Revoking credentials"
-say "  Ralph's tokens live in compose/.env and in its own Hermes volume."
+say "  Ralph's tokens live in compose/$ENV_FILE and in its own Hermes volume."
 say "  Revoke at the source, because a stopped container still holds them:"
 say "    - GitHub tokens:     https://github.com/settings/tokens"
 say "    - Anthropic OAuth:   docker compose run --rm hermes hermes auth remove anthropic"
 say "    - Chat webhook:      delete it in the Google Chat space"
-if confirm "Clear the credential lines in compose/.env now?"; then
-    act python3 - <<'PY'
-import pathlib, re
-p = pathlib.Path(".env")
+if confirm "Clear the credential lines in compose/$ENV_FILE now?"; then
+    act python3 - "$ENV_FILE" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
 if p.exists():
     lines = p.read_text().splitlines(keepends=True)
-    keys = ("GH_TOKEN", "RALPH_GITHUB_TOKEN", "ANTHROPIC_API_KEY", "GCHAT_WEBHOOK_URL")
+    keys = ("GH_TOKEN", "RALPH_GITHUB_TOKEN", "RALPH_MAINTAIN_TOKEN", "ANTHROPIC_API_KEY",
+            "RALPH_OPENAI_API_KEY", "GCHAT_WEBHOOK_URL", "RALPH_NOTIFY_URL")
     out = [re.sub(r"^(%s)=.*$" % "|".join(keys), r"\1=", line.rstrip("\n")) + "\n" for line in lines]
     p.write_text("".join(out))
-    print("  cleared credential values in compose/.env")
+    print(f"  cleared credential values in compose/{p}")
 PY
 else
     say "  left .env alone; revoke at the source"
@@ -158,6 +165,6 @@ if [ "$DRILL" = 1 ]; then
     say "Drill complete. Nothing was changed."
 else
     say "Ralph is stopped. To restart: issue new credentials, put them in"
-    say "compose/.env, then 'docker compose up -d' and 'hermes resume' inside"
+    say "compose/$ENV_FILE, then 'docker compose up -d' and 'hermes resume' inside"
     say "the container. Check for interrupted cards before resuming."
 fi

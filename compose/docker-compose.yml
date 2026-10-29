@@ -4,7 +4,9 @@
 # separate home volume, separate board database, separate profiles, separate
 # port. Installing Ralph must never disturb an existing setup.
 
-name: ralph
+# One checkout runs several instances (personal, work): each RALPH_INSTANCE is
+# its own compose project, so its containers, network and volumes are its own.
+name: ${RALPH_INSTANCE:-ralph}
 
 services:
   # Narrows the Docker API the hermes container can reach.
@@ -69,7 +71,7 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
-      RALPH_HERMES_CONTAINER: ralph-hermes-1
+      RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
@@ -201,7 +203,10 @@ services:
       # cannot see a private repository, which surfaces as a 404 on a pull
       # request that plainly exists.
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
-      RALPH_HERMES_CONTAINER: ralph-hermes-1
+      # The notifier reads GCHAT_WEBHOOK_URL; RALPH_NOTIFY_URL is the contract
+      # name and wins when both are set.
+      GCHAT_WEBHOOK_URL: ${RALPH_NOTIFY_URL:-${GCHAT_WEBHOOK_URL:-}}
+      RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
@@ -236,7 +241,13 @@ services:
       # The PR author maintenance acts for; unset disables maintenance.
       RALPH_MAINTAIN_LOGIN: ${RALPH_MAINTAIN_LOGIN:-}
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:?set RALPH_GITHUB_TOKEN; a model credential cannot read pull requests}
-      RALPH_HERMES_CONTAINER: ralph-hermes-1
+      # Checked against GH_TOKEN's account at startup; unset skips the check.
+      RALPH_GITHUB_LOGIN: ${RALPH_GITHUB_LOGIN:-}
+      # Inline scope, space separated; owner/* grants a whole owner. Set, it
+      # overrides the allowlist files bootstrap/cutover-repo writes.
+      RALPH_REVIEW_ALLOW: ${RALPH_REVIEW_ALLOW:-}
+      RALPH_MAINTAIN_ALLOW: ${RALPH_MAINTAIN_ALLOW:-}
+      RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     volumes:
       - ../bootstrap:/ralph/bootstrap:ro

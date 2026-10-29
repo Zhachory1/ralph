@@ -13,13 +13,44 @@ set -uo pipefail
 
 BOARD=${RALPH_REVIEW_BOARD:-queues}
 INTERVAL=${RALPH_REVIEW_POLL_SECONDS:-900}
-ALLOW=${RALPH_REVIEW_ALLOWLIST:-/workspaces/review-allowlist.txt}
 CACHE=${RALPH_REPO_CACHE:-/workspaces/repo-cache}
 WORK=${RALPH_REVIEW_WORK:-/workspaces/review-work}
+
+# Scope. RALPH_REVIEW_ALLOW / RALPH_MAINTAIN_ALLOW (space separated, owner/*
+# allowed) are written to a file so every reader below stays file-based; set,
+# they override the files bootstrap/cutover-repo writes.
+inline_allow() {
+    local out="${TMPDIR:-/tmp}/ralph-$1-allow.txt"
+    tr -s ' ' '\n' <<<"$2" | sed '/^$/d' >"$out"
+    echo "$out"
+}
+if [ -n "${RALPH_REVIEW_ALLOW:-}" ]; then
+    ALLOW=$(inline_allow review "$RALPH_REVIEW_ALLOW")
+else
+    ALLOW=${RALPH_REVIEW_ALLOWLIST:-/workspaces/review-allowlist.txt}
+fi
 # Maintenance pushes code, so it can be scoped tighter than review. Defaults
 # to the review allowlist.
-MAINTAIN_ALLOW=${RALPH_MAINTAIN_ALLOWLIST:-/workspaces/maintain-allowlist.txt}
-[ -f "$MAINTAIN_ALLOW" ] || MAINTAIN_ALLOW=$ALLOW
+if [ -n "${RALPH_MAINTAIN_ALLOW:-}" ]; then
+    MAINTAIN_ALLOW=$(inline_allow maintain "$RALPH_MAINTAIN_ALLOW")
+else
+    MAINTAIN_ALLOW=${RALPH_MAINTAIN_ALLOWLIST:-/workspaces/maintain-allowlist.txt}
+    [ -f "$MAINTAIN_ALLOW" ] || MAINTAIN_ALLOW=$ALLOW
+fi
+
+# Identity. A token for the wrong account would review and push as someone
+# else, so refuse to start. An unreachable GitHub is not a wrong account:
+# retry rather than crash-loop on a network blip.
+if [ -n "${RALPH_GITHUB_LOGIN:-}" ]; then
+    until who=$(gh api user --jq .login 2>/dev/null) && [ -n "$who" ]; do
+        echo "review loop: could not reach GitHub to check RALPH_GITHUB_LOGIN; retrying in 60s" >&2
+        sleep 60
+    done
+    if [ "$who" != "$RALPH_GITHUB_LOGIN" ]; then
+        echo "review loop: GH_TOKEN authenticates as '${who}', not RALPH_GITHUB_LOGIN '${RALPH_GITHUB_LOGIN}'; refusing to start" >&2
+        exit 1
+    fi
+fi
 
 echo "ralph review loop: board=${BOARD} every ${INTERVAL}s allowlist=${ALLOW}"
 
