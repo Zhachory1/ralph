@@ -7,6 +7,8 @@ __pycache__/
 *.pyc
 compose/.env
 compose/workspaces/
+# One workspaces dir per instance (RALPH_WORKSPACES): clone caches, GBs.
+compose/workspaces-*/
 
 # Installed from skills/third-party.yaml at a pinned commit, never committed:
 # the repository holds 50 skills and the mounted tree resolves 53. Each

@@ -74,7 +74,22 @@ RALPH_ENV_FILE=.env.work docker compose --env-file .env.work up -d
 RALPH_ENV_FILE=.env.work ./bootstrap/stop --drill   # the kill switch, per instance
 ```
 
-Changing `RALPH_INSTANCE` on a running instance does not rename it: it starts a new one with empty volumes.
+Changing `RALPH_INSTANCE` on a running instance does not rename it: it starts a new one with empty volumes. It also starts with no model credentials: sign it in with `RALPH_ENV_FILE=.env.work ./bootstrap/login`.
+
+**Names instead of ports.** [`proxy/`](proxy/) is an nginx in front of every instance's UIs, on localhost only:
+
+| URL | Goes to |
+|---|---|
+| `http://perso.localhost` | `ralph-personal` dashboard |
+| `http://chat.perso.localhost` | `ralph-personal` hermes-webui |
+| `http://work.localhost` | `ralph-work` dashboard |
+| `http://chat.work.localhost` | `ralph-work` hermes-webui |
+
+```sh
+docker compose -f proxy/docker-compose.yml up -d   # after both instances have started once
+```
+
+`*.localhost` already resolves to 127.0.0.1, so there is no hosts file to edit. A stopped instance is a 502 for its names; the proxy keeps running. Adding an instance is one `if` line in `proxy/nginx.conf.template` and one network in `proxy/docker-compose.yml`. The direct ports still work.
 
 ## It does not disturb an existing Hermes
 
