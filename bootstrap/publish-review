@@ -31,9 +31,11 @@ WHAT THIS GUARANTEES, each enforced in code below rather than asserted here:
    never handed one. This script is the one process with GH_TOKEN with write
    scope.
 3. Publishes what synthesis decided, or nothing. approve maps to APPROVE,
-   request-changes to REQUEST_CHANGES, needs-info to COMMENT. A synthesis
-   card that is not done, or whose metadata does not parse as one of those
-   three verdicts, is refused rather than guessed into a default.
+   request-changes to COMMENT: the findings in the comment are the blocking
+   factor, and a CHANGES_REQUESTED state would hold the PR until Ralph
+   re-reviews, so a Ralph outage would block merges. A synthesis card that
+   is not done, or whose metadata does not parse as one of those two
+   verdicts, is refused rather than guessed into a default.
 4. A moved head voids the operation. The PR's current head is read from
    GitHub immediately before posting and compared to the head pinned in the
    synthesis card's own body; a mismatch means the PR moved since this
@@ -82,8 +84,7 @@ def hermes_argv(*args):
 MARKER_PREFIX = "<!-- ai-pr-automation head="
 VERDICT_TO_EVENT = {
     "approve": "APPROVE",
-    "request-changes": "REQUEST_CHANGES",
-    "needs-info": "COMMENT",
+    "request-changes": "COMMENT",
 }
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 

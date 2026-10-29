@@ -39,15 +39,24 @@ class MarkerTests(unittest.TestCase):
 
 
 class VerdictMappingTests(unittest.TestCase):
-    def test_all_three_verdicts_map(self):
+    def test_both_verdicts_map(self):
         self.assertEqual("APPROVE", publish_review.VERDICT_TO_EVENT["approve"])
-        self.assertEqual("REQUEST_CHANGES", publish_review.VERDICT_TO_EVENT["request-changes"])
-        self.assertEqual("COMMENT", publish_review.VERDICT_TO_EVENT["needs-info"])
+        self.assertEqual("COMMENT", publish_review.VERDICT_TO_EVENT["request-changes"])
 
-    def test_no_fourth_verdict_exists(self):
+    def test_ralph_never_requests_changes_on_github(self):
+        """A CHANGES_REQUESTED state holds the PR until Ralph re-reviews, so a
+        Ralph outage blocks merges. The comment carries the findings."""
+        self.assertNotIn("REQUEST_CHANGES", publish_review.VERDICT_TO_EVENT.values())
+
+    def test_needs_info_is_not_a_verdict(self):
+        """Lenses asked for evidence they could not see and it was posted as
+        a review. A verdict outside the map is refused, so nothing posts."""
+        self.assertNotIn("needs-info", publish_review.VERDICT_TO_EVENT)
+
+    def test_no_third_verdict_exists(self):
         """A synthesis card with an unrecognized verdict must be refused, not
         guessed into a default -- this is the boundary that enforces it."""
-        self.assertEqual(3, len(publish_review.VERDICT_TO_EVENT))
+        self.assertEqual(2, len(publish_review.VERDICT_TO_EVENT))
 
 
 class BodyParsingTests(unittest.TestCase):
