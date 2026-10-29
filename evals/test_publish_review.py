@@ -201,6 +201,27 @@ class MovedHeadTests(unittest.TestCase):
         post.assert_not_called()
 
 
+class AccountChangeTests(unittest.TestCase):
+    """Swapping the review token from zhach1 to zhachbot made every earlier
+    marked review invisible, and the loop re-posted three approvals."""
+
+    def reviews(self, *rows):
+        import subprocess
+        out = "".join("\t".join(r) + "\n" for r in rows)
+        return mock.patch.object(publish_review, "gh",
+                                 return_value=subprocess.CompletedProcess([], 0, out, ""))
+
+    def test_marker_from_another_account_counts_as_posted(self):
+        head = "a" * 40
+        with self.reviews(("zhach1", "APPROVED", head, publish_review.marker_for(head))):
+            self.assertEqual("exact", publish_review.existing_marker_state("o/r", 1, head, "zhachbot"))
+
+    def test_unmarked_review_from_another_account_does_not(self):
+        head = "a" * 40
+        with self.reviews(("someone", "APPROVED", head, "lgtm")):
+            self.assertEqual("absent", publish_review.existing_marker_state("o/r", 1, head, "zhachbot"))
+
+
 class OperationLockTests(unittest.TestCase):
     """Found by a review swarm: the marker check and the POST were two
     separate gh calls with nothing between them, so two concurrent

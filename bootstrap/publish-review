@@ -168,7 +168,13 @@ def existing_marker_state(repo: str, number: int, head_sha: str, login: str) -> 
     fleet's filter excluding DISMISSED meant a dismissed marked review
     silently stopped counting as already-posted, so a re-run could post a
     second review carrying the identical marker on the identical head --
-    found reviewing this script with the graph it builds."""
+    found reviewing this script with the graph it builds.
+
+    Counts a marker from any account, not only ``login``. The marker records
+    that this operation was published; who published it does not change
+    that. Matching on the account let a token swap (zhach1 to zhachbot)
+    make every earlier review invisible, and the loop re-posted three
+    approvals in one pass."""
     marker = marker_for(head_sha)
     r = gh("api", "--paginate", f"repos/{repo}/pulls/{number}/reviews",
           "--jq", '.[] | select(.state != "PENDING") '
@@ -181,7 +187,7 @@ def existing_marker_state(repo: str, number: int, head_sha: str, login: str) -> 
         if len(parts) != 4:
             continue
         review_login, state, commit_id, body = parts
-        if review_login != login or marker not in body:
+        if marker not in body:
             continue
         found = True
         if commit_id == head_sha:
@@ -288,7 +294,7 @@ def main() -> int:
                  f"than overriding either.", file=sys.stderr)
             return 2
 
-        # Guarantee 1 and 2 of the marker check: already posted, under this
+        # Guarantee 1 and 2 of the marker check: already posted, by any
         # account, for this exact head -- a no-op, by design, not an error.
         state = existing_marker_state(repo, number, head_sha, login)
         if state == "error":
@@ -296,7 +302,7 @@ def main() -> int:
             return 1
         if state == "exact":
             print(f"no-op: {repo}#{number} already carries this operation's marker "
-                 f"at head {head_sha[:8]}, posted by {login}")
+                 f"at head {head_sha[:8]}")
             return 0
         if state == "mismatch":
             print(f"refused: {repo}#{number} carries this operation's marker at a "
