@@ -195,4 +195,13 @@ if [ -f /ralph/skills/third-party.yaml ] || [ -f "$(dirname "$0")/../skills/thir
     python3 "$(dirname "$0")/install-third-party-skills" || true
 fi
 
+# Scheduled jobs from the private overlay (RALPH_PRIVATE_JOBS), each copied
+# into the profile its job.env names, with its install options written into
+# that profile's .env. Absent overlay or no job.env: nothing happens.
+if [ -d /ralph/private-jobs ]; then
+    python3 "$(dirname "$0")/install-overlay-jobs" --jobs-root /ralph/private-jobs \
+        --hermes-home "${HERMES_HOME:-$HOME/.hermes}" \
+        ${RALPH_HERMES_CONTAINER:+--container "$RALPH_HERMES_CONTAINER"}
+fi
+
 echo "ralph: install complete"

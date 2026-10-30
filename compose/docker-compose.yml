@@ -85,6 +85,9 @@ services:
       - ../profiles:/ralph/profiles:ro
       - ../bootstrap:/ralph/bootstrap:ro
       - ../skills:/ralph/skills:ro
+      # Scheduled jobs from the private overlay. Blank means none; a path that
+      # does not exist mounts as an empty directory, which installs nothing.
+      - ${RALPH_PRIVATE_JOBS:-./no-private-jobs}:/ralph/private-jobs:ro
     restart: "no"
 
   hermes:
