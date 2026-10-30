@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Install scheduled jobs from the private overlay into their owning profile.
+
+A job is a directory under the overlay's jobs/ (RALPH_PRIVATE_JOBS, mounted
+read-only at /ralph/private-jobs) with a job.env naming where it goes:
+
+    PROFILE=ralph-inbox-drafter
+    OPTIONS=CHAT_DIGEST_OWNER_ID CHAT_DIGEST_OWNER_EMAIL RALPH_NOTIFY_URL
+
+Its *.py files are copied into that profile's scripts/ folder, where Hermes
+runs a cron job's --script from. Each name in OPTIONS is an install option:
+its value is taken from this process's environment (the instance's env file)
+and written into that profile's .env, and into no other profile's.
+
+job.env is plain KEY=value, not YAML: the init image has no YAML parser.
+
+A directory without job.env is skipped, so a job's source can land before
+it is installed. An option that is unset in the environment is left out of
+the profile's .env and reported by name; values are never printed.
+
+    install-overlay-jobs --jobs-root /ralph/private-jobs \\
+        --hermes-home /home/hermes/.hermes [--container ralph-work-hermes-1]
+
+With --container, files are written inside that container as user hermes,
+the same bridge bootstrap/install uses for profiles.
+"""
+import argparse
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+PROFILE_RE = re.compile(r"^ralph-[a-z0-9-]+$")
+OPTION_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def read_job_env(path: pathlib.Path) -> dict:
+    out = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def parse_job(job_dir: pathlib.Path) -> tuple[str, list[str]]:
+    """(profile, options) from job.env; raises ValueError on a bad file."""
+    spec = read_job_env(job_dir / "job.env")
+    profile = spec.get("PROFILE", "")
+    if not PROFILE_RE.match(profile):
+        raise ValueError(f"{job_dir.name}: PROFILE must name a ralph-* profile, got {profile!r}")
+    options = spec.get("OPTIONS", "").split()
+    for opt in options:
+        if not OPTION_RE.match(opt):
+            raise ValueError(f"{job_dir.name}: bad option name {opt!r}")
+    return profile, options
+
+
+def merged_env(existing: str, values: dict[str, str]) -> str:
+    """The profile's .env with each option replaced or appended; every other
+    line kept as it was."""
+    keep = [ln for ln in existing.splitlines()
+            if ln.split("=", 1)[0].strip() not in values]
+    keep += [f"{k}={v}" for k, v in values.items()]
+    return "\n".join(keep) + "\n"
+
+
+class Target:
+    """Writes into a Hermes home, locally or inside a container."""
+
+    def __init__(self, home: str, container: str | None):
+        self.home, self.container = home.rstrip("/"), container
+
+    def _sh(self, script: str, stdin: str = "", env: dict | None = None) -> subprocess.CompletedProcess:
+        if self.container:
+            argv = ["docker", "exec", "-i", "-u", "hermes"]
+            for k, v in (env or {}).items():
+                argv += ["-e", f"{k}={v}"]
+            argv += [self.container, "sh", "-eu", "-c", script]
+            return subprocess.run(argv, input=stdin, capture_output=True, text=True)
+        return subprocess.run(["sh", "-eu", "-c", script], input=stdin, capture_output=True,
+                              text=True, env={**os.environ, **(env or {})})
+
+    def profile_exists(self, profile: str) -> bool:
+        return self._sh(f'[ -d "{self.home}/profiles/{profile}" ]').returncode == 0
+
+    def write_file(self, path: str, content: str, mode: str) -> None:
+        r = self._sh(f'd=$(dirname "{path}"); mkdir -p "$d"; tmp=$(mktemp "{path}.XXXXXX"); '
+                     f'cat > "$tmp"; chmod {mode} "$tmp"; mv "$tmp" "{path}"', stdin=content)
+        if r.returncode != 0:
+            raise OSError(f"could not write {path}: {r.stderr.strip()[:200]}")
+
+    def read_file(self, path: str) -> str:
+        r = self._sh(f'[ -f "{path}" ] && cat "{path}" || true')
+        return r.stdout
+
+
+def install_job(job_dir: pathlib.Path, target: Target, environ: dict) -> list[str]:
+    """Install one job. Returns report lines; never contains option values."""
+    profile, options = parse_job(job_dir)
+    if not target.profile_exists(profile):
+        raise ValueError(f"{job_dir.name}: profile {profile} does not exist in this instance")
+    scripts = f"{target.home}/profiles/{profile}/scripts"
+    report = []
+    for src in sorted(job_dir.glob("*.py")):
+        target.write_file(f"{scripts}/{src.name}", src.read_text(), "644")
+        report.append(f"    {src.name} -> {profile}/scripts/")
+
+    values = {k: environ[k] for k in options if environ.get(k)}
+    missing = [k for k in options if not environ.get(k)]
+    if values:
+        env_path = f"{target.home}/profiles/{profile}/.env"
+        target.write_file(env_path, merged_env(target.read_file(env_path), values), "600")
+        report.append(f"    options set in {profile}/.env: {' '.join(sorted(values))}")
+    if missing:
+        report.append(f"    WARNING options unset in the env file: {' '.join(missing)}")
+    return report
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--jobs-root", required=True, type=pathlib.Path)
+    ap.add_argument("--hermes-home", required=True)
+    ap.add_argument("--container", default=None)
+    args = ap.parse_args()
+
+    if not args.jobs_root.is_dir():
+        return 0
+    target = Target(args.hermes_home, args.container)
+    failed = 0
+    for job_dir in sorted(p for p in args.jobs_root.iterdir() if p.is_dir()):
+        if not (job_dir / "job.env").is_file():
+            continue
+        try:
+            print(f"  installing job {job_dir.name}")
+            for line in install_job(job_dir, target, dict(os.environ)):
+                print(line)
+        except (ValueError, OSError) as exc:
+            print(f"  job {job_dir.name} NOT installed: {exc}", file=sys.stderr)
+            failed += 1
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
