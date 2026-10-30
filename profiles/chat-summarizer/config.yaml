@@ -1,0 +1,36 @@
+# Summarizes the day's selected work Chat messages for the daily digest.
+#
+# Called by the digest script (ralph-inbox-drafter/scripts/chat_summarize.py)
+# as `hermes -z -p ralph-chat-summarizer`, with the messages on stdin. It is
+# never dispatched from the board. It reads what it is given and returns
+# {item_id, summary} pairs as JSON; it does no I/O of its own.
+#
+# Nothing to reach: no file, terminal, network, Kanban or delegation. The
+# Chat token, the webhook and the Slack-free delivery path all live with the
+# script, never in this profile.
+model:
+  provider: anthropic
+  # Pinned (design v2, 4.2): a later `hermes model` change must not alter
+  # the digest's voice or cost.
+  default: claude-sonnet-5
+platform_toolsets:
+  cli: []
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  external_dirs:
+    - /ralph/skills/voice
+  creation_nudge_interval: 0
+agent:
+  disabled_toolsets: [file, delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 4
+  run_budget_seconds: 180
+  api_max_retries: 1
