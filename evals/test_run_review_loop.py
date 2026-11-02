@@ -23,10 +23,11 @@ class StartupTests(unittest.TestCase):
             stub = d / "bin"
             stub.mkdir()
             calls = d / "calls"
-            # gh: `api user` answers as the stub login; anything else is empty.
+            # gh: `api user` answers as the stub login; record PR search flags.
             (stub / "gh").write_text(
                 "#!/bin/sh\n"
                 '[ "$1 $2" = "api user" ] && { echo "${STUB_LOGIN}"; exit 0; }\n'
+                '[ "$1 $2" = "search prs" ] && printf "%s\\n" "$*" > "$GH_SEARCH"\n'
                 "exit 0\n")
             # python3: record the allowlist each discover-reviews call is given.
             (stub / "python3").write_text(
@@ -39,11 +40,14 @@ class StartupTests(unittest.TestCase):
             (stub / "docker").write_text("#!/bin/sh\nexit 0\n")
             for f in stub.iterdir():
                 f.chmod(0o755)
+            search = d / "gh-search"
             full = {"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": str(d),
-                    "CALLS": str(calls), "RALPH_HERMES_CONTAINER": "x",
+                    "CALLS": str(calls), "GH_SEARCH": str(search),
+                    "RALPH_HERMES_CONTAINER": "x",
                     "RALPH_REVIEW_ALLOWLIST": str(d / "missing.txt"), **env}
             r = subprocess.run(["bash", str(SCRIPT)], env=full,
                                capture_output=True, text=True, timeout=30)
+            self.gh_search = search.read_text() if search.exists() else ""
             return r, calls.read_text() if calls.exists() else ""
 
     def test_inline_allow_is_one_repo_per_line(self):
@@ -79,6 +83,18 @@ class StartupTests(unittest.TestCase):
                                  RALPH_REVIEW_ALLOW="Zhachory1/*")
         self.assertNotIn("refusing to start", r.stderr)
         self.assertEqual("Zhachory1/*\n", allow)
+
+    def test_maintenance_search_excludes_design_change_requests(self):
+        self.run_loop(RALPH_MAINTAIN_LOGIN="Zhachory1",
+                      RALPH_MAINTAIN_ALLOW="Zhachory1/*", STUB_LOGIN="Zhachory1")
+        self.assertIn("search prs", self.gh_search)
+        self.assertIn("-- -label:dd-changes", self.gh_search)
+
+    def test_maintenance_search_excludes_configured_docs_repo(self):
+        self.run_loop(RALPH_MAINTAIN_LOGIN="Zhachory1",
+                      RALPH_MAINTAIN_ALLOW="Zhachory1/*", RALPH_DOCS_REPO="Zhachory1/docs",
+                      STUB_LOGIN="Zhachory1")
+        self.assertIn("-- -label:dd-changes -repo:Zhachory1/docs", self.gh_search)
 
 
 if __name__ == "__main__":

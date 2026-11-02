@@ -101,14 +101,14 @@ if [ -n "${RALPH_OPENAI_API_KEY:-}" ]; then
     fi
 fi
 
-# The builder and maintainer push as the PR author, not as the reviewer:
+# The author, builder and maintainer push as the PR author, not as the reviewer:
 # maintain-pr ignores feedback from its own login. Profile-scoped GH_TOKEN
 # overrides the stack-wide review token and is forwarded into their sandboxes.
 if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
     # The token travels as an env var to the exec, never on a command line.
     docker exec -i -u hermes -e RALPH_MAINTAIN_TOKEN -e "RALPH_MAINTAIN_LOGIN=${RALPH_MAINTAIN_LOGIN:-}" \
         "${RALPH_HERMES_CONTAINER:-ralph-hermes-1}" sh -eu -c '
-        for profile in ralph-maintainer ralph-builder; do
+        for profile in ralph-maintainer ralph-builder ralph-author; do
             f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
             [ -f "$f" ] || continue
             tmp=$(mktemp "$f.XXXXXX")
@@ -122,7 +122,7 @@ if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
             fi
             chmod 600 "$tmp" && mv "$tmp" "$f"
         done'
-    echo "  builder and maintainer push with RALPH_MAINTAIN_TOKEN"
+    echo "  author, builder and maintainer push with RALPH_MAINTAIN_TOKEN"
 fi
 
 hermes kanban init >/dev/null 2>&1 || true
