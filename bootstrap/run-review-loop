@@ -70,10 +70,12 @@ while true; do
 
     # Maintenance: PRs authored by RALPH_MAINTAIN_LOGIN in allowlisted repos.
     # maintain-pr excludes that login's own feedback, so Ralph's reviews (as
-    # the stack account) are what it acts on. Unset login: no maintenance.
+    # the stack account) are what it acts on. dd-changes belongs to the docs
+    # author loop, not generic PR maintenance. Unset login: no maintenance.
     if [ -n "${RALPH_MAINTAIN_LOGIN:-}" ] && [ -s "$MAINTAIN_ALLOW" ]; then
         gh search prs --author "$RALPH_MAINTAIN_LOGIN" --state open --limit 200 \
-            --json repository,number --jq '.[] | "\(.repository.nameWithOwner) \(.number)"' 2>/dev/null \
+            --json repository,number --jq '.[] | "\(.repository.nameWithOwner) \(.number)"' \
+            -- '-label:dd-changes' 2>/dev/null \
         | while read -r repo num; do
             owner=${repo%%/*}
             grep -qxF -e "$repo" -e "$owner/*" "$MAINTAIN_ALLOW" || continue
