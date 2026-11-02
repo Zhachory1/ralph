@@ -90,6 +90,12 @@ class StartupTests(unittest.TestCase):
         self.assertIn("search prs", self.gh_search)
         self.assertIn("-- -label:dd-changes", self.gh_search)
 
+    def test_maintenance_search_excludes_configured_docs_repo(self):
+        self.run_loop(RALPH_MAINTAIN_LOGIN="Zhachory1",
+                      RALPH_MAINTAIN_ALLOW="Zhachory1/*", RALPH_DOCS_REPO="Zhachory1/docs",
+                      STUB_LOGIN="Zhachory1")
+        self.assertIn("-- -label:dd-changes -repo:Zhachory1/docs", self.gh_search)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
