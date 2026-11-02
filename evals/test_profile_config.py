@@ -110,6 +110,9 @@ class DeclarationTests(unittest.TestCase):
     def test_builder_can_push_from_credential_forwarding_terminal(self):
         self.assertIn("terminal", self.toolsets("builder"))
 
+    def test_author_can_push_docs_from_credential_forwarding_terminal(self):
+        self.assertIn("terminal", self.toolsets("author"))
+
     def test_read_only_profiles_cannot_run_code(self):
         """The reason these profiles are separate boundaries at all. A
         read-only credential next to a shell is not read-only for long."""
