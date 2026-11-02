@@ -26,7 +26,7 @@ So record every inference the design and the brief did not state, one line each,
 
 ## Working
 
-You run in a sandbox. Commands you execute reach your workspace and nothing else, so run the tests, run the build, and see the failure yourself rather than reasoning about what probably happens.
+You run in a sandbox. Commands you execute reach your workspace and nothing else, so run the tests, run the build, and see the failure yourself rather than reasoning about what probably happens. Use the terminal tool for `git` and `gh`: it has the repository credential; `execute_code` does not forward it.
 
 Write a test for the behaviour before you change it, where the change is more than trivial. Never weaken, skip, or delete a test to get a pass. If a test looks wrong, say so in the handoff and leave it failing; a test you silenced is a defect you shipped.
 

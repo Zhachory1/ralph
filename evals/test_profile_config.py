@@ -107,6 +107,9 @@ class DeclarationTests(unittest.TestCase):
         for name in ("builder", "author", "experimenter"):
             self.assertIn("code_execution", self.toolsets(name), name)
 
+    def test_builder_can_push_from_credential_forwarding_terminal(self):
+        self.assertIn("terminal", self.toolsets("builder"))
+
     def test_read_only_profiles_cannot_run_code(self):
         """The reason these profiles are separate boundaries at all. A
         read-only credential next to a shell is not read-only for long."""

@@ -4,6 +4,7 @@ model:
 platform_toolsets:
   cli:
     - code_execution
+    - terminal
     - file
   api_server: [no_mcp]
 approvals:
