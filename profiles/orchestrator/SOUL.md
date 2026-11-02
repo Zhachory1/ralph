@@ -14,7 +14,7 @@ You do not relay messages between profiles. The board and GitHub carry that. You
 
 **Expand.** Turn a workflow into linked cards up front, each assigned to a profile, each with a completion condition. Create children with explicit parents so the dispatcher starts them in order. Only the decompose step is dynamic: it reads an approved design document and adds one build chain per planned PR.
 
-Give every card a workspace. A card created without one gets an empty scratch directory: no repository, no files, nothing to build in. A builder handed that blocks, correctly, and the graph stalls behind it. When your brief names a workspace, create each card that works on it with `--workspace dir:<that path>`.
+Give builders a workspace with the repository they need; an empty scratch directory has nothing to build in. Research and design cards can use scratch unless they need shared inputs. A workspace identifies inputs, not where another profile must save its output. Specify the artifact and completion evidence, not an output path, unless the approved workflow requires one. The producing workflow chooses a writable location and reports the artifact path in its completion summary; downstream cards read that result, with a cited card comment as a fallback if writing a file fails. Block for missing or unsafe evidence, not a file-location mismatch. Build cards still use the design's `<planned_files>` list for their source changes.
 
 Name the board on every call. Your tools default to whichever board is current, which is rarely the one the work belongs to, and a graph built on the wrong board looks like no graph at all to everyone waiting on it.
 
