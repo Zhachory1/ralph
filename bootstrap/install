@@ -9,6 +9,7 @@ set -euo pipefail
 
 PROFILES_DIR=${RALPH_PROFILES_DIR:-/ralph/profiles}
 BOARD=${RALPH_BOARD:-ralph}
+[ -f "$PROFILES_DIR/PRINCIPLES.md" ] || { echo "missing Ralph principles" >&2; exit 1; }
 
 # The hermes CLI lives in the hermes image, which costs 4.5GB. Rather than
 # carry it to run a dozen setup commands, run them in the hermes container.
@@ -168,7 +169,10 @@ for dir in "$PROFILES_DIR"/*/; do
 
     target="${HERMES_HOME:-$HOME/.hermes}/profiles/${name}"
     if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-        [ -f "$dir/SOUL.md" ] && docker cp "$dir/SOUL.md" "$RALPH_HERMES_CONTAINER:$target/SOUL.md"
+        if [ -f "$dir/SOUL.md" ]; then
+            { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$dir/SOUL.md"; } |
+                docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$target/SOUL.md"
+        fi
         if [ -f "$dir/config.yaml" ]; then
             docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
             docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
@@ -176,7 +180,9 @@ for dir in "$PROFILES_DIR"/*/; do
         fi
         continue
     fi
-    [ -f "$dir/SOUL.md" ] && cp "$dir/SOUL.md" "$target/SOUL.md"
+    if [ -f "$dir/SOUL.md" ]; then
+        { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$dir/SOUL.md"; } > "$target/SOUL.md"
+    fi
 
     # The model and the toolsets are ours; the rest is Hermes-generated.
     if [ -f "$dir/config.yaml" ]; then
