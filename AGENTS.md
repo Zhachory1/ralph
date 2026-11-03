@@ -15,6 +15,10 @@ This repository ships **machinery**, not content.
 
 The default profiles and templates shipped here are starting points. Users copy and edit them, and their edits are never overwritten by an upgrade. Write them to be forked, not to be depended on.
 
+## Shared principles
+
+Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this repository. Ground the current system, reuse what exists, apply MVP/Occam/80-20 to scope, respect the Law of Demeter and profile boundaries, check system-wide effects, and carry work through review and maintenance. `bootstrap/install` puts that same source before every profile's role instructions; do not maintain separate copies here. Principles never override the narrower permissions and human approval rules below.
+
 ## Hard rules
 
 - **Nothing private, internal, or employer-specific in this repository.** No internal hostnames, service names, document-standard names, MCP endpoints, ticket IDs, or incident-process detail. This repository is public. Layer 3 exists precisely so that material has somewhere else to live.
