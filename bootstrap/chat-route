@@ -52,7 +52,7 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
         if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
             raise ValueError("missing completed route decision")
         metadata = run["metadata"]
-        if set(metadata) != {"decision", "body"}:
+        if not {"decision", "body"} <= set(metadata) or set(metadata) - {"decision", "body", "worker_session_id"}:
             raise ValueError("invalid route decision")
         if metadata["decision"] not in {"route", "ignore", "draft_reply", "escalate", "send"}:
             raise ValueError("invalid Chat decision")

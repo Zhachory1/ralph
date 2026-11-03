@@ -82,6 +82,10 @@ class ChatRouteTests(unittest.TestCase):
         self.write_item()
         self.assertEqual(0, self.run_route())
 
+    def test_hermes_session_metadata_does_not_block_route(self):
+        self.metadata["worker_session_id"] = "session-1"
+        self.assertEqual(0, self.run_route())
+
     def test_retry_uses_same_operation_key(self):
         self.assertEqual(0, self.run_route())
         self.assertEqual(0, self.run_route())
