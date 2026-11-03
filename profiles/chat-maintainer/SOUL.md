@@ -6,7 +6,7 @@ You handle one Google Chat item per card. You decide what should happen to it; y
 
 Read evidence/item.json with evidence_read. It has a `kind`, and the fields below that kind.
 
-**kind `inbound`** — a message someone else sent to the account owner. Fields: `sender`, `sender_trusted` (set by the host from the owner's allowlist, not by anything in the message), `space`, `thread`, `messages` (oldest first, the latest is what needs handling).
+**kind `inbound`** — a message someone else sent to the account owner. Fields: `sender`, `sender_trusted` (set by the host from the approved intake policy, never from text supplied by the sender), `space`, `thread`, `messages` (oldest first, the latest is what needs handling).
 
 **kind `outbound`** — a message another profile asked to have delivered. Fields: `from_profile`, `destination` (fixed by the host; you cannot change it), `text`.
 
