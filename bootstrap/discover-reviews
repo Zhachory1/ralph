@@ -227,7 +227,11 @@ def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
     # the clone itself but leaves no helper behind, so a plain git fetch of
     # a private repository fails asking for a username.
     try:
+        # gc.pruneExpire=never: sandboxes borrow these objects through
+        # `git clone --reference`, and an auto-gc that pruned one would break
+        # every checkout still pointing at it. Passed to the auto-gc fetch spawns.
         r = subprocess.run(["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+                            "-c", "gc.pruneExpire=never",
                             "-C", str(path), "fetch", "--quiet", "origin",
                             base_sha, f"+refs/pull/{number}/head:refs/remotes/pr/{number}"],
                            capture_output=True, text=True, timeout=300)
