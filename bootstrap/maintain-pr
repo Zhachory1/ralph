@@ -35,10 +35,10 @@ check, sorted and canonicalized, into one digest. Two runs with the same
 digest are the same operation -- an idempotent re-run of a round already
 underway, not a new one -- and get the same card, not a second one.
 
-BOTS ARE NOT FEEDBACK. A review or comment from a GitHub App or bot account
-(type Bot) never starts a round. On op3#15144, claude[bot] re-reviewed every
-push Ralph made and each review started another round: 9 of 11 in a day.
-Ralph's own reviewers still read bot findings from the staged threads.
+BOTS ARE FEEDBACK. A bot's unresolved thread or review is acted on like a
+person's. The feedback digest dedups a bot repeating itself on the same head.
+The circuit breaker counts people only, so a bot re-reviewing every push
+cannot loop Ralph forever (op3#15144: 9 rounds in a day).
 
 A CIRCUIT BREAKER, NOT A CAP. When the last BREAKER_ROUNDS rounds all
 answered the same human feedback, Ralph is looping on its own pushes or on
@@ -186,12 +186,12 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     latest = {}
     for r in review_list:
         author = (r.get("user") or {}).get("login")
-        if (r.get("id") is not None and external(author) and not is_bot(r.get("user"))
+        if (r.get("id") is not None and external(author)
                 and r.get("state") not in ("PENDING", "DISMISSED")):
             latest[author.lower()] = r
     snapshot_reviews = sorted(
         ({"id": r["id"], "author": r["user"]["login"], "body": r["body"],
-          "submittedAt": r.get("submitted_at")}
+          "submittedAt": r.get("submitted_at"), "bot": is_bot(r.get("user"))}
          for r in latest.values()
          if r.get("state") != "APPROVED" and not _comment_approval(r)
          and isinstance(r.get("body"), str) and r["body"].strip()),
@@ -204,11 +204,10 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
         comments = sorted(
             ({"id": c["id"], "databaseId": c.get("databaseId"),
               "author": c.get("author", {}).get("login") if c.get("author") else None,
-              "body": c["body"]}
+              "body": c["body"], "bot": is_bot(c.get("author"))}
              for c in t.get("comments", {}).get("nodes", [])
              if isinstance(c.get("id"), str)
              and external(c.get("author", {}).get("login") if c.get("author") else None)
-             and not is_bot(c.get("author"))
              and isinstance(c.get("body"), str) and c["body"].strip()),
             key=lambda x: (x["id"], str(x["databaseId"])))
         if comments:
@@ -270,9 +269,11 @@ def prior_rounds(board: str, repo: str, number: int) -> list[dict] | None:
 
 def human_digest(snapshot: dict) -> str:
     """The digest of the people's part of the feedback: reviews and thread
-    comments, not CI. It changes only when a person says something new."""
-    return feedback_digest({"reviews": snapshot["reviews"], "threads": snapshot["threads"],
-                            "checks": []})
+    comments, not bots or CI. It changes only when a person says something new."""
+    threads = [{**t, "comments": [c for c in t["comments"] if not c.get("bot")]}
+               for t in snapshot["threads"]]
+    return feedback_digest({"reviews": [r for r in snapshot["reviews"] if not r.get("bot")],
+                            "threads": [t for t in threads if t["comments"]], "checks": []})
 
 
 def breaker_tripped(cards: list[dict] | None, human: str) -> bool:
