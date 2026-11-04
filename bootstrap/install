@@ -35,9 +35,6 @@ hermes config set kanban.review_dispatch true >/dev/null
 # restart to apply, not a reload.
 hermes config set kanban.max_in_progress "${RALPH_MAX_IN_PROGRESS:-6}" >/dev/null
 hermes config set kanban.max_in_progress_per_profile 2 >/dev/null
-# One sandbox's ceiling. A maintenance build of a large repository peaks at
-# several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
-hermes config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
 
 # A card-dispatched worker runs with nobody present to answer an approval
 # prompt, and Hermes' default is to refuse the approval-gated tools outright.
@@ -78,19 +75,25 @@ fi
 # human's feedback is lost behind a decomposition notice.
 hermes config set kanban.auto_decompose false >/dev/null
 
-# The stock sandbox has no git and no gh, so an agent can write code in it but
-# cannot branch, push, or open a pull request. Ralph's sandbox image adds those
-# two and nothing else; every tool in there is reachable by untrusted code.
-hermes config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
-# The backend that uses that image. The container's TERMINAL_ENV=docker is not
-# enough: a board-dispatched worker reads terminal.* from this config, and the
-# shipped default `local` silently ran card commands inside the hermes
-# container itself, next to every credential and the board, with no gh.
-hermes config set terminal.backend docker >/dev/null
-
-# Credentials the sandbox needs to do repository work. Nothing else is
-# forwarded: the model key and the chat webhook stay outside it.
-hermes config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN"]' >/dev/null
+# Where agent commands run. Set globally and again in every profile below: a
+# board-dispatched worker builds its terminal from its own profile's config
+# alone, ignoring both the container's TERMINAL_ENV and the global config, and
+# without this falls back to Hermes' `local` backend -- the hermes container
+# itself, next to every credential and the board, with no gh.
+# $1 is empty for the global config or `-p <profile>`.
+sandbox_config() {
+    # Ralph's image adds git and gh to the stock sandbox and nothing else;
+    # every tool in there is reachable by untrusted code.
+    hermes $1 config set terminal.backend docker >/dev/null
+    hermes $1 config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
+    # Credentials the sandbox needs for repository work. Nothing else is
+    # forwarded: the model key and the chat webhook stay outside it.
+    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN"]' >/dev/null
+    # One sandbox's ceiling. A maintenance build of a large repository peaks at
+    # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
+    hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
+}
+sandbox_config ""
 
 # The review lenses (PR 2 of the fleet-into-ralph design) run on an OpenAI
 # credential Ralph's other nine profiles never touch -- those stay on
@@ -183,6 +186,7 @@ for dir in "$PROFILES_DIR"/*/; do
             docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
             docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         fi
+        sandbox_config "-p $name"
         continue
     fi
     if [ -f "$dir/SOUL.md" ]; then
@@ -194,7 +198,23 @@ for dir in "$PROFILES_DIR"/*/; do
         python3 /ralph/bootstrap/write-profile-config.py \
             "$dir/config.yaml" "$target/config.yaml"
     fi
+    sandbox_config "-p $name"
 done
+
+# A dispatched worker sees its own profile's .env, not the container's, so a
+# profile with no GH_TOKEN there has no repository access from a card
+# (docs/decisions/0001). Give each such profile the stack's review token; the
+# author, builder and maintainer keep the push token written above.
+if [ -n "${RALPH_GITHUB_TOKEN:-}" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -i -u hermes -e RALPH_GITHUB_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
+        for f in "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
+            case "$f" in */ralph-maintainer/*|*/ralph-builder/*|*/ralph-author/*) continue ;; esac
+            [ -f "$f" ] && ! grep -q "^GH_TOKEN=" "$f" || continue
+            printf "GH_TOKEN=%s\n" "$RALPH_GITHUB_TOKEN" >> "$f"
+            chmod 600 "$f"
+        done'
+    echo "  every other profile reads with RALPH_GITHUB_TOKEN"
+fi
 
 # The three skills the manifest references rather than the repository holding.
 # Tolerant of a failure here: a stack that cannot reach GitHub should start
