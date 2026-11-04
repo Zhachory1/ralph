@@ -103,9 +103,24 @@ sandbox_config() {
     # borrows its objects (git clone --reference) instead of downloading a
     # large repository again. Read-only: a sandbox runs untrusted code and
     # must not be able to corrupt what every other card borrows from.
-    if [ -n "$REPO_CACHE_SRC" ]; then
+    # Only the profiles that actually clone a repository get it ($3=1): the
+    # cache holds the full objects of every repository this instance has
+    # ever touched, across every org, so a profile with no business cloning
+    # (researcher, the lenses, the orchestrator, ...) must not get filesystem
+    # read access to repositories outside whatever one card's token scopes it
+    # to (#79 review: confidentiality).
+    if [ -n "$REPO_CACHE_SRC" ] && [ "${3:-}" = "1" ]; then
         hermes $1 config set terminal.docker_volumes "[\"$REPO_CACHE_SRC:/repo-cache:ro\"]" >/dev/null
     fi
+}
+# Profiles whose SOUL tells them to clone through /repo-cache. Every other
+# profile reads through gh api/gh search with no clone (plan in #77), so it
+# must not be able to see the cache at all.
+repo_cache_profile() {
+    case "$1" in
+        builder|maintainer|author) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 # The daemon resolves a bind source on the VM, so the cache is named by the
 # host path behind this instance's /workspaces, never by a path in a container.
@@ -191,7 +206,10 @@ fi
 
 for dir in "$PROFILES_DIR"/*/; do
     [ -d "$dir" ] || continue
-    name="ralph-$(basename "$dir")"
+    base="$(basename "$dir")"
+    name="ralph-$base"
+    cache_arg=""
+    repo_cache_profile "$base" && cache_arg="1" || true
 
     if ! hermes profile list 2>/dev/null | grep -q "\b${name}\b"; then
         hermes profile create "$name" --description "Ralph $(basename "$dir")" >/dev/null
@@ -211,7 +229,7 @@ for dir in "$PROFILES_DIR"/*/; do
             docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
             docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         fi
-        sandbox_config "-p $name" "$target"
+        sandbox_config "-p $name" "$target" "$cache_arg"
         continue
     fi
     if [ -f "$dir/SOUL.md" ]; then
@@ -223,7 +241,7 @@ for dir in "$PROFILES_DIR"/*/; do
         python3 /ralph/bootstrap/write-profile-config.py \
             "$dir/config.yaml" "$target/config.yaml"
     fi
-    sandbox_config "-p $name" "$target"
+    sandbox_config "-p $name" "$target" "$cache_arg"
 done
 
 # A dispatched worker sees its own profile's .env, not the container's, so a

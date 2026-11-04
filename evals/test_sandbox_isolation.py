@@ -90,6 +90,15 @@ class SandboxEscapeTests(unittest.TestCase):
         self.assertIn("No such file", self.inside("ls /root/.hermes/profiles 2>&1"))
 
 
+# Profiles whose SOUL tells them to clone through /repo-cache
+# (bootstrap/install's repo_cache_profile). Every other profile reads
+# through gh api/gh search with no clone, so it must not see the cache at
+# all: the cache holds the full objects of every repository this instance
+# has ever touched, across every org, not just the one a given card is
+# scoped to (#79 review: confidentiality).
+REPO_CACHE_PROFILES = {"ralph-builder", "ralph-maintainer", "ralph-author"}
+
+
 class SandboxScopeTests(unittest.TestCase):
     """Every mount is under the profile's own directory, so two profiles
     running code never share a sandbox."""
@@ -103,6 +112,13 @@ class SandboxScopeTests(unittest.TestCase):
             raise unittest.SkipTest("no running sandbox; use a profile's shell once, then re-run")
         cls.mounts = json.loads(docker(
             "inspect", cls.sandbox, "--format", "{{json .Mounts}}").stdout or "[]")
+        # Every profile-scoped mount's source names the profile, so pull it
+        # from there rather than trust a container label that might not exist.
+        cls.profile = next(
+            (m["Source"].split("/profiles/", 1)[1].split("/", 1)[0]
+             for m in cls.mounts if "/profiles/" in m["Source"]),
+            None,
+        )
 
     def test_every_mount_is_profile_scoped(self):
         """Profile-scoped, or a public skill lane mounted read-only: the
@@ -116,8 +132,19 @@ class SandboxScopeTests(unittest.TestCase):
             if mount["Destination"] == "/repo-cache":
                 self.assertFalse(mount.get("RW"), mount["Source"])
                 self.assertTrue(mount["Source"].endswith("/repo-cache"), mount["Source"])
+                self.assertIn(self.profile, REPO_CACHE_PROFILES,
+                              f"{self.profile} must not see the repo cache")
                 continue
             self.assertIn("/profiles/", mount["Source"], mount["Source"])
+
+    def test_repo_cache_mount_is_limited_to_checkout_profiles(self):
+        """A profile outside builder/maintainer/author never gets /repo-cache,
+        even read-only: it has no reason to clone, and the cache spans every
+        repository this instance has touched, not just the one it is working."""
+        if self.profile in REPO_CACHE_PROFILES:
+            raise unittest.SkipTest(f"{self.profile} is allowed the cache; covered above")
+        has_cache = any(m["Destination"] == "/repo-cache" for m in self.mounts)
+        self.assertFalse(has_cache, f"{self.profile} must not see /repo-cache")
 
     def test_writable_mounts_are_workspace_and_home_only(self):
         writable = sorted(m["Destination"] for m in self.mounts if m.get("RW"))
