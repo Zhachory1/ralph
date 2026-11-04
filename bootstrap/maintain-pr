@@ -46,12 +46,9 @@ CI, not on a person. The next round is created blocked, and one chat alert
 goes out; a human unblocks it. New human feedback always runs, so a busy PR
 with people reviewing never trips this. Rounds are not limited otherwise.
 
-NO CAP HERE, BY DIRECT INSTRUCTION. The one cap in this design is on review,
-3 rounds per pull request, where a new round is bounded because the fleet's
-own reasoning for it is sound: without a cap, an agent and a human reviewer
-can trade rounds indefinitely. Maintenance does not get a copy of that shape
--- every PR with real, new feedback gets a round, with no per-PR ceiling and
-no daily ceiling. Throughput is the explicit priority; concurrency
+NO CAP HERE, BY DIRECT INSTRUCTION. Every PR with real, new feedback gets a
+round, with no per-PR ceiling and no daily ceiling. Review has no round cap
+either; it reviews each head once. Throughput is the explicit priority; concurrency
 (kanban.max_in_progress) is the only lever that bounds how much of this runs
 at once.
 """

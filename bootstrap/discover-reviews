@@ -20,9 +20,9 @@ a while. --once-for-real is required to let it call build-review-graph; every
 other flag works without it, so a dry run of the discovery and filtering logic
 alone never needs that acknowledgement.
 
-AT MOST 3 REVIEW ROUNDS PER PR, BY DIRECT INSTRUCTION -- the only cap. A
-round is a head this account submitted any review on (the fleet's, posted
-unmarked under the same account, count too). A fourth head is skipped before any model spend.
+NO CAP ON REVIEW ROUNDS, BY DIRECT INSTRUCTION (2026-11-04, replacing the
+3-round cap of 85e98c2). Each head is reviewed once: a head this account
+already reviewed is never reviewed again. One review per PR runs at a time.
 
 NO DAILY CAP, BY DIRECT INSTRUCTION. Every assigned PR gets reviewed, not a
 count held low on purpose. The lever against a real backlog flood is
@@ -242,9 +242,6 @@ def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
     return path
 
 
-MAX_ROUNDS = 3
-
-
 def reviews_by_me(repo: str, number: int) -> dict[str, float] | None:
     """Heads this account has already submitted a review on, one per round,
     each with its newest review's epoch time. Any review counts, not only
@@ -271,9 +268,8 @@ _LOGIN = None
 
 def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
     """Heads (8-char prefixes) this PR already has a review graph for, and
-    whether one is still running. Every graph spends a review, published or
-    not, so each counts toward MAX_ROUNDS. None means the board could not be
-    read, and the PR is skipped this pass, as for unreadable reviews."""
+    whether one is still running. None means the board could not be read,
+    and the PR is skipped this pass, as for unreadable reviews."""
     r = subprocess.run(hermes_argv("kanban", "--board", board, "list", "--archived",
                                    "--assignee", "ralph-review-synthesis", "--json"),
                        capture_output=True, text=True)
@@ -411,12 +407,9 @@ def main() -> int:
         if heads is None:
             print(f"  skip {repo}#{number}: could not read its reviews", file=sys.stderr)
             continue
-        if head_sha not in heads and len(heads) >= MAX_ROUNDS:
-            print(f"  skip {repo}#{number}: review cap reached ({len(heads)} rounds)")
-            continue
-        # One review graph per PR in flight: a newer head waits for it to
-        # publish, so pushes cannot queue graphs faster than the round cap
-        # counts them. The latest head is reviewed once it is free.
+        # Each head is reviewed once (deduped by head SHA), with no cap on
+        # rounds. One review graph per PR runs at a time: a newer head waits
+        # for it, then the latest head is reviewed.
         if not args.once_for_real:
             print(f"  {repo}#{number} @ {head_sha[:8]}")
             continue
@@ -426,9 +419,6 @@ def main() -> int:
             continue
         graphs, running = board_view
         rounds = {h[:8] for h in heads} | graphs
-        if head_sha[:8] not in rounds and len(rounds) >= MAX_ROUNDS:
-            print(f"  skip {repo}#{number}: review cap reached ({len(rounds)} rounds)")
-            continue
         if head_sha[:8] not in rounds and running:
             print(f"  wait {repo}#{number}: a review is still running")
             continue

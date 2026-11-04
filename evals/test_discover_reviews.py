@@ -86,7 +86,7 @@ class AllowlistTests(unittest.TestCase):
 
 
 class ReviewRoundCapTests(unittest.TestCase):
-    """The only cap: 3 review rounds per PR."""
+    """No cap on review rounds: each new head is reviewed once."""
 
     def _admitted(self, heads):
         import sys
@@ -104,13 +104,10 @@ class ReviewRoundCapTests(unittest.TestCase):
                 discover_reviews.main()
             return len([c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])])
 
-    def test_third_round_is_admitted(self):
-        self.assertEqual(1, self._admitted({"a" * 40, "b" * 40}))
+    def test_a_fourth_round_is_admitted(self):
+        self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "c" * 40}))
 
-    def test_fourth_round_is_skipped(self):
-        self.assertEqual(0, self._admitted({"a" * 40, "b" * 40, "c" * 40}))
-
-    def test_a_head_already_reviewed_is_not_blocked_by_the_cap(self):
+    def test_an_already_reviewed_head_is_rebuilt_idempotently(self):
         """Rebuilding an already-reviewed head is idempotent, not a new round."""
         self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "1" * 40}))
 
@@ -149,21 +146,19 @@ class ReviewSpacingTests(unittest.TestCase):
         self.assertEqual(1, self.admitted({"a" * 40: self.ago(1)}))
 
     def test_a_new_head_waits_while_a_review_is_in_flight(self):
-        """#81 review: without this, pushes queue graphs faster than the
-        round cap counts submitted reviews."""
+        """#81 review: one graph per PR at a time, so pushes cannot queue many."""
         with mock.patch.object(discover_reviews, "review_graphs", return_value=({"aaaaaaaa"}, True)):
             self.assertEqual(0, self.admitted({}))
 
     def test_an_unreadable_board_skips_rather_than_spends(self):
-        """#85 review: a failed board read bypassed the cap and the gate."""
+        """#85 review: a failed board read bypassed the in-flight gate."""
         with mock.patch.object(discover_reviews, "review_graphs", return_value=None):
             self.assertEqual(0, self.admitted({}))
 
-    def test_unpublished_graphs_count_toward_the_cap(self):
-        """#85 review: a graph whose publish was skipped still spent a review."""
+    def test_many_finished_graphs_do_not_block_a_new_head(self):
         with mock.patch.object(discover_reviews, "review_graphs",
                                return_value=({"aaaaaaaa", "bbbbbbbb", "cccccccc"}, False)):
-            self.assertEqual(0, self.admitted({}))
+            self.assertEqual(1, self.admitted({}))
 
     def test_an_already_reviewed_head_is_rebuilt_not_a_new_round(self):
         self.assertEqual(1, self.admitted({"1" * 40: self.ago(1)}))
