@@ -3,6 +3,7 @@ model:
   default: claude-haiku-4.5
 platform_toolsets:
   cli:
+    - terminal
     # Reads instruments and writes a report. Haiku because most of this job
     # is formatting what a dashboard already says; a card tagged for incident
     # evidence can be dispatched to a stronger model.

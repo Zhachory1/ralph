@@ -5,12 +5,12 @@ model:
   provider: openai-api
   default: gpt-6-sol
 platform_toolsets:
-  # file-only. Synthesis reads each lens's staged result and the diff; it
-  # does not read live GitHub and does not post. The publisher -- a
-  # deterministic process, not an agent -- owns the one GitHub write and
-  # re-checks the head before making it. This profile cannot bypass that
-  # even if it wanted to: it has no network and no GitHub credential.
+  # Synthesis reads each lens's staged result and the diff. The publisher -- a
+  # deterministic process, not an agent -- posts the review and re-checks the
+  # head before making it. Like every profile it has a terminal with the
+  # repository token for gh (docs/decisions/0001).
   cli:
+    - terminal
     - file
   api_server: [no_mcp]
 approvals:
@@ -49,7 +49,7 @@ skills:
     - /ralph/skills/voice
   creation_nudge_interval: 0
 agent:
-  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  disabled_toolsets: [delegation, kanban, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
   max_turns: 80
   run_budget_seconds: 480
   api_max_retries: 0

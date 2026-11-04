@@ -3,9 +3,9 @@ model:
   default: claude-sonnet-5
 platform_toolsets:
   cli:
-    # The web, and somewhere to write the note. No terminal and no code
-    # execution: everything this profile reads is untrusted, and the less it
-    # can do with a page that asks it to do something, the better.
+    # The web, somewhere to write the note, and a terminal with the repository
+    # token for gh (docs/decisions/0001), so private repositories are in reach.
+    - terminal
     - web
     - file
   api_server: [no_mcp]

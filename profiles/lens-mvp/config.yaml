@@ -3,20 +3,17 @@
 # already runs on gpt-6-luna in production, so the model line is
 # unchanged, unlike the generalist (Design-Doc section 2, dissent 5).
 #
-# A third difference from the fleet's shape, and the reason this profile
-# has no terminal: PR 3's restricted evidence server now exists, so this
-# role reads a diff staged into its workspace rather than gh api against
-# live GitHub, matching the generalist and synthesis shape the fleet's
-# own config already uses for those two roles. It never held a GitHub
-# credential capable of a write; now it holds none at all.
+# A third difference from the fleet's shape: this role reads a diff staged
+# into its workspace through lens-tools first, matching the generalist and
+# synthesis. Like every profile it also has a terminal with the repository
+# token for gh (docs/decisions/0001).
 model:
   provider: openai-api
   default: gpt-6-luna
 platform_toolsets:
-  # file-only: no terminal, no network, no GitHub credential. See the header
-  # comment -- this role reads staged evidence through lens-tools, same as
-  # the generalist and synthesis.
+  # Staged evidence through lens-tools, and a terminal for gh. See the header.
   cli:
+    - terminal
     - file
   api_server: [no_mcp]
 approvals:

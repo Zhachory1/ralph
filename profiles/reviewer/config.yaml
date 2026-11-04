@@ -3,6 +3,7 @@ model:
   default: claude-sonnet-5
 platform_toolsets:
   cli:
+    - terminal
     - code_execution
     - file
   api_server: [no_mcp]

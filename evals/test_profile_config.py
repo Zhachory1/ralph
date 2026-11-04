@@ -119,22 +119,32 @@ class DeclarationTests(unittest.TestCase):
         for name in ("researcher", "analyst", "watcher"):
             self.assertNotIn("code_execution", self.toolsets(name), name)
 
-    def test_the_researcher_holds_nothing_but_the_web(self):
-        """Everything it reads is untrusted; the less it can do, the better."""
+    def test_every_profile_can_reach_github_from_a_terminal(self):
+        """docs/decisions/0001: every profile can use gh. terminal is the toolset
+        that carries the forwarded token; code_execution scrubs it."""
+        import yaml
+        for f in sorted((ROOT / "profiles").glob("*/config.yaml")):
+            with self.subTest(profile=f.parent.name):
+                config = yaml.safe_load(f.read_text())
+                self.assertIn("terminal", self.toolsets(f.parent.name))
+                disabled = (config.get("agent") or {}).get("disabled_toolsets") or []
+                self.assertNotIn("terminal", disabled)
+
+    def test_the_researcher_reads_the_web_and_cannot_plan(self):
         declared = self.toolsets("researcher")
         self.assertIn("web", declared)
-        for forbidden in ("kanban", "terminal", "code_execution"):
+        for forbidden in ("kanban", "code_execution"):
             self.assertNotIn(forbidden, declared, forbidden)
 
     def test_the_chat_maintainer_reads_untrusted_chat_and_holds_nothing_else(self):
         """It reads what strangers wrote to the owner, so it gets the drafter's
-        shape: staged files in, a decision out. No shell, no network, no board
-        write, and the lens-tools allowlist names no tool that could send."""
+        shape: staged files in, a decision out. A terminal for gh (decision 0001),
+        no network, no board write, and no lens-tools tool that could send."""
         import yaml
         config = yaml.safe_load((ROOT / "profiles" / "chat-maintainer" / "config.yaml").read_text())
-        self.assertEqual(["file"], self.toolsets("chat-maintainer"))
+        self.assertEqual(["terminal", "file"], self.toolsets("chat-maintainer"))
         disabled = config["agent"]["disabled_toolsets"]
-        for withheld in ("terminal", "code_execution", "web", "browser", "kanban", "delegation"):
+        for withheld in ("code_execution", "web", "browser", "kanban", "delegation"):
             self.assertIn(withheld, disabled, withheld)
         allowed = config["mcp_servers"]["lens-tools"]["tools"]["include"]
         self.assertEqual(
