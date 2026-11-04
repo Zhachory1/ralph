@@ -26,6 +26,13 @@ discover_reviews = importlib.util.module_from_spec(_spec)
 _loader.exec_module(discover_reviews)
 
 
+def setUpModule():
+    """Tests that do not exercise the board read see an empty, readable board."""
+    patcher = mock.patch.object(discover_reviews, "review_graphs", return_value=(set(), False))
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
 def fake_pr(repo, number, title="x"):
     return {"repository": {"nameWithOwner": repo}, "number": number, "title": title,
            "url": f"https://github.com/{repo}/pull/{number}", "updatedAt": "2026-01-01T00:00:00Z"}
@@ -140,6 +147,23 @@ class ReviewSpacingTests(unittest.TestCase):
 
     def test_a_new_head_soon_after_a_review_is_reviewed(self):
         self.assertEqual(1, self.admitted({"a" * 40: self.ago(1)}))
+
+    def test_a_new_head_waits_while_a_review_is_in_flight(self):
+        """#81 review: without this, pushes queue graphs faster than the
+        round cap counts submitted reviews."""
+        with mock.patch.object(discover_reviews, "review_graphs", return_value=({"aaaaaaaa"}, True)):
+            self.assertEqual(0, self.admitted({}))
+
+    def test_an_unreadable_board_skips_rather_than_spends(self):
+        """#85 review: a failed board read bypassed the cap and the gate."""
+        with mock.patch.object(discover_reviews, "review_graphs", return_value=None):
+            self.assertEqual(0, self.admitted({}))
+
+    def test_unpublished_graphs_count_toward_the_cap(self):
+        """#85 review: a graph whose publish was skipped still spent a review."""
+        with mock.patch.object(discover_reviews, "review_graphs",
+                               return_value=({"aaaaaaaa", "bbbbbbbb", "cccccccc"}, False)):
+            self.assertEqual(0, self.admitted({}))
 
     def test_an_already_reviewed_head_is_rebuilt_not_a_new_round(self):
         self.assertEqual(1, self.admitted({"1" * 40: self.ago(1)}))

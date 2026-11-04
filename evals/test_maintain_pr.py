@@ -117,6 +117,14 @@ class ApprovalSupersedesTests(unittest.TestCase):
         r["user"]["type"] = "Bot"
         self.assertNotEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
 
+    def test_a_bot_reposting_the_same_finding_is_the_same_feedback(self):
+        """#83 review: a bot reposts under a new id on every push."""
+        a = self.r(1, "COMMENTED", "claude[bot]"); a["user"]["type"] = "Bot"
+        b = self.r(2, "COMMENTED", "claude[bot]"); b["user"]["type"] = "Bot"
+        b["body"] = a["body"]
+        self.assertEqual(maintain_pr.feedback_digest(self._snapshot([a])),
+                         maintain_pr.feedback_digest(self._snapshot([b])))
+
     def test_a_bot_review_does_not_move_the_human_digest(self):
         """The breaker counts people: a bot re-reviewing every push cannot
         look like new human feedback (op3#15144)."""
