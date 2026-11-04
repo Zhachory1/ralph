@@ -82,6 +82,11 @@ hermes config set kanban.auto_decompose false >/dev/null
 # cannot branch, push, or open a pull request. Ralph's sandbox image adds those
 # two and nothing else; every tool in there is reachable by untrusted code.
 hermes config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
+# The backend that uses that image. The container's TERMINAL_ENV=docker is not
+# enough: a board-dispatched worker reads terminal.* from this config, and the
+# shipped default `local` silently ran card commands inside the hermes
+# container itself, next to every credential and the board, with no gh.
+hermes config set terminal.backend docker >/dev/null
 
 # Credentials the sandbox needs to do repository work. Nothing else is
 # forwarded: the model key and the chat webhook stay outside it.
