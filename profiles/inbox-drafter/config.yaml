@@ -7,17 +7,17 @@
 # bootstrap/inbox-producer stages the thread as files on the host;
 # bootstrap/inbox-writer, also on the host, reads this profile's completed
 # reply text and calls drafts.create, and contains no send call at all.
-# This profile sees only lens-tools: read staged files, complete its own
-# card. No terminal, no network, no credential.
+# This profile reads staged files through lens-tools and completes its own
+# card. It has a terminal with the repository token, like every profile
+# (docs/decisions/0001), and no Gmail credential.
 model:
   provider: anthropic
   default: claude-sonnet-5
 platform_toolsets:
-  # Same shape as the review lenses. An empty list leaves the lens-tools MCP
-  # server nothing to attach to (verified: a card on cli: [] saw only
-  # kanban tools). `file` reaches only this card's own workspace, never
-  # Gmail -- the token is not in this container.
+  # `file` reaches only this card's own workspace, never Gmail -- that token
+  # is not in this container. `terminal` is for gh.
   cli:
+    - terminal
     - file
   api_server: [no_mcp]
 approvals:
@@ -52,7 +52,7 @@ skills:
     - /ralph/skills/voice
   creation_nudge_interval: 0
 agent:
-  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  disabled_toolsets: [delegation, kanban, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
   max_turns: 40
   run_budget_seconds: 480
   api_max_retries: 0

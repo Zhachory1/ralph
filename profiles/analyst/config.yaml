@@ -3,8 +3,9 @@ model:
   default: claude-sonnet-5
 platform_toolsets:
   cli:
-    # Queries and a write-up. No terminal: an analysis ends in a document,
-    # and a read-only warehouse credential should not sit next to a shell.
+    # Queries and a write-up, plus a terminal with the repository token for
+    # gh (docs/decisions/0001).
+    - terminal
     - file
     - web
   api_server: [no_mcp]

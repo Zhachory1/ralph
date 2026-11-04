@@ -3,6 +3,7 @@ model:
   default: claude-opus-5
 platform_toolsets:
   cli:
+    - terminal
     # Runs training and evaluation code, so it needs a terminal and a
     # sandbox. Opus because a bad experiment design wastes compute, which
     # is the expensive mistake this profile can make.

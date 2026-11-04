@@ -3,6 +3,7 @@ model:
   default: claude-sonnet-5
 platform_toolsets:
   cli:
+    - terminal
     # Reads the board, runs the evals, writes one report. It judges the
     # system, so it needs to see the board; it may not edit what it judges,
     # which is enforced by its token rather than by this list.

@@ -29,7 +29,7 @@ Two human gates sit in the main line: design-doc approval and merge. Agents prep
 
 ### Profiles exist at permission boundaries
 
-A new profile is justified by different permissions, resources, or lifecycle — never by different know-how. Different know-how is a skill.
+A new profile is justified by different permissions, resources, or lifecycle — never by different know-how. Different know-how is a skill. Every profile can read repositories with `gh` ([decision 0001](docs/decisions/0001-every-profile-gets-repository-access.md)); the table below is about what each profile may change.
 
 | Profile | Can | Cannot |
 | --- | --- | --- |
@@ -37,12 +37,12 @@ A new profile is justified by different permissions, resources, or lifecycle —
 | author | Write the docs repo | Touch code repos |
 | reviewer | Comment, request changes | Approve, push |
 | builder | Branch, push, open PRs | Merge |
-| researcher | Read the web | Hold any credential |
+| researcher | Read the web and repositories | Change a repository |
 | analyst | Read the warehouse | Write anywhere |
 | experimenter | Spend compute, under a hard cap | Deploy, write production data |
 | auditor | Judge the system | Edit what it judges |
 | watcher | Read observability | Write anything |
-| chat-maintainer | Read staged chat, decide routing, draft replies | Hold the chat credential, send, create cards |
+| chat-maintainer | Read staged chat, route, write replies | Hold the chat credential, send directly, create cards |
 
 All ten exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other five are built and unexercised.
 

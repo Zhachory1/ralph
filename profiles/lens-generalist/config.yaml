@@ -12,12 +12,11 @@ model:
   provider: openai-api
   default: gpt-6-luna
 platform_toolsets:
-  # file-only, no terminal, no network: PR 3's restricted evidence server does
-  # not exist yet, so this profile reads a diff staged into its workspace by
-  # whatever dispatches it -- by hand for now. It cannot reach GitHub, cannot
-  # create cards, and cannot post anything, which is the one property this
-  # profile must have before it ever reads a real PR.
+  # Reads the diff staged into its workspace first. Like every profile it has a
+  # terminal with the repository token for gh (docs/decisions/0001); it creates
+  # no cards, and the publisher, not this profile, posts the review.
   cli:
+    - terminal
     - file
   api_server: [no_mcp]
 approvals:
@@ -60,7 +59,7 @@ skills:
     - /ralph/skills/voice
   creation_nudge_interval: 0
 agent:
-  disabled_toolsets: [delegation, kanban, terminal, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
+  disabled_toolsets: [delegation, kanban, code_execution, browser, computer_use, web, skills, memory, vision, image_gen, tts, todo, connections]
   max_turns: 80
   run_budget_seconds: 480
   api_max_retries: 0
