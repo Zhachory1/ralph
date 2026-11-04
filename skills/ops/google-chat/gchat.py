@@ -77,7 +77,7 @@ def _machine_id() -> str:
     if s == "Darwin":
         try:
             out = subprocess.run(
-                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                ["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
                 capture_output=True, text=True, timeout=5,
             ).stdout
             for line in out.splitlines():
