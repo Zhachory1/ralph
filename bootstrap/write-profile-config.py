@@ -25,7 +25,10 @@ import re
 import sys
 
 # A top-level block and the indented lines under it.
-BLOCKS = ("model", "platform_toolsets", "approvals", "skills")
+# terminal is generated per profile by bootstrap/install (sandbox root, image,
+# forwarded credentials, repo-cache mount) and appended to the source, so one
+# write replaces what used to be a hermes config set call per key.
+BLOCKS = ("model", "platform_toolsets", "approvals", "skills", "terminal")
 
 
 def block_re(name: str) -> re.Pattern[str]:

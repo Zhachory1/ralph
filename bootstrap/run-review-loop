@@ -87,5 +87,8 @@ while true; do
         done
     fi
 
+    # --once: one pass now instead of waiting up to INTERVAL for the next,
+    # e.g. `docker compose exec review-loop /ralph/bootstrap/run-review-loop --once`.
+    [ "${1:-}" = "--once" ] && break
     sleep "$INTERVAL"
 done
