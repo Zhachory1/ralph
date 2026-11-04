@@ -233,15 +233,21 @@ def feedback_digest(snapshot: dict) -> str:
     def digest(raw: bytes) -> str:
         return hashlib.sha256(raw).hexdigest()
 
-    items = [["review", str(r["id"]), digest(r["body"].encode())]
-            for r in snapshot["reviews"]]
-    items += [["thread", t["id"], c["id"], digest(c["body"].encode())]
-             for t in snapshot["threads"] for c in t["comments"]]
+    # A bot reposts the same finding under a new review or thread id on
+    # every push, so its items are keyed by text alone: the same words are
+    # the same feedback, and start no new round.
+    items = [["bot", digest(r["body"].encode())] if r.get("bot")
+             else ["review", str(r["id"]), digest(r["body"].encode())]
+             for r in snapshot["reviews"]]
+    items += [["bot", digest(c["body"].encode())] if c.get("bot")
+              else ["thread", t["id"], c["id"], digest(c["body"].encode())]
+              for t in snapshot["threads"] for c in t["comments"]]
     items += [["check", digest(json.dumps(c, sort_keys=True, separators=(",", ":"),
                                           ensure_ascii=False).encode())]
              for c in snapshot["checks"]]
     if not items:
         return "empty"
+    items = [list(x) for x in {tuple(i) for i in items}]
     return digest(json.dumps(sorted(items), separators=(",", ":"), ensure_ascii=False).encode())
 
 
