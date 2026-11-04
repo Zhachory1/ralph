@@ -144,8 +144,14 @@ class ReviewSpacingTests(unittest.TestCase):
     def test_a_new_head_waits_while_a_review_is_in_flight(self):
         """#81 review: without this, pushes queue graphs faster than the
         round cap counts submitted reviews."""
-        with mock.patch.object(discover_reviews, "review_in_flight", return_value=True):
-            self.assertEqual(0, self.admitted({"a" * 40: self.ago(1)}))
+        with mock.patch.object(discover_reviews, "review_graphs", return_value=({"aaaaaaaa"}, True)):
+            self.assertEqual(0, self.admitted({}))
+
+    def test_unpublished_graphs_count_toward_the_cap(self):
+        """#85 review: a graph whose publish was skipped still spent a review."""
+        with mock.patch.object(discover_reviews, "review_graphs",
+                               return_value=({"aaaaaaaa", "bbbbbbbb", "cccccccc"}, False)):
+            self.assertEqual(0, self.admitted({}))
 
     def test_an_already_reviewed_head_is_rebuilt_not_a_new_round(self):
         self.assertEqual(1, self.admitted({"1" * 40: self.ago(1)}))
