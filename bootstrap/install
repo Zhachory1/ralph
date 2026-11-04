@@ -99,22 +99,6 @@ sandbox_config() {
     # One sandbox's ceiling. A maintenance build of a large repository peaks at
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
-    # This instance's repository cache, read-only at /repo-cache, so a card
-    # borrows its objects (git clone --reference) instead of downloading a
-    # large repository again. Read-only: a sandbox runs untrusted code and
-    # must not be able to corrupt what every other card borrows from.
-    # Only the profiles that actually clone a repository get it ($3=1): the
-    # cache holds the full objects of every repository this instance has
-    # ever touched, across every org, so a profile with no business cloning
-    # (researcher, the lenses, the orchestrator, ...) must not get filesystem
-    # read access to repositories outside whatever one card's token scopes it
-    # to (#79 review: confidentiality).
-    if [ -n "$REPO_CACHE_SRC" ] && [ "${3:-}" = "1" ]; then
-        hermes $1 config set terminal.docker_volumes "[\"$REPO_CACHE_SRC:/repo-cache:ro\"]" >/dev/null
-    else
-        # An earlier install may have given this profile the cache; take it back.
-        hermes $1 config unset terminal.docker_volumes >/dev/null 2>&1 || true
-    fi
 }
 # Profiles whose SOUL tells them to clone through /repo-cache. Every other
 # profile reads through gh api/gh search with no clone (plan in #77), so it
@@ -124,6 +108,25 @@ repo_cache_profile() {
         builder|maintainer|author) return 0 ;;
         *) return 1 ;;
     esac
+}
+# The same settings as sandbox_config, as the profile's whole terminal block,
+# so write-profile-config writes them with the rest of the profile in one go.
+terminal_block() {
+    echo "terminal:"
+    echo "  backend: docker"
+    echo "  docker_image: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}"
+    echo "  docker_forward_env: [GH_TOKEN, GITHUB_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, BUF_TOKEN]"
+    echo "  container_memory: ${RALPH_SANDBOX_MEMORY_MB:-3072}"
+    echo "  sandbox_dir: $1/sandboxes/${RALPH_INSTANCE:-ralph}"
+    # The instance's repository cache, so a card borrows its objects (git
+    # clone --reference) instead of downloading a large repository again.
+    # Read-only: a sandbox runs untrusted code and must not corrupt what other
+    # cards borrow from. Clone profiles only: the cache holds every repository
+    # this instance has touched, across every org (#79 review). Writing the
+    # whole block also drops the mount from a profile that no longer gets it.
+    if [ -n "$REPO_CACHE_SRC" ] && repo_cache_profile "$2"; then
+        echo "  docker_volumes: [\"$REPO_CACHE_SRC:/repo-cache:ro\"]"
+    fi
 }
 # The daemon resolves a bind source on the VM, so the cache is named by the
 # host path behind this instance's /workspaces, never by a path in a container.
@@ -207,14 +210,18 @@ else
     echo "  board ${QUEUES_BOARD} already exists"
 fi
 
+# Listed once: each hermes call is a docker exec, and this loop runs per profile.
+PROFILE_LIST=$(hermes profile list 2>/dev/null || true)
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
+fi
+SRC_TMP=$(mktemp)
 for dir in "$PROFILES_DIR"/*/; do
     [ -d "$dir" ] || continue
     base="$(basename "$dir")"
     name="ralph-$base"
-    cache_arg=""
-    repo_cache_profile "$base" && cache_arg="1" || true
 
-    if ! hermes profile list 2>/dev/null | grep -q "\b${name}\b"; then
+    if ! printf '%s\n' "$PROFILE_LIST" | grep -q "\b${name}\b"; then
         hermes profile create "$name" --description "Ralph $(basename "$dir")" >/dev/null
         echo "  created profile ${name}"
     else
@@ -227,12 +234,9 @@ for dir in "$PROFILES_DIR"/*/; do
             { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$dir/SOUL.md"; } |
                 docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$target/SOUL.md"
         fi
-        if [ -f "$dir/config.yaml" ]; then
-            docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
-            docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
-            docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
-        fi
-        sandbox_config "-p $name" "$target" "$cache_arg"
+        { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"; } > "$SRC_TMP"
+        docker cp "$SRC_TMP" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
+        docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         continue
     fi
     if [ -f "$dir/SOUL.md" ]; then
@@ -240,12 +244,10 @@ for dir in "$PROFILES_DIR"/*/; do
     fi
 
     # The model and the toolsets are ours; the rest is Hermes-generated.
-    if [ -f "$dir/config.yaml" ]; then
-        python3 /ralph/bootstrap/write-profile-config.py \
-            "$dir/config.yaml" "$target/config.yaml"
-    fi
-    sandbox_config "-p $name" "$target" "$cache_arg"
+    { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"; } > "$SRC_TMP"
+    python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
+rm -f "$SRC_TMP"
 
 # A dispatched worker sees its own profile's .env, not the container's, so a
 # profile with no GH_TOKEN there has no repository access from a card

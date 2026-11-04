@@ -61,6 +61,16 @@ class ApplyTests(unittest.TestCase):
         self.assertIn("kanban", out)
         self.assertNotIn("old", out)
 
+    def test_replaces_the_terminal_block_whole(self):
+        """install appends the terminal block; a key it stops writing (the
+        repo-cache mount) must leave the installed profile too."""
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            src.write_text("terminal:\n  backend: docker\n")
+            dst.write_text("terminal:\n  backend: local\n  docker_volumes: [x]\n")
+            wpc.main(str(src), str(dst))
+            self.assertEqual("terminal:\n  backend: docker\n", dst.read_text())
+
     def test_leaves_hermes_generated_config_alone(self):
         """Everything outside the two blocks is Hermes', and version-specific."""
         out = self.write("onboarding:\n  seen:\n    prompt: true\n_config_version: 46\n")
