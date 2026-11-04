@@ -24,7 +24,8 @@ class ChatSendTests(unittest.TestCase):
         service = mock.Mock()
         service.spaces.return_value.messages.return_value = Messages()
         args = argparse.Namespace(space="spaces/example", text="Test acknowledgement",
-                                  thread=thread, strict_thread=strict, request_id="ack-example-1")
+                                  thread=thread, strict_thread=strict, request_id="ack-example-1",
+                                  message_id="client-ralph-ack-example")
         with mock.patch.object(gchat, "_svc", return_value=service), \
                 mock.patch.object(gchat, "_emit"):
             gchat.cmd_send(args)
@@ -36,6 +37,7 @@ class ChatSendTests(unittest.TestCase):
         self.assertEqual("REPLY_MESSAGE_OR_FAIL", calls[0]["messageReplyOption"])
         self.assertEqual("spaces/example/threads/one", calls[0]["body"]["thread"]["name"])
         self.assertEqual("ack-example-1", calls[0]["requestId"])
+        self.assertEqual("client-ralph-ack-example", calls[0]["messageId"])
 
     def test_manual_thread_send_keeps_existing_fallback(self):
         self.assertEqual("REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",

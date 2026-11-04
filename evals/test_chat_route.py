@@ -73,9 +73,15 @@ class ChatRouteTests(unittest.TestCase):
         self.assertEqual("scratch", create[create.index("--workspace") + 1])
         self.assertEqual("chat-route-" + self.op_id, create[create.index("--idempotency-key") + 1])
         body = create[create.index("--body") + 1]
-        self.assertIn("spaces/demo/threads/thread1", body)
+        self.assertIn("operation_id: " + self.op_id, body)
+        self.assertIn("ralph-chat-maintainer", body)
         self.assertIn("Investigate the sample bug", body)
         self.assertNotIn("Please investigate the sample bug", body)
+        self.assertNotIn("spaces/", body, "destination stays in staged evidence, not card text")
+
+    def test_route_with_maintainer_ack_is_accepted(self):
+        self.metadata["ack"] = "On it."
+        self.assertEqual(0, self.run_route())
 
     def test_thread_resource_with_dot_is_accepted(self):
         self.item["thread"] = "spaces/demo/threads/thread1.part2"
@@ -95,7 +101,7 @@ class ChatRouteTests(unittest.TestCase):
                          creates[1][creates[1].index("--idempotency-key") + 1])
 
     def test_other_decisions_do_not_create_cards(self):
-        for decision in ("ignore", "draft_reply", "escalate", "send"):
+        for decision in ("ignore", "reply"):
             with self.subTest(decision=decision):
                 self.calls.clear()
                 self.metadata["decision"] = decision
@@ -130,9 +136,12 @@ class ChatRouteTests(unittest.TestCase):
         self.assertFalse(any("create" in c for c in self.calls))
 
     def test_unknown_decision_is_refused(self):
-        self.metadata["decision"] = "route\nprivate message text"
-        self.assertEqual(2, self.run_route())
-        self.assertFalse(any("create" in c for c in self.calls))
+        for decision in ("route\nprivate message text", "send", "draft_reply"):
+            with self.subTest(decision=decision):
+                self.calls.clear()
+                self.metadata["decision"] = decision
+                self.assertEqual(2, self.run_route())
+                self.assertFalse(any("create" in c for c in self.calls))
 
     def test_world_readable_evidence_is_refused(self):
         (self.evidence / "item.json").chmod(0o644)

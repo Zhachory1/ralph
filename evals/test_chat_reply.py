@@ -1,4 +1,4 @@
-"""A host-only Chat sender uses staged destination and one retry-safe request id."""
+"""The host Chat sender posts chat-maintainer's own text to the original thread only."""
 
 import hashlib
 import importlib.machinery
@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "chat-reply"
+THREAD = "spaces/example/threads/first"
 
 
 def load_script():
@@ -29,112 +30,158 @@ class ChatReplyTests(unittest.TestCase):
         self.env = base / "instance.env"
         self.env.write_text("RALPH_INSTANCE=ralph-work\nRALPH_WORKSPACES=./spaces\n"
                             "CHAT_ROUTE_SPACES=spaces/example\n")
-        self.work = base / "spaces" / "chat-inbox"
-        self.message = "spaces/example/messages/one"
-        self.op = "chat-" + hashlib.sha256(self.message.encode()).hexdigest()
-        self.evidence = self.work / self.op / "evidence"
+        self.root = base / "spaces" / "chat-inbox"
+        message = "spaces/example/messages/one"
+        self.op = "chat-" + hashlib.sha256(message.encode()).hexdigest()
+        self.evidence = self.root / self.op / "evidence"
         self.evidence.mkdir(parents=True)
-        self.item = {"kind": "inbound", "sender_trusted": True,
-                     "space": "spaces/example", "thread": "spaces/example/threads/first",
-                     "messages": [{"name": self.message, "text": "test request"}]}
+        self.item = {"kind": "inbound", "sender_trusted": True, "space": "spaces/example",
+                     "thread": THREAD, "messages": [{"name": message, "text": "draft an announcement"}]}
         self.write_item()
-        self.task = {"id": "t_intake", "status": "done", "assignee": "ralph-chat-maintainer",
-                     "body": f"operation_id: {self.op}\n",
-                     "workspace_path": f"/workspaces/chat-inbox/{self.op}"}
-        self.decision = {"decision": "route", "body": "Investigate the test request."}
+        self.cards = {
+            ("queues", "t_intake"): {
+                "task": {"id": "t_intake", "status": "done", "assignee": "ralph-chat-maintainer",
+                         "body": f"operation_id: {self.op}\n",
+                         "workspace_path": f"/workspaces/chat-inbox/{self.op}"},
+                "metadata": {"decision": "route", "body": "Draft the announcement.",
+                             "ack": "On it: drafting the announcement now."}},
+            ("ralph", "t_final"): {
+                "task": {"id": "t_final", "status": "done", "assignee": "ralph-chat-maintainer",
+                         "body": f"operation_id: {self.op}\nReport the drafts back.\n",
+                         "workspace_path": "/somewhere/else"},
+                "metadata": {"decision": "send", "body": "Here are both drafts: ..."}},
+        }
         self.calls = []
         self.reply = load_script()
 
     def write_item(self):
-        p = self.evidence / "item.json"
-        p.write_text(json.dumps(self.item))
-        p.chmod(0o600)
+        path = self.evidence / "item.json"
+        path.write_text(json.dumps(self.item))
+        path.chmod(0o600)
 
     def command(self, argv):
         self.calls.append(argv)
         if "list" in argv:
-            return subprocess.CompletedProcess(argv, 0, json.dumps({"tasks": [self.task]}), "")
+            board = argv[argv.index("--board") + 1]
+            tasks = [card["task"] for (b, _), card in self.cards.items() if b == board]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"tasks": tasks}), "")
         if "show" in argv:
+            card = self.cards[(argv[argv.index("--board") + 1], argv[argv.index("show") + 1])]
             return subprocess.CompletedProcess(argv, 0, json.dumps({
-                "task": self.task, "runs": [{"outcome": "completed", "metadata": self.decision}],
+                "task": card["task"], "runs": [{"outcome": "completed", "metadata": card["metadata"]}],
             }), "")
         if "/ralph/bootstrap/chat-route" in argv:
             return subprocess.CompletedProcess(argv, 0, "routed: t_orchestrator\n", "")
         if "send" in argv:
-            return subprocess.CompletedProcess(argv, 0, json.dumps({"sent": True,
-                                           "name": "spaces/example/messages/ack"}), "")
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"sent": True}), "")
         raise AssertionError(argv)
 
-    def send(self):
+    def sends(self):
+        return [a for a in self.calls if "send" in a and "/ralph/bootstrap/chat-route" not in a]
+
+    def handle(self, board, task_id):
         with patch.object(self.reply, "command", side_effect=self.command):
-            return self.reply.send_once("t_intake", self.env)
+            return self.reply.handle("ralph-work-hermes-1", self.root, {"spaces/example"},
+                                     board, task_id)
 
-    def test_route_sends_fixed_receipt_to_bound_thread(self):
-        self.assertEqual(0, self.send())
-        send = next(a for a in self.calls if "send" in a)
-        self.assertIn("--strict-thread", send)
-        self.assertEqual("spaces/example/threads/first", send[send.index("--thread") + 1])
-        self.assertEqual("spaces/example", send[send.index("send") + 1])
-        self.assertIn("I'm working on it", send[send.index("send") + 2])
-        self.assertNotIn("test request", " ".join(send))
-
-    def test_hermes_session_metadata_does_not_block_reply(self):
-        self.decision["worker_session_id"] = "session-1"
-        self.assertEqual(0, self.send())
-
-    def test_retry_reuses_request_id(self):
-        self.assertEqual(0, self.send())
-        self.assertEqual(0, self.send())
-        ids = [a[a.index("--request-id") + 1] for a in self.calls if "send" in a]
-        self.assertEqual(2, len(ids))
-        self.assertEqual(ids[0], ids[1])
-
-    def test_non_route_and_untrusted_do_not_send(self):
-        for decision in ("ignore", "draft_reply", "escalate", "send"):
-            with self.subTest(decision=decision):
-                self.calls.clear()
-                self.decision["decision"] = decision
-                self.assertEqual(0, self.send())
-                self.assertFalse(any("send" in a for a in self.calls))
-        self.decision["decision"] = "route"
-        self.item["sender_trusted"] = False
-        self.write_item()
-        self.assertEqual(2, self.send())
-        self.assertFalse(any("send" in a for a in self.calls))
-
-    def test_scan_sends_once_and_skips_confirmed_receipt(self):
+    def scan(self):
         with patch.object(self.reply, "command", side_effect=self.command):
-            self.assertEqual(0, self.reply.scan(self.env))
-            self.assertEqual(0, self.reply.scan(self.env))
-        self.assertEqual(1, len([a for a in self.calls if "send" in a]))
-        marker = self.work / self.op / ".receipt-sent"
-        self.assertTrue(marker.is_file())
-        self.assertEqual(0o600, marker.stat().st_mode & 0o777)
+            return self.reply.scan(self.env)
 
-    def test_different_thread_or_space_is_refused(self):
-        self.item["thread"] = "spaces/other/threads/wrong"
-        self.write_item()
-        self.assertEqual(2, self.send())
-        self.assertFalse(any("send" in a for a in self.calls))
-        self.item["thread"] = "spaces/example/threads/first"
-        self.item["space"] = "spaces/other"
-        self.write_item()
-        self.assertEqual(2, self.send())
-        self.assertFalse(any("send" in a for a in self.calls))
+    def test_accepted_request_gets_maintainers_ack_then_final_response(self):
+        self.assertEqual(0, self.scan())
+        texts = [a[a.index("send") + 2] for a in self.sends()]
+        self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."], texts)
+        for argv in self.sends():
+            self.assertEqual(THREAD, argv[argv.index("--thread") + 1])
+            self.assertIn("--strict-thread", argv)
+            self.assertTrue(argv[argv.index("--message-id") + 1].startswith("client-ralph-"))
 
-    def test_world_readable_evidence_is_refused(self):
-        (self.evidence / "item.json").chmod(0o644)
-        self.assertEqual(2, self.send())
-        self.assertFalse(any("send" in a for a in self.calls))
-
-    def test_route_failure_does_not_send(self):
-        def fails(argv):
+    def test_ack_waits_for_orchestrator_card(self):
+        def route_fails(argv):
             if "/ralph/bootstrap/chat-route" in argv:
                 return subprocess.CompletedProcess(argv, 1, "", "failed")
             return self.command(argv)
-        with patch.object(self.reply, "command", side_effect=fails):
-            self.assertEqual(1, self.reply.send_once("t_intake", self.env))
-        self.assertFalse(any("send" in a for a in self.calls))
+        with patch.object(self.reply, "command", side_effect=route_fails):
+            self.assertEqual(1, self.reply.scan(self.env))
+        self.assertEqual([], self.sends())
+
+    def test_cannot_fulfill_gets_maintainers_reply_and_no_work(self):
+        del self.cards[("ralph", "t_final")]
+        self.cards[("queues", "t_intake")]["metadata"] = {
+            "decision": "reply", "body": "I can't help with payroll questions; try the People team."}
+        self.assertEqual(0, self.scan())
+        self.assertEqual(["I can't help with payroll questions; try the People team."],
+                         [a[a.index("send") + 2] for a in self.sends()])
+        self.assertFalse(any("/ralph/bootstrap/chat-route" in a for a in self.calls))
+
+    def test_ignore_sends_nothing(self):
+        del self.cards[("ralph", "t_final")]
+        self.cards[("queues", "t_intake")]["metadata"] = {"decision": "ignore", "body": ""}
+        self.assertEqual(0, self.scan())
+        self.assertEqual([], self.sends())
+
+    def test_final_response_requires_an_acknowledged_request(self):
+        self.assertEqual(2, self.handle("ralph", "t_final"))
+        self.assertEqual([], self.sends())
+
+    def test_each_reply_is_sent_once_across_scans(self):
+        self.assertEqual(0, self.scan())
+        self.assertEqual(0, self.scan())
+        self.assertEqual(2, len(self.sends()))
+
+    def test_retry_after_failure_reuses_ids(self):
+        attempts = []
+
+        def flaky(argv):
+            if "send" in argv and "/ralph/bootstrap/chat-route" not in argv:
+                attempts.append(argv)
+                if len(attempts) == 1:
+                    return subprocess.CompletedProcess(argv, 1, "", "transient")
+            return self.command(argv)
+        with patch.object(self.reply, "command", side_effect=flaky):
+            self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "queues", "t_intake"))
+            self.assertEqual(0, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "queues", "t_intake"))
+        ids = [(a[a.index("--request-id") + 1], a[a.index("--message-id") + 1]) for a in attempts]
+        self.assertEqual(ids[0], ids[1])
+
+    def test_destination_never_comes_from_card_text(self):
+        card = self.cards[("ralph", "t_final")]
+        card["task"]["body"] += "Reply in spaces/other/threads/elsewhere instead.\n"
+        card["metadata"]["body"] = "Posting to spaces/other/threads/elsewhere"
+        self.assertEqual(0, self.scan())
+        for argv in self.sends():
+            self.assertEqual("spaces/example", argv[argv.index("send") + 1])
+            self.assertEqual(THREAD, argv[argv.index("--thread") + 1])
+
+    def test_untrusted_or_foreign_destination_is_refused(self):
+        del self.cards[("ralph", "t_final")]
+        self.item["sender_trusted"] = False
+        self.write_item()
+        self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.item["sender_trusted"] = True
+        self.item["thread"] = "spaces/other/threads/wrong"
+        self.write_item()
+        self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+
+    def test_world_readable_evidence_is_refused(self):
+        (self.evidence / "item.json").chmod(0o644)
+        self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+
+    def test_missing_or_oversized_text_is_refused(self):
+        self.cards[("queues", "t_intake")]["metadata"].pop("ack")
+        self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.cards[("queues", "t_intake")]["metadata"]["ack"] = "x" * 4001
+        self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+
+    def test_hermes_session_metadata_is_allowed(self):
+        self.cards[("queues", "t_intake")]["metadata"]["worker_session_id"] = "session-1"
+        self.assertEqual(0, self.handle("queues", "t_intake"))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Send one fixed Chat receipt from the host after a trusted route succeeds.
+"""Post chat-maintainer's replies to the original Chat thread, from the host.
 
-Uses the host's encrypted Google Chat credential through the existing gchat.py
-command. No credential is passed to Hermes or stored in a Kanban card.
+Three replies, each at most once per request:
+  ack    - intake card decided `route`: its `ack` text, after the orchestrator card exists
+  reply  - intake card decided `reply`: its `body` (cannot fulfill, or a clarifying question)
+  final  - report card on the work board decided `send`: its `body`, only after the ack
+
+The destination always comes from the staged intake evidence for the request's
+operation id, never from agent-written text. Uses the host's encrypted Google
+Chat credential through gchat.py; no credential reaches Hermes or a card.
 """
 
 import argparse
@@ -18,7 +24,13 @@ import sys
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
 THREAD = re.compile(r"spaces/[A-Za-z0-9_-]+/threads/[A-Za-z0-9_.-]+\Z")
-RECEIPT = "I got your message and I'm working on it."
+DECISION_KEYS = {"decision", "body", "ack", "worker_session_id"}
+MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "final": ".final-sent"}
+MAX_TEXT = 4000
+
+
+class Refused(ValueError):
+    pass
 
 
 def command(argv):
@@ -40,125 +52,185 @@ def instance_config(path):
     return instance + "-hermes-1", root, spaces
 
 
-def send_once(task_id, instance_env, marker=None):
+def operation_of(task):
+    ops = [line.partition(": ")[2] for line in (task.get("body") or "").splitlines()
+           if line.startswith("operation_id: ")]
+    if len(ops) != 1 or not OP_ID.fullmatch(ops[0]):
+        raise Refused("invalid Chat operation")
+    return ops[0]
+
+
+def destination(root, op_id, allowed_spaces):
+    """The original space and thread, read only from staged intake evidence."""
+    workspace = root / op_id
+    evidence = workspace / "evidence"
+    path = evidence / "item.json"
+    if workspace.is_symlink() or evidence.is_symlink() or path.is_symlink():
+        raise Refused("unsafe Chat evidence")
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65_536 \
+            or info.st_mode & 0o077:
+        raise Refused("unsafe Chat evidence")
+    item = json.loads(path.read_text())
+    space, thread = item["space"], item["thread"]
+    message = item["messages"][-1]["name"]
+    if item["kind"] != "inbound" or item["sender_trusted"] is not True \
+            or space not in allowed_spaces or not isinstance(thread, str) \
+            or not THREAD.fullmatch(thread) or not thread.startswith(space + "/threads/") \
+            or not isinstance(message, str) or not message.startswith(space + "/messages/") \
+            or op_id != "chat-" + hashlib.sha256(message.encode()).hexdigest():
+        raise Refused("Chat destination or sender is not authorized")
+    return space, thread
+
+
+def decision_of(detail):
+    run = detail["runs"][-1]
+    if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
+        raise Refused("missing Chat decision")
+    metadata = run["metadata"]
+    if not {"decision", "body"} <= set(metadata) or set(metadata) - DECISION_KEYS:
+        raise Refused("invalid Chat decision")
+    return metadata
+
+
+def text(value):
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_TEXT:
+        raise Refused("reply text missing or too long")
+    return value
+
+
+def post(space, thread, body, kind, op_id):
+    digest = hashlib.sha256(op_id.encode()).hexdigest()
+    sender = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
+    sent = command([sys.executable, str(sender), "send", space, body,
+                    "--thread", thread, "--strict-thread",
+                    "--request-id", f"ralph-{kind}-{digest}",
+                    "--message-id", f"client-ralph-{kind}-{digest[:40]}"])
+    if sent.returncode:
+        return False
     try:
-        container, root, allowed_spaces = instance_config(instance_env)
+        return json.loads(sent.stdout).get("sent") is True
+    except (ValueError, AttributeError):
+        return False
+
+
+def mark(root, op_id, kind):
+    fd = os.open(root / op_id / MARKERS[kind], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+
+
+def sent(root, op_id, kind):
+    return (root / op_id / MARKERS[kind]).is_file()
+
+
+def handle(container, root, allowed_spaces, board, task_id):
+    """0 done or nothing to send, 1 retryable failure, 2 refused."""
+    try:
         shown = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
-                         "--board", "queues", "show", task_id, "--json"])
+                         "--board", board, "show", task_id, "--json"])
         if shown.returncode:
-            print("cannot read completed Chat card", file=sys.stderr)
+            print(f"cannot read Chat card {task_id}", file=sys.stderr)
             return 1
         detail = json.loads(shown.stdout)
         task = detail["task"]
         if task["id"] != task_id or task["status"] != "done" \
                 or task["assignee"] != "ralph-chat-maintainer":
-            raise ValueError("Chat decision is not complete")
-        ops = [line.partition(": ")[2] for line in task["body"].splitlines()
-               if line.startswith("operation_id: ")]
-        if len(ops) != 1 or not OP_ID.fullmatch(ops[0]):
-            raise ValueError("invalid Chat operation")
-        op_id = ops[0]
-        if task["workspace_path"] != "/workspaces/chat-inbox/" + op_id:
-            raise ValueError("Chat workspace differs from operation")
-        workspace = root / op_id
-        evidence = workspace / "evidence"
-        path = evidence / "item.json"
-        if workspace.is_symlink() or evidence.is_symlink() or path.is_symlink():
-            raise ValueError("unsafe Chat evidence")
-        info = path.stat()
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65_536 \
-                or info.st_mode & 0o077:
-            raise ValueError("unsafe Chat evidence")
-        item = json.loads(path.read_text())
-        run = detail["runs"][-1]
-        if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
-            raise ValueError("missing Chat decision")
-        metadata = run["metadata"]
-        if not {"decision", "body"} <= set(metadata) or set(metadata) - {"decision", "body", "worker_session_id"}:
-            raise ValueError("invalid Chat decision")
-        if metadata["decision"] != "route":
-            print("no automatic receipt for this Chat decision")
+            raise Refused("Chat card is not complete")
+        op_id = operation_of(task)
+        metadata = decision_of(detail)
+        choice = metadata["decision"]
+        if board == "queues":
+            if task["workspace_path"] != "/workspaces/chat-inbox/" + op_id:
+                raise Refused("Chat workspace differs from operation")
+            if choice == "route":
+                kind, body = "ack", text(metadata.get("ack"))
+            elif choice == "reply":
+                kind, body = "reply", text(metadata["body"])
+            else:
+                return 0
+        else:
+            if choice != "send":
+                return 0
+            kind, body = "final", text(metadata["body"])
+            if not sent(root, op_id, "ack"):
+                raise Refused("final response before the request was acknowledged")
+        if sent(root, op_id, kind):
             return 0
-        space, thread = item["space"], item["thread"]
-        message = item["messages"][-1]["name"]
-        if item["kind"] != "inbound" or item["sender_trusted"] is not True \
-                or space not in allowed_spaces or not THREAD.fullmatch(thread) \
-                or not thread.startswith(space + "/threads/") or not isinstance(message, str) \
-                or not message.startswith(space + "/messages/") \
-                or op_id != "chat-" + hashlib.sha256(message.encode()).hexdigest():
-            raise ValueError("Chat destination or sender is not authorized")
-    except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError):
-        print("refused Chat receipt: invalid bound decision or destination", file=sys.stderr)
+        space, thread = destination(root, op_id, allowed_spaces)
+    except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
+        reason = str(error) if isinstance(error, Refused) else "invalid bound decision or destination"
+        print(f"refused Chat {task_id}: {reason}", file=sys.stderr)
         return 2
 
-    routed = command(["docker", "exec", "-u", "hermes", container, "python3",
-                      "/ralph/bootstrap/chat-route", "--task", task_id,
-                      "--work-root", "/workspaces/chat-inbox"])
-    if routed.returncode or not routed.stdout.startswith("routed: t_"):
-        print("cannot confirm orchestrator card; no Chat receipt sent", file=sys.stderr)
-        return 1
-    request_id = "ralph-ack-" + hashlib.sha256(op_id.encode()).hexdigest()
-    sender = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
-    sent = command([sys.executable, str(sender), "send", space, RECEIPT,
-                    "--thread", thread, "--strict-thread", "--request-id", request_id])
-    if sent.returncode:
-        print("Chat receipt failed; retry with the same request id", file=sys.stderr)
+    if kind == "ack":
+        routed = command(["docker", "exec", "-u", "hermes", container, "python3",
+                          "/ralph/bootstrap/chat-route", "--task", task_id,
+                          "--work-root", "/workspaces/chat-inbox"])
+        if routed.returncode or not routed.stdout.startswith("routed: t_"):
+            print("cannot confirm orchestrator card; acknowledgement not sent", file=sys.stderr)
+            return 1
+    if not post(space, thread, body, kind, op_id):
+        print(f"Chat {kind} failed for {task_id}; retry reuses the same ids", file=sys.stderr)
         return 1
     try:
-        if json.loads(sent.stdout).get("sent") is not True:
-            raise ValueError("send not confirmed")
-    except (ValueError, AttributeError):
-        print("Chat receipt unconfirmed; retry with the same request id", file=sys.stderr)
+        mark(root, op_id, kind)
+    except FileExistsError:
+        pass
+    except OSError:
+        print(f"Chat {kind} sent but not recorded; retry is safe", file=sys.stderr)
         return 1
-    if marker is not None:
-        try:
-            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                stream.write(request_id)
-        except FileExistsError:
-            pass
-        except OSError:
-            print("Chat receipt confirmed but marker could not be saved; retry is safe", file=sys.stderr)
-            return 1
-    print("Chat receipt confirmed for " + task_id)
+    print(f"Chat {kind} sent for {task_id}")
     return 0
 
 
 def scan(instance_env):
     try:
-        container, root, _ = instance_config(instance_env)
-        listed = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
-                          "--board", "queues", "list", "--assignee", "ralph-chat-maintainer",
-                          "--status", "done", "--json"])
-        if listed.returncode:
-            raise ValueError("could not list completed Chat cards")
-        tasks = json.loads(listed.stdout)
-        tasks = tasks if isinstance(tasks, list) else tasks["tasks"]
-        for task in tasks:
-            ops = [line.partition(": ")[2] for line in (task.get("body") or "").splitlines()
-                   if line.startswith("operation_id: ")]
-            if len(ops) != 1 or not OP_ID.fullmatch(ops[0]):
-                continue
-            marker = root / ops[0] / ".receipt-sent"
-            if marker.is_file():
-                continue
-            if send_once(task["id"], instance_env, marker):
-                return 1
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        print("could not scan completed Chat cards", file=sys.stderr)
+        container, root, allowed_spaces = instance_config(instance_env)
+    except (OSError, ValueError, KeyError):
+        print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
-    return 0
+    status = 0
+    for board in ("queues", "ralph"):
+        listed = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
+                          "--board", board, "list", "--assignee", "ralph-chat-maintainer",
+                          "--status", "done", "--json"])
+        try:
+            if listed.returncode:
+                raise ValueError("list failed")
+            tasks = json.loads(listed.stdout)
+            tasks = tasks if isinstance(tasks, list) else tasks["tasks"]
+        except (ValueError, KeyError, TypeError):
+            print(f"could not list completed Chat cards on {board}", file=sys.stderr)
+            status = 1
+            continue
+        for task in tasks:
+            try:
+                op_id = operation_of(task)
+            except Refused:
+                continue
+            if board == "ralph" and sent(root, op_id, "final"):
+                continue
+            if board == "queues" and (sent(root, op_id, "ack") or sent(root, op_id, "reply")):
+                continue
+            if handle(container, root, allowed_spaces, board, task["id"]) == 1:
+                status = 1
+    return status
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--task")
+    parser.add_argument("--board", default="queues", choices=("queues", "ralph"))
     parser.add_argument("--scan", action="store_true")
     parser.add_argument("--instance-env", required=True, type=pathlib.Path)
     args = parser.parse_args()
     if bool(args.task) == args.scan:
         parser.error("choose exactly one of --task or --scan")
-    return scan(args.instance_env) if args.scan else send_once(args.task, args.instance_env)
+    if args.scan:
+        return scan(args.instance_env)
+    container, root, allowed_spaces = instance_config(args.instance_env)
+    return handle(container, root, allowed_spaces, args.board, args.task)
 
 
 if __name__ == "__main__":

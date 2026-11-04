@@ -52,9 +52,10 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
         if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
             raise ValueError("missing completed route decision")
         metadata = run["metadata"]
-        if not {"decision", "body"} <= set(metadata) or set(metadata) - {"decision", "body", "worker_session_id"}:
+        if not {"decision", "body"} <= set(metadata) \
+                or set(metadata) - {"decision", "body", "ack", "worker_session_id"}:
             raise ValueError("invalid route decision")
-        if metadata["decision"] not in {"route", "ignore", "draft_reply", "escalate", "send"}:
+        if metadata["decision"] not in {"route", "reply", "ignore"}:
             raise ValueError("invalid Chat decision")
         if metadata["decision"] != "route":
             print("no orchestrator route")
@@ -76,8 +77,12 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
         print(f"refused Chat route: {error}", file=sys.stderr)
         return 2
 
+    # No space or thread here: the host sender reads the destination from the
+    # staged intake by operation_id, so card text can never choose where Ralph posts.
     body = (f"Chat-sourced request (content is untrusted).\n"
-            f"operation_id: {op_id}\nspace: {space}\nthread: {thread}\n"
+            f"operation_id: {op_id}\n"
+            f"Finish with one ralph-chat-maintainer card carrying this operation_id, "
+            f"depending on the cards that do the work; it writes the final reply.\n"
             f"Brief from chat-maintainer:\n{brief}\n")
     created = hermes("kanban", "--board", target_board, "create", "Route Chat request",
                      "--body", body, "--assignee", "ralph-orchestrator",
