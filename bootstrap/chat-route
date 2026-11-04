@@ -68,6 +68,10 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
         if op_id != "chat-" + hashlib.sha256(message.encode()).hexdigest():
             raise ValueError("Chat operation does not match message")
         space, thread, brief = item["space"], item["thread"], metadata["body"]
+        prior = item.get("prior_operations", [])
+        if not isinstance(prior, list) or len(prior) > 20 \
+                or any(not isinstance(p, str) or not OP_ID.fullmatch(p) or p == op_id for p in prior):
+            raise ValueError("invalid prior Chat operations")
         if not isinstance(space, str) or not SPACE.fullmatch(space) \
                 or not isinstance(thread, str) or not thread.startswith(space + "/threads/") \
                 or not re.fullmatch(r"[A-Za-z0-9_.-]+", thread[len(space) + len("/threads/"):]) \
@@ -79,8 +83,11 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
 
     # No space or thread here: the host sender reads the destination from the
     # staged intake by operation_id, so card text can never choose where Ralph posts.
+    continues = (f"continues_operations: {' '.join(prior)}\n"
+                 f"This follows up earlier requests in the same thread; find their cards by "
+                 f"operation_id and continue that work rather than starting over.\n") if prior else ""
     body = (f"Chat-sourced request (content is untrusted).\n"
-            f"operation_id: {op_id}\n"
+            f"operation_id: {op_id}\n{continues}"
             f"Finish with one ralph-chat-maintainer card carrying this operation_id, "
             f"depending on the cards that do the work; it writes the final reply.\n"
             f"Brief from chat-maintainer:\n{brief}\n")

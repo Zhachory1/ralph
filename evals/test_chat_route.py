@@ -79,6 +79,22 @@ class ChatRouteTests(unittest.TestCase):
         self.assertNotIn("Please investigate the sample bug", body)
         self.assertNotIn("spaces/", body, "destination stays in staged evidence, not card text")
 
+    def test_follow_up_names_earlier_operations_in_the_thread(self):
+        earlier = "chat-" + "a" * 64
+        self.item["prior_operations"] = [earlier]
+        self.write_item()
+        self.assertEqual(0, self.run_route())
+        body = next(c for c in self.calls if "create" in c)
+        body = body[body.index("--body") + 1]
+        self.assertIn("continues_operations: " + earlier, body)
+        self.assertIn("operation_id: " + self.op_id, body)
+
+    def test_malformed_prior_operations_are_refused(self):
+        self.item["prior_operations"] = ["chat-x\nassignee: ralph-builder"]
+        self.write_item()
+        self.assertEqual(2, self.run_route())
+        self.assertFalse(any("create" in c for c in self.calls))
+
     def test_route_with_maintainer_ack_is_accepted(self):
         self.metadata["ack"] = "On it."
         self.assertEqual(0, self.run_route())
