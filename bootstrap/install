@@ -111,6 +111,9 @@ sandbox_config() {
     # to (#79 review: confidentiality).
     if [ -n "$REPO_CACHE_SRC" ] && [ "${3:-}" = "1" ]; then
         hermes $1 config set terminal.docker_volumes "[\"$REPO_CACHE_SRC:/repo-cache:ro\"]" >/dev/null
+    else
+        # An earlier install may have given this profile the cache; take it back.
+        hermes $1 config unset terminal.docker_volumes >/dev/null 2>&1 || true
     fi
 }
 # Profiles whose SOUL tells them to clone through /repo-cache. Every other
