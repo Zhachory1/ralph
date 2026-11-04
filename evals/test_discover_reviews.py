@@ -112,9 +112,8 @@ class ReviewRoundCapTests(unittest.TestCase):
 
 
 class ReviewSpacingTests(unittest.TestCase):
-    """op3#15139 got 3 reviews in 3 hours, one per push. A new head waits
-    until RALPH_REVIEW_SPACING_HOURS after this account's last review, and
-    then the latest head is reviewed, not every one in between."""
+    """A new head is reviewed on the next pass, however recent the last
+    review: a fix pushed in answer to a review must not wait a day for one."""
 
     NOW = 1_800_000_000
 
@@ -128,7 +127,6 @@ class ReviewSpacingTests(unittest.TestCase):
                 mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
                 mock.patch.object(discover_reviews, "reviews_by_me", return_value=reviews), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
-                mock.patch.object(discover_reviews.time, "time", return_value=self.NOW), \
                 mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
             argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
@@ -140,20 +138,10 @@ class ReviewSpacingTests(unittest.TestCase):
     def ago(self, hours):
         return self.NOW - hours * 3600
 
-    def test_a_new_head_soon_after_a_review_waits(self):
-        self.assertEqual(0, self.admitted({"a" * 40: self.ago(1)}))
+    def test_a_new_head_soon_after_a_review_is_reviewed(self):
+        self.assertEqual(1, self.admitted({"a" * 40: self.ago(1)}))
 
-    def test_a_new_head_after_the_window_is_reviewed(self):
-        self.assertEqual(1, self.admitted({"a" * 40: self.ago(discover_reviews.REVIEW_SPACING_HOURS + 1)}))
-
-    def test_the_window_runs_from_the_latest_review(self):
-        self.assertEqual(0, self.admitted({"a" * 40: self.ago(30), "b" * 40: self.ago(1)}))
-
-    def test_a_first_review_never_waits(self):
-        self.assertEqual(1, self.admitted({}))
-
-    def test_rebuilding_an_already_reviewed_head_never_waits(self):
-        """Idempotent re-run of the same head, not a new round."""
+    def test_an_already_reviewed_head_is_rebuilt_not_a_new_round(self):
         self.assertEqual(1, self.admitted({"1" * 40: self.ago(1)}))
 
 
