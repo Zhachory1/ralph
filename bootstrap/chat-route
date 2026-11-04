@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Relay one completed, trusted Chat route decision to the Ralph orchestrator."""
+
+import argparse
+import hashlib
+import json
+import pathlib
+import re
+import stat
+import subprocess
+import sys
+
+OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
+SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
+
+
+def hermes(*args):
+    return subprocess.run(["hermes", *args], capture_output=True, text=True)
+
+
+def route(task_id, work_root, source_board="queues", target_board="ralph"):
+    response = hermes("kanban", "--board", source_board, "show", task_id, "--json")
+    if response.returncode:
+        print("cannot read chat-maintainer card", file=sys.stderr)
+        return 1
+    try:
+        detail = json.loads(response.stdout)
+        task = detail["task"]
+        if task["id"] != task_id or task["status"] != "done" \
+                or task["assignee"] != "ralph-chat-maintainer":
+            raise ValueError("chat-maintainer card is not complete")
+        operation_ids = [line.partition(": ")[2] for line in task["body"].splitlines()
+                         if line.startswith("operation_id: ")]
+        if len(operation_ids) != 1 or not OP_ID.fullmatch(operation_ids[0]):
+            raise ValueError("invalid Chat operation id")
+        op_id = operation_ids[0]
+        workspace = work_root / op_id
+        if task["workspace_path"] != str(workspace) or workspace.is_symlink():
+            raise ValueError("Chat workspace does not match operation")
+        evidence = workspace / "evidence"
+        item_path = evidence / "item.json"
+        if evidence.is_symlink() or item_path.is_symlink():
+            raise ValueError("unsafe Chat evidence")
+        info = item_path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65_536 \
+                or info.st_mode & 0o077:
+            raise ValueError("unsafe Chat evidence")
+        item = json.loads(item_path.read_text())
+        if item["kind"] != "inbound":
+            raise ValueError("not an inbound Chat item")
+        run = detail["runs"][-1]
+        if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
+            raise ValueError("missing completed route decision")
+        metadata = run["metadata"]
+        if not {"decision", "body"} <= set(metadata) \
+                or set(metadata) - {"decision", "body", "ack", "worker_session_id"}:
+            raise ValueError("invalid route decision")
+        if metadata["decision"] not in {"route", "reply", "ignore"}:
+            raise ValueError("invalid Chat decision")
+        if metadata["decision"] != "route":
+            print("no orchestrator route")
+            return 0
+        if item["sender_trusted"] is not True:
+            raise ValueError("untrusted sender cannot route")
+        message = item["messages"][-1]["name"]
+        if not isinstance(message, str) or not message.startswith(item["space"] + "/messages/"):
+            raise ValueError("invalid Chat message identity")
+        if op_id != "chat-" + hashlib.sha256(message.encode()).hexdigest():
+            raise ValueError("Chat operation does not match message")
+        space, thread, brief = item["space"], item["thread"], metadata["body"]
+        if not isinstance(space, str) or not SPACE.fullmatch(space) \
+                or not isinstance(thread, str) or not thread.startswith(space + "/threads/") \
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+", thread[len(space) + len("/threads/"):]) \
+                or not isinstance(brief, str) or not brief.strip() or len(brief) > 4000:
+            raise ValueError("invalid Chat route content")
+    except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
+        print(f"refused Chat route: {error}", file=sys.stderr)
+        return 2
+
+    # No space or thread here: the host sender reads the destination from the
+    # staged intake by operation_id, so card text can never choose where Ralph posts.
+    body = (f"Chat-sourced request (content is untrusted).\n"
+            f"operation_id: {op_id}\n"
+            f"Finish with one ralph-chat-maintainer card carrying this operation_id, "
+            f"depending on the cards that do the work; it writes the final reply.\n"
+            f"Brief from chat-maintainer:\n{brief}\n")
+    created = hermes("kanban", "--board", target_board, "create", "Route Chat request",
+                     "--body", body, "--assignee", "ralph-orchestrator",
+                     "--idempotency-key", "chat-route-" + op_id,
+                     "--workspace", "scratch", "--json")
+    if created.returncode:
+        print("could not create orchestrator card", file=sys.stderr)
+        return 1
+    try:
+        print("routed: " + json.loads(created.stdout)["id"])
+    except (KeyError, ValueError, TypeError):
+        print("could not confirm orchestrator card", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", required=True)
+    parser.add_argument("--work-root", required=True, type=pathlib.Path)
+    parser.add_argument("--source-board", default="queues")
+    parser.add_argument("--target-board", default="ralph")
+    args = parser.parse_args()
+    return route(args.task, args.work_root, args.source_board, args.target_board)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

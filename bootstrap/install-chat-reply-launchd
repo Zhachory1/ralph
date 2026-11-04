@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Install the host-only Ralph Chat receipt scan as a macOS LaunchAgent."""
+
+import argparse
+import os
+import pathlib
+import plistlib
+import re
+import subprocess
+import sys
+
+
+def build_plist(env_file, python, script, log_path):
+    return {
+        "Label": "dev.ralph.chat-reply." + next(
+            line.split("=", 1)[1] for line in env_file.read_text().splitlines()
+            if line.startswith("RALPH_INSTANCE=")),
+        "ProgramArguments": [str(python), str(script), "--scan", "--instance-env", str(env_file)],
+        "StartInterval": 60,
+        "RunAtLoad": True,
+        "Umask": 0o077,
+        "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+        "StandardOutPath": str(log_path),
+        "StandardErrorPath": str(log_path.with_suffix(".err.log")),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--instance-env", required=True, type=pathlib.Path)
+    args = parser.parse_args()
+    if sys.platform != "darwin":
+        parser.error("this installer is for macOS launchd")
+    env_file = args.instance_env.expanduser().resolve(strict=True)
+    log_dir = pathlib.Path.home() / "Library" / "Logs"
+    script = pathlib.Path(__file__).resolve().parent / "chat-reply"
+    name = next((line.split("=", 1)[1] for line in env_file.read_text().splitlines()
+                 if line.startswith("RALPH_INSTANCE=")), "")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+        parser.error("invalid RALPH_INSTANCE")
+    plist = build_plist(env_file, sys.executable, script, log_dir / f"ralph-chat-reply-{name}.log")
+    target = pathlib.Path.home() / "Library" / "LaunchAgents" / (plist["Label"] + ".plist")
+    data = plistlib.dumps(plist)
+    if target.exists():
+        if target.read_bytes() != data:
+            parser.error("LaunchAgent already exists with different settings; review before replacing it")
+        active = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{plist['Label']}"],
+                                capture_output=True)
+        if active.returncode == 0:
+            print("Chat reply LaunchAgent already installed")
+            return 0
+    else:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+    result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(target)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        print("LaunchAgent created but launchctl bootstrap failed; inspect local service", file=sys.stderr)
+        return 1
+    print("Chat reply LaunchAgent installed and started")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
