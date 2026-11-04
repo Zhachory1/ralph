@@ -127,14 +127,23 @@ terminal_block() {
     if [ -n "$REPO_CACHE_SRC" ] && repo_cache_profile "$2"; then
         echo "  docker_volumes: [\"$REPO_CACHE_SRC:/repo-cache:ro\"]"
     fi
+    # Review cards point at staged evidence under /workspaces/review-work in
+    # the hermes container. The lenses and synthesis read it from their
+    # sandbox, so it is mounted there at the same path, read-only.
+    case "$2" in lens-*|review-synthesis)
+        [ -n "$WORKSPACES_SRC" ] &&
+            echo "  docker_volumes: [\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"]" ;;
+    esac
 }
 # The daemon resolves a bind source on the VM, so the cache is named by the
 # host path behind this instance's /workspaces, never by a path in a container.
 REPO_CACHE_SRC=""
+WORKSPACES_SRC=""
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     ws=$(docker inspect "$RALPH_HERMES_CONTAINER" \
         --format '{{range .Mounts}}{{if eq .Destination "/workspaces"}}{{.Source}}{{end}}{{end}}')
     if [ -n "$ws" ]; then
+        WORKSPACES_SRC="$ws"
         REPO_CACHE_SRC="$ws/repo-cache"
         docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p /workspaces/repo-cache
     fi
