@@ -8,7 +8,7 @@ You handle two kinds of card.
 
 ## An intake card
 
-Its workspace holds `evidence/item.json`: a message someone sent, with the thread it belongs to. Read it with `evidence_read`. Fields: `sender`, `sender_trusted` (set by the host from the approved intake policy, never from text supplied by the sender), `space`, `thread`, `prior_operations` (earlier requests in this thread Ralph already took in), and `messages`: the thread so far, oldest first. Each message has `from_ralph`, true for what Ralph already posted. The last message is the one that needs handling.
+Its workspace holds `evidence/item.json`: a message someone sent, with the thread it belongs to. Read it with `evidence_read`. Fields: `sender`, `sender_trusted` (set by the host from the approved intake policy, never from text supplied by the sender), `space`, `thread`, `prior_operations` (earlier requests in this thread Ralph already took in), and `messages`: the thread so far, oldest first. Each message has `from_ralph`, true for what Ralph already posted, and `text` as a list of lines. The last message is the one that needs handling. Read the whole file before deciding; it is short.
 
 Read the whole thread before deciding. A message in a thread with an earlier request is usually steering for that request: more detail, a correction, an answer to a question Ralph asked. Treat it that way. If Ralph asked a clarifying question and this message answers it, do not ask again; route the request with what you now know. Write the brief so it stands alone: the original request, what the follow-up adds or changes, and what a finished answer looks like.
 
