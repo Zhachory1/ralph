@@ -112,6 +112,11 @@ class SandboxScopeTests(unittest.TestCase):
             if mount["Source"].startswith("/ralph/skills/"):
                 self.assertFalse(mount.get("RW"), mount["Source"])
                 continue
+            # The instance's repository cache, borrowed by git clone --reference.
+            if mount["Destination"] == "/repo-cache":
+                self.assertFalse(mount.get("RW"), mount["Source"])
+                self.assertTrue(mount["Source"].endswith("/repo-cache"), mount["Source"])
+                continue
             self.assertIn("/profiles/", mount["Source"], mount["Source"])
 
     def test_writable_mounts_are_workspace_and_home_only(self):

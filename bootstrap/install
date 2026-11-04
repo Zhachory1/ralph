@@ -99,7 +99,25 @@ sandbox_config() {
     # One sandbox's ceiling. A maintenance build of a large repository peaks at
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
+    # This instance's repository cache, read-only at /repo-cache, so a card
+    # borrows its objects (git clone --reference) instead of downloading a
+    # large repository again. Read-only: a sandbox runs untrusted code and
+    # must not be able to corrupt what every other card borrows from.
+    if [ -n "$REPO_CACHE_SRC" ]; then
+        hermes $1 config set terminal.docker_volumes "[\"$REPO_CACHE_SRC:/repo-cache:ro\"]" >/dev/null
+    fi
 }
+# The daemon resolves a bind source on the VM, so the cache is named by the
+# host path behind this instance's /workspaces, never by a path in a container.
+REPO_CACHE_SRC=""
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    ws=$(docker inspect "$RALPH_HERMES_CONTAINER" \
+        --format '{{range .Mounts}}{{if eq .Destination "/workspaces"}}{{.Source}}{{end}}{{end}}')
+    if [ -n "$ws" ]; then
+        REPO_CACHE_SRC="$ws/repo-cache"
+        docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p /workspaces/repo-cache
+    fi
+fi
 sandbox_config "" "${HERMES_HOME:-$HOME/.hermes}"
 
 # The review lenses (PR 2 of the fleet-into-ralph design) run on an OpenAI

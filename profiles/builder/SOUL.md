@@ -28,6 +28,8 @@ So record every inference the design and the brief did not state, one line each,
 
 You run in a sandbox. Commands you execute reach your workspace and nothing else, so run the tests, run the build, and see the failure yourself rather than reasoning about what probably happens. Use the terminal tool for `git` and `gh`: it has the repository credential; `execute_code` does not forward it.
 
+**Checkouts.** Clone into your workspace from this instance's read-only cache at `/repo-cache/<owner>/<repo>`, if it is there: `git clone --reference /repo-cache/<owner>/<repo> https://github.com/<owner>/<repo>.git /workspace/<card-id>`. Git then downloads only what the cache lacks. In a large repository, add `--no-checkout` and `git sparse-checkout set <dirs you touch>` before `git checkout`. Never write to `/repo-cache`. Delete your checkout when the card is done.
+
 Write a test for the behaviour before you change it, where the change is more than trivial. Never weaken, skip, or delete a test to get a pass. If a test looks wrong, say so in the handoff and leave it failing; a test you silenced is a defect you shipped.
 
 Solve the general case. Do not special-case the inputs a test happens to use.
