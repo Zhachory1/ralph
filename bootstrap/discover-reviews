@@ -269,18 +269,20 @@ def reviews_by_me(repo: str, number: int) -> dict[str, float] | None:
 _LOGIN = None
 
 
-def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool]:
+def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
     """Heads (8-char prefixes) this PR already has a review graph for, and
     whether one is still running. Every graph spends a review, published or
-    not, so each counts toward MAX_ROUNDS. An unreadable board reads as none:
-    a missed count costs one extra review, a false one stalls the PR."""
+    not, so each counts toward MAX_ROUNDS. None means the board could not be
+    read, and the PR is skipped this pass, as for unreadable reviews."""
     r = subprocess.run(hermes_argv("kanban", "--board", board, "list", "--archived",
                                    "--assignee", "ralph-review-synthesis", "--json"),
                        capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
     try:
-        cards = json.loads(r.stdout) if r.returncode == 0 else []
+        cards = json.loads(r.stdout)
     except json.JSONDecodeError:
-        return set(), False
+        return None
     cards = cards if isinstance(cards, list) else cards.get("tasks", [])
     prefix = f"Synthesize review {repo}#{number} @ "
     mine = [c for c in cards if c.get("title", "").startswith(prefix)]
@@ -418,7 +420,11 @@ def main() -> int:
         if not args.once_for_real:
             print(f"  {repo}#{number} @ {head_sha[:8]}")
             continue
-        graphs, running = review_graphs(args.board, repo, number)
+        board_view = review_graphs(args.board, repo, number)
+        if board_view is None:
+            print(f"  skip {repo}#{number}: could not read its review cards", file=sys.stderr)
+            continue
+        graphs, running = board_view
         rounds = {h[:8] for h in heads} | graphs
         if head_sha[:8] not in rounds and len(rounds) >= MAX_ROUNDS:
             print(f"  skip {repo}#{number}: review cap reached ({len(rounds)} rounds)")
