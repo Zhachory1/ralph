@@ -111,19 +111,25 @@ class ApprovalSupersedesTests(unittest.TestCase):
         r["body"] = "**Verdict: APPROVE** (submitted as COMMENT -- self-authored PR)"
         self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
 
-    def test_a_bot_review_is_not_feedback(self):
-        """The live case: op3#15144, claude[bot] re-reviewed every push and each
-        review started a maintenance round, 9 of 11 in a day."""
+    def test_a_bot_review_is_feedback(self):
+        """op3#17039/17040: every finding was a bot's, and none was acted on."""
         r = self.r(1, "COMMENTED", "claude[bot]")
         r["user"]["type"] = "Bot"
-        self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
+        self.assertNotEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
+
+    def test_a_bot_review_does_not_move_the_human_digest(self):
+        """The breaker counts people: a bot re-reviewing every push cannot
+        look like new human feedback (op3#15144)."""
+        r = self.r(1, "COMMENTED", "claude[bot]")
+        r["user"]["type"] = "Bot"
+        self.assertEqual("empty", maintain_pr.human_digest(self._snapshot([r])))
 
     def test_a_bot_does_not_hide_a_person(self):
         bot = self.r(1, "COMMENTED", "claude[bot]"); bot["user"]["type"] = "Bot"
         person = self.r(2, "CHANGES_REQUESTED", "apenmetcha-rokt")
-        self.assertEqual([2], [x["id"] for x in self._snapshot([bot, person])["reviews"]])
+        self.assertEqual([1, 2], [x["id"] for x in self._snapshot([bot, person])["reviews"]])
 
-    def test_a_bot_thread_comment_is_not_feedback(self):
+    def test_a_bot_thread_comment_is_feedback_but_not_human(self):
         """GraphQL drops the [bot] suffix; __typename still says Bot."""
         def fake_gh(*args):
             if args[:2] == ("api", "graphql"):
@@ -136,7 +142,8 @@ class ApprovalSupersedesTests(unittest.TestCase):
             return mock.Mock(returncode=1, stdout="")
         with mock.patch.object(maintain_pr, "gh", side_effect=fake_gh):
             snap = maintain_pr.feedback_snapshot("a/b", 1, "author")
-        self.assertEqual("empty", maintain_pr.feedback_digest(snap))
+        self.assertNotEqual("empty", maintain_pr.feedback_digest(snap))
+        self.assertEqual("empty", maintain_pr.human_digest(snap))
 
     def test_a_dismissed_review_is_not_feedback(self):
         """The live case: canary#5 and #6, a duplicate approval dismissed. A
