@@ -17,7 +17,7 @@ The default profiles and templates shipped here are starting points. Users copy 
 
 ## Shared principles
 
-Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this repository. Ground the current system, reuse what exists, apply MVP/Occam/80-20 to scope, respect the Law of Demeter and profile boundaries, check system-wide effects, and carry work through review and maintenance. `bootstrap/install` puts that same source before every profile's role instructions; do not maintain separate copies here. Principles never override the narrower permissions and human approval rules below.
+Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this repository. Ground the current system, reuse what exists, apply MVP/Occam/80-20 to scope, respect the Law of Demeter and profile boundaries, check system-wide effects, and carry work through review and maintenance. Then follow [profiles/STANDARDS.md](profiles/STANDARDS.md) for code, tests, ownership, and documentation. `bootstrap/install` puts both sources before every profile's role instructions; do not maintain separate copies here. Principles never override the narrower permissions and human approval rules below.
 
 ## Hard rules
 

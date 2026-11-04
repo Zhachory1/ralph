@@ -12,7 +12,7 @@ Ralph is a personal developer assistant that runs on your own computer, built on
 
 The job it creates is **director, not reviewer-of-leftovers**. Review isn't the residue left after automation — it's the work. Every design choice here answers "does this make review faster and more trustworthy?", not "does this reduce the number of things you look at."
 
-Every profile starts with the shared [Ralph principles](profiles/PRINCIPLES.md): ground the current system, reuse before building, ship the smallest complete slice, respect role boundaries, consider the whole workflow, clarify before claiming progress, and finish with evidence. `bootstrap/install` prepends this one source to each profile's `SOUL.md`; narrower role and safety rules still apply.
+Every profile starts with the shared [Ralph principles](profiles/PRINCIPLES.md): ground the current system, reuse before building, ship the smallest complete slice, respect role boundaries, consider the whole workflow, clarify before claiming progress, and finish with evidence. The shared [engineering standards](profiles/STANDARDS.md) follow them: coding, testing, ownership, and documentation (Hub or Docshare, never Google Docs). `bootstrap/install` prepends both to each profile's `SOUL.md`; narrower role and safety rules still apply.
 
 > **Status: pre-release.** This repository holds the design and the layer boundary. The phase-1 core loop is not built yet. See [Build order](#build-order) for what lands first, and [Open questions](#open-questions) for what has to be verified before it can.
 

@@ -190,6 +190,13 @@ class VoiceTests(unittest.TestCase):
             with self.subTest(profile=p.name):
                 self.assertIn("/ralph/skills/voice", (p / "config.yaml").read_text())
 
+    def test_install_puts_the_engineering_standards_before_every_role(self):
+        """Owner instruction 2026-11-04: every profile follows the coding,
+        testing, ownership and documentation standards."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertEqual(2, install.count('cat "$PROFILES_DIR/STANDARDS.md"'))
+        self.assertIn("Neither is Google Docs", (ROOT / "profiles" / "STANDARDS.md").read_text())
+
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
             with self.subTest(profile=p.name):
