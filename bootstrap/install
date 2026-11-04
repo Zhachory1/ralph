@@ -80,8 +80,15 @@ hermes config set kanban.auto_decompose false >/dev/null
 # alone, ignoring both the container's TERMINAL_ENV and the global config, and
 # without this falls back to Hermes' `local` backend -- the hermes container
 # itself, next to every credential and the board, with no gh.
-# $1 is empty for the global config or `-p <profile>`.
+# $1 is empty for the global config or `-p <profile>`; $2 is that config's home.
+#
+# Each instance gets its own sandbox root. Hermes bind-mounts sandbox
+# directories by their path in this container, and the Docker daemon resolves
+# that path on the VM, outside the instance's volume; every instance uses the
+# same HERMES_HOME, so without this the personal and work instances shared one
+# sandbox per profile name, files and all (#77).
 sandbox_config() {
+    hermes $1 config set terminal.sandbox_dir "$2/sandboxes/${RALPH_INSTANCE:-ralph}" >/dev/null
     # Ralph's image adds git and gh to the stock sandbox and nothing else;
     # every tool in there is reachable by untrusted code.
     hermes $1 config set terminal.backend docker >/dev/null
@@ -93,7 +100,7 @@ sandbox_config() {
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
 }
-sandbox_config ""
+sandbox_config "" "${HERMES_HOME:-$HOME/.hermes}"
 
 # The review lenses (PR 2 of the fleet-into-ralph design) run on an OpenAI
 # credential Ralph's other nine profiles never touch -- those stay on
@@ -186,7 +193,7 @@ for dir in "$PROFILES_DIR"/*/; do
             docker cp "$dir/config.yaml" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
             docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         fi
-        sandbox_config "-p $name"
+        sandbox_config "-p $name" "$target"
         continue
     fi
     if [ -f "$dir/SOUL.md" ]; then
@@ -198,7 +205,7 @@ for dir in "$PROFILES_DIR"/*/; do
         python3 /ralph/bootstrap/write-profile-config.py \
             "$dir/config.yaml" "$target/config.yaml"
     fi
-    sandbox_config "-p $name"
+    sandbox_config "-p $name" "$target"
 done
 
 # A dispatched worker sees its own profile's .env, not the container's, so a
