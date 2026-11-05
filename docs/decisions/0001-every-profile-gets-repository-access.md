@@ -21,7 +21,7 @@ In practice the boundary kept stopping ordinary work. A Chat request needed fact
 - `terminal`, not `code_execution`, carries the token: `code_execution` scrubs variables whose names contain `TOKEN`.
 - **Accepted risk.** A profile that reads untrusted text can now be prompted toward a GitHub action with the instance token, for example a comment or review as that token's account. SOULs say which profiles must not write, but that is prose, not a permission.
 - Merging stays a human act, enforced by branch protection on each repository, not by missing tools.
-- Token identities are unchanged: builder, maintainer and author still push as the PR author; every other profile uses the stack's review token.
+- Token identities are unchanged: builder, maintainer and author still push as the PR author; every other profile uses the stack's review token. [0002](0002-personal-profiles-read-with-the-owner-token.md) lets an instance give those profiles the owner's token instead.
 - Credentials other than the repository token are unchanged. The Google Chat and Gmail credentials still live on the host, outside every profile.
 
 ## Not decided here

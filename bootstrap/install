@@ -264,17 +264,36 @@ rm -f "$SRC_TMP"
 
 # A dispatched worker sees its own profile's .env, not the container's, so a
 # profile with no GH_TOKEN there has no repository access from a card
-# (docs/decisions/0001). Give each such profile the stack's review token; the
-# author, builder and maintainer keep the push token written above.
-if [ -n "${RALPH_GITHUB_TOKEN:-}" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    docker exec -i -u hermes -e RALPH_GITHUB_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
+# (docs/decisions/0001). Every other profile reads with
+# RALPH_PROFILE_READ_TOKEN: the stack's review token by default, or the
+# owner's token where an instance sets it (decision 0002), so Ralph can read
+# private repositories the owner was invited to. The author, builder and
+# maintainer keep the push token written above. Rewritten every install, so
+# changing the setting takes effect.
+# Exported and passed by name only (-e READ_TOKEN), never as -e NAME=value,
+# so the token never appears in a process's command line.
+export READ_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
+if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -i -u hermes -e READ_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
         for f in "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
             case "$f" in */ralph-maintainer/*|*/ralph-builder/*|*/ralph-author/*) continue ;; esac
-            [ -f "$f" ] && ! grep -q "^GH_TOKEN=" "$f" || continue
-            printf "GH_TOKEN=%s\n" "$RALPH_GITHUB_TOKEN" >> "$f"
-            chmod 600 "$f"
+            [ -f "$f" ] || continue
+            tmp=$(mktemp "$f.XXXXXX")
+            rc=0
+            grep -v "^GH_TOKEN=" "$f" > "$tmp" || rc=$?
+            # grep exits 1 when GH_TOKEN= is simply absent (normal, nothing to
+            # strip); exit >=2 means it could not read $f, so $tmp may be
+            # truncated. Do not let that overwrite the real file and lose its
+            # other settings.
+            if [ "$rc" -ge 2 ]; then
+                rm -f "$tmp"
+                echo "  warning: could not read $f (grep exit $rc); leaving it unchanged" >&2
+                continue
+            fi
+            printf "GH_TOKEN=%s\n" "$READ_TOKEN" >> "$tmp"
+            chmod 600 "$tmp" && mv "$tmp" "$f"
         done'
-    echo "  every other profile reads with RALPH_GITHUB_TOKEN"
+    echo "  every other profile reads with RALPH_PROFILE_READ_TOKEN"
 fi
 
 # The three skills the manifest references rather than the repository holding.
