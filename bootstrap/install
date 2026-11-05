@@ -270,9 +270,11 @@ rm -f "$SRC_TMP"
 # private repositories the owner was invited to. The author, builder and
 # maintainer keep the push token written above. Rewritten every install, so
 # changing the setting takes effect.
-READ_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
+# Exported and passed by name only (-e READ_TOKEN), never as -e NAME=value,
+# so the token never appears in a process's command line.
+export READ_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
 if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    docker exec -i -u hermes -e READ_TOKEN="$READ_TOKEN" "$RALPH_HERMES_CONTAINER" sh -eu -c '
+    docker exec -i -u hermes -e READ_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
         for f in "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
             case "$f" in */ralph-maintainer/*|*/ralph-builder/*|*/ralph-author/*) continue ;; esac
             [ -f "$f" ] || continue

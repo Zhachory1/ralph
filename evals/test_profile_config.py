@@ -201,6 +201,7 @@ class VoiceTests(unittest.TestCase):
         """Decision 0002: an instance can give its read profiles the owner's token."""
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertIn("READ_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}", install)
+        self.assertNotIn('-e READ_TOKEN="', install, "a token on a command line is visible to ps")
 
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
