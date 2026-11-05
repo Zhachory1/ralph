@@ -36,15 +36,15 @@ digest are the same operation -- an idempotent re-run of a round already
 underway, not a new one -- and get the same card, not a second one.
 
 BOTS ARE FEEDBACK. A bot's unresolved thread or review is acted on like a
-person's. The feedback digest dedups a bot repeating itself on the same head.
-The circuit breaker counts people only, so a bot re-reviewing every push
-cannot loop Ralph forever (op3#15144: 9 rounds in a day).
+person's, and a new bot finding is new feedback. A bot repeating the same
+text under a new id is deduped by the feedback digest.
 
 A CIRCUIT BREAKER, NOT A CAP. When the last BREAKER_ROUNDS rounds all
-answered the same human feedback, Ralph is looping on its own pushes or on
-CI, not on a person. The next round is created blocked, and one chat alert
-goes out; a human unblocks it. New human feedback always runs, so a busy PR
-with people reviewing never trips this. Rounds are not limited otherwise.
+answered the same review feedback -- only CI changed -- Ralph is looping on
+a build it cannot fix (each failing run is a new link, so a new digest). The
+next round is created blocked, and one chat alert goes out; a human unblocks
+it. A new review finding from anyone always runs. Rounds are not limited
+otherwise.
 
 NO CAP HERE, BY DIRECT INSTRUCTION. Every PR with real, new feedback gets a
 round, with no per-PR ceiling and no daily ceiling. Review has no round cap
@@ -271,17 +271,16 @@ def prior_rounds(board: str, repo: str, number: int) -> list[dict] | None:
 
 
 def human_digest(snapshot: dict) -> str:
-    """The digest of the people's part of the feedback: reviews and thread
-    comments, not bots or CI. It changes only when a person says something new."""
-    threads = [{**t, "comments": [c for c in t["comments"] if not c.get("bot")]}
-               for t in snapshot["threads"]]
-    return feedback_digest({"reviews": [r for r in snapshot["reviews"] if not r.get("bot")],
-                            "threads": [t for t in threads if t["comments"]], "checks": []})
+    """The digest of the review part of the feedback -- reviews and thread
+    comments from people and bots -- without CI. It changes when any
+    reviewer says something new. (Named for the card field it fills.)"""
+    return feedback_digest({"reviews": snapshot["reviews"], "threads": snapshot["threads"],
+                            "checks": []})
 
 
 def breaker_tripped(cards: list[dict] | None, human: str) -> bool:
     """True when the last BREAKER_ROUNDS rounds, and this one, all answer the
-    same human feedback. Cards from before human_digest was recorded carry
+    same review feedback. Cards from before human_digest was recorded carry
     none, so they cannot prove a loop."""
     if cards is None or len(cards) < BREAKER_ROUNDS:
         return False
@@ -376,14 +375,14 @@ def main() -> int:
         # Blocked right after create: the dispatcher can claim a ready card on
         # its next tick, so this narrows the window rather than closing it.
         reason = (f"circuit breaker: {BREAKER_ROUNDS} maintenance rounds on "
-                  f"{args.repo}#{args.pr} with no new human feedback. "
+                  f"{args.repo}#{args.pr} with no new review feedback, only CI. "
                   f"Unblock to let this round run.")
         b = hermes("kanban", "--board", args.board, "block", card_id, reason)
         if b.returncode != 0:
             print(f"error: could not hold {card_id}: {b.stderr.strip()[:300]}", file=sys.stderr)
             return 1
         notify(f"Ralph paused maintenance on {args.repo}#{args.pr}: "
-               f"{BREAKER_ROUNDS} rounds with no new human feedback. Card {card_id} is blocked; "
+               f"{BREAKER_ROUNDS} rounds with no new review feedback, only CI. Card {card_id} is blocked; "
                f"unblock it to continue.")
         print(f"held: {card_id} (round {round_label}, {op_id}) -- {reason}")
         return 0
