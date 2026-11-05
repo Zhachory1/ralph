@@ -29,7 +29,7 @@ Two human gates sit in the main line: design-doc approval and merge. Agents prep
 
 ### Profiles exist at permission boundaries
 
-A new profile is justified by different permissions, resources, or lifecycle — never by different know-how. Different know-how is a skill. Every profile can read repositories with `gh` ([decision 0001](docs/decisions/0001-every-profile-gets-repository-access.md)); the table below is about what each profile may change.
+A new profile is justified by different permissions, resources, or lifecycle — never by different know-how. Different know-how is a skill. Every profile can read repositories with `gh` ([decision 0001](docs/decisions/0001-every-profile-gets-repository-access.md); on the personal instance as the owner, [0002](docs/decisions/0002-personal-profiles-read-with-the-owner-token.md)); the table below is about what each profile may change.
 
 | Profile | Can | Cannot |
 | --- | --- | --- |
