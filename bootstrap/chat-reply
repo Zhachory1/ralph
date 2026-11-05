@@ -24,9 +24,10 @@ import sys
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
 THREAD = re.compile(r"spaces/[A-Za-z0-9_-]+/threads/[A-Za-z0-9_.-]+\Z")
-DECISION_KEYS = {"decision", "body", "ack", "worker_session_id"}
 MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "final": ".final-sent"}
 MAX_TEXT = 4000
+# A long reply is split into at most this many messages, in order.
+MAX_PARTS = 5
 
 
 class Refused(ValueError):
@@ -88,30 +89,57 @@ def decision_of(detail):
     if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
         raise Refused("missing Chat decision")
     metadata = run["metadata"]
-    if not {"decision", "body"} <= set(metadata) or set(metadata) - DECISION_KEYS:
+    # Extra keys (e.g. a worker's `diagnosis` note) are ignored, not refused:
+    # only decision/body/ack are ever read.
+    if not {"decision", "body"} <= set(metadata):
         raise Refused("invalid Chat decision")
     return metadata
 
 
 def text(value):
-    if not isinstance(value, str) or not value.strip() or len(value) > MAX_TEXT:
+    if not isinstance(value, str) or not value.strip() or len(parts(value)) > MAX_PARTS:
         raise Refused("reply text missing or too long")
     return value
 
 
+def parts(body):
+    """Split into messages of at most MAX_TEXT characters, in order: at the
+    last paragraph break that fits, else the last line break, else a hard cut."""
+    chunks = []
+    while len(body) > MAX_TEXT:
+        window = body[:MAX_TEXT + 1]
+        cut = window.rfind("\n\n")
+        sep = 2
+        if cut <= 0:
+            cut, sep = window.rfind("\n"), 1
+        if cut <= 0:
+            cut, sep = MAX_TEXT, 0
+        chunks.append(body[:cut])
+        body = body[cut + sep:]
+    chunks.append(body)
+    return [c for c in chunks if c.strip()]
+
+
 def post(space, thread, body, kind, op_id):
+    """Each part keeps fixed ids across retries, so the Chat API dedupes a
+    part that already went out and a retry resumes where it failed. Part 1
+    keeps the original ids, so a single-message reply is unchanged."""
     digest = hashlib.sha256(op_id.encode()).hexdigest()
     sender = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
-    sent = command([sys.executable, str(sender), "send", space, body,
-                    "--thread", thread, "--strict-thread",
-                    "--request-id", f"ralph-{kind}-{digest}",
-                    "--message-id", f"client-ralph-{kind}-{digest[:40]}"])
-    if sent.returncode:
-        return False
-    try:
-        return json.loads(sent.stdout).get("sent") is True
-    except (ValueError, AttributeError):
-        return False
+    for n, part in enumerate(parts(body), 1):
+        suffix = "" if n == 1 else f"-{n}"
+        sent = command([sys.executable, str(sender), "send", space, part,
+                        "--thread", thread, "--strict-thread",
+                        "--request-id", f"ralph-{kind}-{digest}{suffix}",
+                        "--message-id", f"client-ralph-{kind}-{digest[:40]}{suffix}"])
+        if sent.returncode:
+            return False
+        try:
+            if json.loads(sent.stdout).get("sent") is not True:
+                return False
+        except (ValueError, AttributeError):
+            return False
+    return True
 
 
 def mark(root, op_id, kind):
