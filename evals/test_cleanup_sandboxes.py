@@ -107,6 +107,33 @@ class CleanupTests(unittest.TestCase):
             self.run_clean({}, running={"ralph-builder"})
         self.assertTrue((home / ".cache").exists())
 
+    def test_go_binaries_survive_a_cache_purge(self):
+        """#99 review: `go` held installed tools as well as the module cache."""
+        home = self.cache("ralph-builder", 2000)
+        (home / "go" / "bin").mkdir(parents=True)
+        (home / "go" / "bin" / "gopls").write_text("tool")
+        (home / "go" / "pkg" / "mod").mkdir(parents=True)
+        (home / "go" / "pkg" / "mod" / "dep").write_text("x" * 2000)
+        with mock.patch.object(cleanup, "HOME_LIMIT_BYTES", 1000):
+            self.run_clean({})
+        self.assertTrue((home / "go" / "bin" / "gopls").exists())
+        self.assertFalse((home / "go" / "pkg" / "mod").exists())
+
+    def test_every_board_is_read_not_a_fixed_list(self):
+        """#99 review: a custom board's cards must count too."""
+        calls = []
+
+        def fake(*args):
+            calls.append(args)
+            if args[:2] == ("kanban", "boards"):
+                return mock.Mock(returncode=0, stdout='[{"slug": "custom"}]')
+            return mock.Mock(returncode=0, stdout='[{"id": "t_x", "status": "ready", "assignee": "ralph-builder"}]')
+        with mock.patch.object(cleanup, "hermes", side_effect=fake):
+            states, busy = cleanup.card_states()
+        self.assertEqual({"t_x": "ready"}, states)
+        self.assertEqual({"ralph-builder"}, busy)
+        self.assertIn(("kanban", "--board", "custom", "list", "--archived", "--json"), calls)
+
     def test_an_unreadable_board_deletes_nothing(self):
         path = self.checkout("t_aa")
         with mock.patch.object(cleanup, "card_states", return_value=None), \
