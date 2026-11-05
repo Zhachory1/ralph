@@ -134,6 +134,11 @@ class PublishSkipTests(unittest.TestCase):
         _, record = self.run_pass([], 2)
         self.assertEqual(["t_a", "t_b"], record)
 
+    def test_an_ambiguous_post_is_not_retried(self):
+        """#89 review: re-running exit 3 risks a duplicate review."""
+        _, record = self.run_pass([], 3)
+        self.assertEqual(["t_a", "t_b"], record)
+
     def test_an_error_is_retried_next_pass(self):
         _, record = self.run_pass([], 1)
         self.assertEqual([], record)

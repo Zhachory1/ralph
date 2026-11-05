@@ -64,15 +64,16 @@ while true; do
           | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(t["id"]) for t in (d if isinstance(d,list) else d.get("tasks",[]))]' \
           || true)
     # A card that reached a final outcome -- posted, already posted, head
-    # moved (0), or refused (2) -- never changes, so it is not re-checked:
-    # re-checking every done card each pass made one pass take many minutes.
-    # Errors (1) are retried. The list lives with the staged evidence.
+    # moved (0), refused permanently (2), or an ambiguous POST left for a
+    # human (3) -- is not re-checked: re-checking every done card each pass
+    # made one pass take many minutes, and re-running 3 risks a duplicate
+    # review. Errors (1) are retried. The list lives with the staged evidence.
     for id in $ids; do
         grep -qxF "$id" "$PUBLISHED" 2>/dev/null && continue
         python3 /ralph/bootstrap/publish-review --task "$id" --board "$BOARD" --post
         rc=$?
         case $rc in
-            0|2) echo "$id" >> "$PUBLISHED" ;;
+            0|2|3) echo "$id" >> "$PUBLISHED" ;;
             *) echo "review loop: publish $id returned $rc" >&2 ;;
         esac
     done

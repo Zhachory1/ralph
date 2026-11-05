@@ -291,11 +291,12 @@ def main() -> int:
             return 1
         login = who.stdout.strip()
         if args.login is not None and args.login != login:
+            # Exit 1: a correctable setup error, retried once it is fixed.
             print(f"refused: --login {args.login!r} does not match the account gh "
                  f"actually authenticates as ({login!r}). The marker check and the "
                  f"POST must run as the same account; fix which one is wrong rather "
                  f"than overriding either.", file=sys.stderr)
-            return 2
+            return 1
 
         # Guarantee 1 and 2 of the marker check: already posted, by any
         # account, for this exact head -- a no-op, by design, not an error.
