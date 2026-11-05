@@ -135,7 +135,7 @@ terminal_block() {
     case "$2" in
         lens-*|review-synthesis)
             echo "  docker_volumes: [\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"]" ;;
-        chat-maintainer|inbox-drafter)
+        chat-maintainer)
             echo "  docker_volumes: [\"$WORKSPACES_SRC/chat-inbox:/workspaces/chat-inbox:ro\"]" ;;
     esac
 }
