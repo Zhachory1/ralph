@@ -75,6 +75,7 @@ services:
       # so their RALPH_MAX_IN_PROGRESS values add up.
       RALPH_MAX_IN_PROGRESS: ${RALPH_MAX_IN_PROGRESS:-6}
       RALPH_SANDBOX_MEMORY_MB: ${RALPH_SANDBOX_MEMORY_MB:-3072}
+      RALPH_SANDBOX_ROOT: ${RALPH_SANDBOX_ROOT}
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
@@ -157,6 +158,11 @@ services:
     volumes:
       - hermes-home:/home/hermes/.hermes
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
+      # Agent sandboxes, at the same absolute path inside as on the host: Hermes
+      # creates a sandbox dir here, then asks the daemon to bind that path, and
+      # the daemon resolves it on the host. Without this the dirs land on the
+      # Colima VM's small root disk, out of every container's sight (#97).
+      - ${RALPH_SANDBOX_ROOT:?set RALPH_SANDBOX_ROOT to an absolute host path}:${RALPH_SANDBOX_ROOT}
       - ../evals:/ralph/evals:ro
       # Read-only: this is where the review lenses' restricted MCP server
       # (bootstrap/lens-tools) lives, referenced by path from five profile
@@ -328,10 +334,10 @@ services:
         required: false
     volumes:
       - hermes-home:/home/hermeswebui/.hermes
-      # Also at the hermes service's path: profile configs name sandbox
-      # directories as /home/hermes/.hermes/..., which Hermes creates here
-      # and the daemon binds from the VM.
+      # Also at the hermes service's path, which profile configs name.
       - hermes-home:/home/hermes/.hermes
+      # The same sandbox root as hermes, at the same path (#97).
+      - ${RALPH_SANDBOX_ROOT}:${RALPH_SANDBOX_ROOT}
       # Read-only: hermes-webui only reads this to install the agent's
       # Python dependencies at startup, never to write it.
       - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
