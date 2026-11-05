@@ -296,10 +296,32 @@ class RepeatDiscoveryTests(unittest.TestCase):
                 with mock.patch.object(sys, "argv", argv):
                     code = discover_reviews.main()
             self.assertEqual(0, code)
-            # build-review-graph is still invoked (it owns the real
-            # idempotency key), but the summary should not call this new.
+            # An already-staged head is skipped before it takes a per-run slot.
             calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
-            self.assertEqual(1, len(calls))
+            self.assertEqual(0, len(calls))
+
+    def test_already_staged_prs_do_not_use_up_the_per_run_cap(self):
+        """Live: 10 already-reviewed PRs filled every pass; 90 were never reached."""
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            work_root = pathlib.Path(d)
+            prs = [fake_pr("a/repo", n) for n in (1, 2, 3)]
+            for n in (1, 2):
+                (work_root / discover_reviews.operation_id("a/repo", n, "1" * 40)).mkdir()
+            with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=prs), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+                argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                        "--work-root", str(work_root), "--once-for-real", "--max-per-run", "1"]
+                with mock.patch.object(sys, "argv", argv):
+                    discover_reviews.main()
+            built = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+            self.assertEqual(1, len(built))
+            self.assertIn("3", built[0].args[0][built[0].args[0].index("--pr") + 1])
 
 
 class SearchFailureTests(unittest.TestCase):
