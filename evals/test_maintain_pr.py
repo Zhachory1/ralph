@@ -111,9 +111,9 @@ class ApprovalSupersedesTests(unittest.TestCase):
         r["body"] = "**Verdict: APPROVE** (submitted as COMMENT -- self-authored PR)"
         self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
 
-    def test_a_bot_review_is_feedback(self):
-        """op3#17039/17040: every finding was a bot's, and none was acted on."""
-        r = self.r(1, "COMMENTED", "claude[bot]")
+    def test_a_bot_change_request_is_feedback(self):
+        """op3#17039/17040: bot findings are acted on (as threads or a change request)."""
+        r = self.r(1, "CHANGES_REQUESTED", "claude[bot]")
         r["user"]["type"] = "Bot"
         self.assertNotEqual("empty", maintain_pr.feedback_digest(self._snapshot([r])))
 
@@ -127,7 +127,7 @@ class ApprovalSupersedesTests(unittest.TestCase):
 
     def test_a_new_bot_finding_moves_the_review_digest(self):
         """op3#17109: new bot findings on a new push were held by the breaker."""
-        r = self.r(1, "COMMENTED", "claude[bot]")
+        r = self.r(1, "CHANGES_REQUESTED", "claude[bot]")
         r["user"]["type"] = "Bot"
         self.assertNotEqual("empty", maintain_pr.human_digest(self._snapshot([r])))
 
@@ -153,7 +153,7 @@ class ApprovalSupersedesTests(unittest.TestCase):
         self.assertEqual(maintain_pr.human_digest(a), maintain_pr.human_digest(b))
 
     def test_a_bot_does_not_hide_a_person(self):
-        bot = self.r(1, "COMMENTED", "claude[bot]"); bot["user"]["type"] = "Bot"
+        bot = self.r(1, "CHANGES_REQUESTED", "claude[bot]"); bot["user"]["type"] = "Bot"
         person = self.r(2, "CHANGES_REQUESTED", "apenmetcha-rokt")
         self.assertEqual([1, 2], [x["id"] for x in self._snapshot([bot, person])["reviews"]])
 
@@ -183,9 +183,12 @@ class ApprovalSupersedesTests(unittest.TestCase):
         snap = self._snapshot([self.r(1, "CHANGES_REQUESTED"), self.r(2, "DISMISSED")])
         self.assertEqual([1], [x["id"] for x in snap["reviews"]])
 
-    def test_a_comment_review_is_still_feedback(self):
-        snap = self._snapshot([self.r(1, "COMMENTED")])
-        self.assertEqual([1], [x["id"] for x in snap["reviews"]])
+    def test_a_comment_review_summary_is_not_feedback(self):
+        """op3#17109: bot summaries ("no issues found") on every push started a
+        round, whose comment triggered another bot pass. Findings come as threads."""
+        bot = self.r(1, "COMMENTED", "claude[bot]"); bot["user"]["type"] = "Bot"
+        person = self.r(2, "COMMENTED", "maxkore")
+        self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([bot, person])))
 
 
 class OperationIdTests(unittest.TestCase):
