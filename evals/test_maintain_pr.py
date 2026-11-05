@@ -131,6 +131,21 @@ class ApprovalSupersedesTests(unittest.TestCase):
         r["user"]["type"] = "Bot"
         self.assertNotEqual("empty", maintain_pr.human_digest(self._snapshot([r])))
 
+    def test_a_rerun_of_the_same_failing_check_is_the_same_feedback(self):
+        """op3#17109: each CI run has a new link, and every one started a round."""
+        def snap(link):
+            checks = [{"name": "buildkite/op3", "bucket": "fail", "state": "FAILURE", "link": link}]
+            def fake_gh(*args):
+                if args[:2] == ("api", "graphql"):
+                    return mock.Mock(returncode=0, stdout=json.dumps(
+                        {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}))
+                if args[0] == "api":
+                    return mock.Mock(returncode=0, stdout="[]")
+                return mock.Mock(returncode=0, stdout=json.dumps(checks))
+            with mock.patch.object(maintain_pr, "gh", side_effect=fake_gh):
+                return maintain_pr.feedback_digest(maintain_pr.feedback_snapshot("a/b", 1, "me"))
+        self.assertEqual(snap("builds/1"), snap("builds/2"))
+
     def test_ci_alone_does_not_move_the_review_digest(self):
         """The breaker's one runaway: a build Ralph cannot fix."""
         a = {"reviews": [], "threads": [], "checks": [{"name": "ci", "link": "run/1"}]}
@@ -267,7 +282,7 @@ class CircuitBreakerTests(unittest.TestCase):
     def test_an_unreadable_board_does_not_trip(self):
         self.assertFalse(maintain_pr.breaker_tripped(None, "a"))
 
-    def run_main(self, prior_humans, op_seen=False):
+    def run_main(self, prior_humans, op_seen=False, status="done"):
         """main() with GitHub and the board stubbed; returns the hermes calls.
         prior_humans: each earlier round's human digest, oldest first. The
         current snapshot's human feedback hashes to human_digest(SNAPSHOT)."""
@@ -275,8 +290,9 @@ class CircuitBreakerTests(unittest.TestCase):
         snapshot = {"reviews": [{"id": 9, "author": "person", "body": "fix it"}],
                     "threads": [], "checks": []}
         op = maintain_pr.operation_id("o/r", 1, maintain_pr.feedback_digest(snapshot))
+        snapshot = json.loads(json.dumps(snapshot))
         now_human = maintain_pr.human_digest(snapshot)
-        cards = [{"created_at": self.NOW - (len(prior_humans) - i) * 60,
+        cards = [{"created_at": self.NOW - (len(prior_humans) - i) * 60, "status": status,
                   "body": f"repo: o/r\nnumber: 1\n"
                           f"human_digest: {now_human if h == 'same' else h}\n"
                           + (f"operation_id: {op}\n" if op_seen and i == len(prior_humans) - 1 else "")}
@@ -321,6 +337,11 @@ class CircuitBreakerTests(unittest.TestCase):
         verbs, notify, _ = self.run_main(["same", "same", "same"], op_seen=True)
         self.assertNotIn("block", verbs)
         notify.assert_not_called()
+
+    def test_a_pending_round_holds_new_rounds(self):
+        """op3#17109: rounds queued behind a busy maintainer piled up."""
+        verbs, _, create = self.run_main(["x"], status="ready")
+        self.assertEqual([], create)
 
     def test_each_card_records_its_human_digest(self):
         """The breaker reads this back on the next round."""

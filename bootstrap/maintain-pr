@@ -62,6 +62,7 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 MAX_RUNTIME = "3600"
+PENDING = ("todo", "ready", "running", "blocked")
 BREAKER_ROUNDS = int(os.environ.get("RALPH_MAINTAIN_BREAKER_ROUNDS", "3"))
 MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
 # still spends the digest once retried, not twice: the retry runs against
@@ -211,11 +212,14 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
             snapshot_threads.append({"id": t["id"], "comments": comments})
     snapshot_threads.sort(key=lambda x: x["id"])
 
+    # By name only: each CI run or retry has a new link, and keying on it
+    # made every re-run of a still-failing build look like new feedback
+    # (op3#17109: 9 rounds, none from a review). main() adds the head, so a
+    # check still failing after a new push is new feedback, and a re-run on
+    # the same head is not.
     snapshot_checks = sorted(
-        ({"name": c.get("name"), "bucket": c.get("bucket"), "state": c.get("state"),
-          "link": c.get("link")}
-         for c in checks_list if c.get("bucket") == "fail"),
-        key=lambda x: (x["name"] or "", x["link"] or "", x["state"] or ""))
+        ({"name": c.get("name")} for c in checks_list if c.get("bucket") == "fail"),
+        key=lambda x: x["name"] or "")
 
     return {"reviews": snapshot_reviews, "threads": snapshot_threads, "checks": snapshot_checks}
 
@@ -330,6 +334,14 @@ def main() -> int:
         print(f"error: could not read feedback for {args.repo}#{args.pr}", file=sys.stderr)
         return 1
 
+    pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json", "headRefOid,headRefName")
+    if pr_view.returncode != 0:
+        print(f"error: could not read {args.repo}#{args.pr}'s head", file=sys.stderr)
+        return 1
+    pr_info = json.loads(pr_view.stdout)
+    head_sha, head_branch = pr_info["headRefOid"], pr_info["headRefName"]
+    snapshot["checks"] = [{**c, "head": head_sha} for c in snapshot["checks"]]
+
     digest = feedback_digest(snapshot)
     if digest == "empty":
         print(f"skip {args.repo}#{args.pr}: no actionable external feedback")
@@ -342,15 +354,13 @@ def main() -> int:
     # Never re-trip on a re-run of the same feedback: its card already exists.
     already = cards is not None and any(f"operation_id: {op_id}\n" in (c.get("body") or "")
                                         for c in cards)
+    # One round per PR at a time: a round still queued or running sees the
+    # PR as it is when it starts, so a second card would only redo its work.
+    if not already and cards and any(c.get("status") in PENDING for c in cards):
+        print(f"wait {args.repo}#{args.pr}: a maintenance round is still pending")
+        return 0
     human = human_digest(snapshot)
     hold = not already and breaker_tripped(cards, human)
-
-    pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json", "headRefOid,headRefName")
-    if pr_view.returncode != 0:
-        print(f"error: could not read {args.repo}#{args.pr}'s head", file=sys.stderr)
-        return 1
-    pr_info = json.loads(pr_view.stdout)
-    head_sha, head_branch = pr_info["headRefOid"], pr_info["headRefName"]
 
     body = (f"operation_id: {op_id}\nrepo: {args.repo}\nnumber: {args.pr}\n"
            f"head_sha: {head_sha}\nhead_branch: {head_branch}\n"
