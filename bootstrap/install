@@ -128,12 +128,15 @@ terminal_block() {
     if [ -n "$REPO_CACHE_SRC" ] && repo_cache_profile "$2"; then
         echo "  docker_volumes: [\"$REPO_CACHE_SRC:/repo-cache:ro\"]"
     fi
-    # Review cards point at staged evidence under /workspaces/review-work in
-    # the hermes container. The lenses and synthesis read it from their
-    # sandbox, so it is mounted there at the same path, read-only.
-    case "$2" in lens-*|review-synthesis)
-        [ -n "$WORKSPACES_SRC" ] &&
+    # Review and chat cards point at staged evidence under /workspaces in the
+    # hermes container. The profiles that read it do so from their sandbox,
+    # so it is mounted there at the same path, read-only.
+    [ -n "$WORKSPACES_SRC" ] || return 0
+    case "$2" in
+        lens-*|review-synthesis)
             echo "  docker_volumes: [\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"]" ;;
+        chat-maintainer)
+            echo "  docker_volumes: [\"$WORKSPACES_SRC/chat-inbox:/workspaces/chat-inbox:ro\"]" ;;
     esac
 }
 # The daemon resolves a bind source on the VM, so the cache is named by the
