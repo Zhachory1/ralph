@@ -97,33 +97,26 @@ def decision_of(detail):
 
 
 def text(value):
-    if not isinstance(value, str) or not value.strip() or len(value) > MAX_TEXT * MAX_PARTS:
+    if not isinstance(value, str) or not value.strip() or len(parts(value)) > MAX_PARTS:
         raise Refused("reply text missing or too long")
     return value
 
 
 def parts(body):
-    """Split at paragraph breaks into messages Chat accepts. A paragraph
-    longer than one message is cut at line breaks, then hard-cut."""
-    chunks, current = [], ""
-    for para in body.split("\n\n"):
-        pieces = [para]
-        if len(para) > MAX_TEXT:
-            pieces, line_buf = [], ""
-            for line in para.split("\n"):
-                while len(line) > MAX_TEXT:
-                    pieces.append(line[:MAX_TEXT]); line = line[MAX_TEXT:]
-                if line_buf and len(line_buf) + 1 + len(line) > MAX_TEXT:
-                    pieces.append(line_buf); line_buf = line
-                else:
-                    line_buf = f"{line_buf}\n{line}" if line_buf else line
-            pieces.append(line_buf)
-        for piece in pieces:
-            if current and len(current) + 2 + len(piece) > MAX_TEXT:
-                chunks.append(current); current = piece
-            else:
-                current = f"{current}\n\n{piece}" if current else piece
-    chunks.append(current)
+    """Split into messages of at most MAX_TEXT characters, in order: at the
+    last paragraph break that fits, else the last line break, else a hard cut."""
+    chunks = []
+    while len(body) > MAX_TEXT:
+        window = body[:MAX_TEXT + 1]
+        cut = window.rfind("\n\n")
+        sep = 2
+        if cut <= 0:
+            cut, sep = window.rfind("\n"), 1
+        if cut <= 0:
+            cut, sep = MAX_TEXT, 0
+        chunks.append(body[:cut])
+        body = body[cut + sep:]
+    chunks.append(body)
     return [c for c in chunks if c.strip()]
 
 

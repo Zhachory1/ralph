@@ -175,7 +175,7 @@ class ChatReplyTests(unittest.TestCase):
     def test_missing_or_oversized_text_is_refused(self):
         self.cards[("queues", "t_intake")]["metadata"].pop("ack")
         self.assertEqual(2, self.handle("queues", "t_intake"))
-        self.cards[("queues", "t_intake")]["metadata"]["ack"] = "x" * (4000 * 5 + 1)
+        self.cards[("queues", "t_intake")]["metadata"]["ack"] = "x" * (4000 * 5 + 1)  # 6 parts
         self.assertEqual(2, self.handle("queues", "t_intake"))
         self.assertEqual([], self.sends())
 
@@ -192,6 +192,22 @@ class ChatReplyTests(unittest.TestCase):
         ids = [a[a.index("--message-id") + 1] for a in finals]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertTrue(all(len(i) <= 63 for i in ids))
+
+    def test_split_keeps_order_around_a_long_line(self):
+        """#92 review: a long line was emitted before earlier buffered text."""
+        body = "first\n" + "x" * 4500 + "\nlast"
+        chunks = self.reply.parts(body)
+        self.assertTrue(all(len(c) <= 4000 for c in chunks))
+        joined = "".join(chunks)
+        self.assertEqual(body.replace("\n", ""), joined.replace("\n", ""))
+        self.assertTrue(chunks[0].startswith("first"))
+        self.assertTrue(chunks[-1].endswith("last"))
+
+    def test_more_than_five_messages_is_refused(self):
+        """#92 review: the five-message limit must hold for any input."""
+        self.cards[("ralph", "t_final")]["metadata"]["body"] = "\n\n".join(["y" * 3999] * 6)
+        self.scan()
+        self.assertFalse(any(any("final" in x for x in a) for a in self.sends()))
 
     def test_extra_metadata_keys_are_ignored(self):
         """t_8037487e added a `diagnosis` note and was refused on every scan."""
