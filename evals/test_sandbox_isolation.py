@@ -141,7 +141,9 @@ class SandboxScopeTests(unittest.TestCase):
             # The writable sandbox dirs live under RALPH_SANDBOX_ROOT/<profile>
             # (#97); Hermes' read-only state dirs under the profile's home.
             if mount["Destination"] in ("/workspace", "/root"):
-                self.assertIn(f"/sandboxes/{self.profile}/", mount["Source"], mount["Source"])
+                # RALPH_SANDBOX_ROOT can be any absolute path; the profile's own
+                # dir under it is the scope that matters.
+                self.assertIn(f"/{self.profile}/docker/", mount["Source"], mount["Source"])
             elif self.profile == "default":
                 # The default profile's state sits at the top of HERMES_HOME;
                 # it must still never reach into a named profile's.
