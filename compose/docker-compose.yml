@@ -317,11 +317,21 @@ services:
       HERMES_API_URL: http://hermes:8642
       # Must match the hermes service's API_SERVER_KEY above.
       HERMES_WEBUI_GATEWAY_API_KEY: ${RALPH_WEBUI_API_KEY:-}
+      # The chat runs profiles in-process here, and every profile's terminal
+      # is the Docker sandbox. Same Docker access as the hermes service: the
+      # proxy, and the docker client bootstrap/install copies from the hermes
+      # image into the shared volume (this image ships none).
+      DOCKER_HOST: tcp://socket-proxy:2375
+      HERMES_DOCKER_BINARY: /home/hermeswebui/.hermes/bin/docker
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false
     volumes:
       - hermes-home:/home/hermeswebui/.hermes
+      # Also at the hermes service's path: profile configs name sandbox
+      # directories as /home/hermes/.hermes/..., which Hermes creates here
+      # and the daemon binds from the VM.
+      - hermes-home:/home/hermes/.hermes
       # Read-only: hermes-webui only reads this to install the agent's
       # Python dependencies at startup, never to write it.
       - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro

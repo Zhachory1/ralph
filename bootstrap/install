@@ -153,6 +153,12 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     fi
 fi
 sandbox_config "" "${HERMES_HOME:-$HOME/.hermes}"
+# hermes-webui runs profiles in-process and its image has no docker client;
+# give it the hermes image's own, in the shared volume (HERMES_DOCKER_BINARY).
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -u hermes "$RALPH_HERMES_CONTAINER" sh -c \
+        'mkdir -p "$HERMES_HOME/bin" && cp /usr/bin/docker "$HERMES_HOME/bin/docker"'
+fi
 
 # The review lenses (PR 2 of the fleet-into-ralph design) run on an OpenAI
 # credential Ralph's other nine profiles never touch -- those stay on
