@@ -274,14 +274,17 @@ rm -f "$SRC_TMP"
 # RALPH_PROFILE_READ_TOKEN: the stack's review token by default, or the
 # owner's token where an instance sets it (decision 0002), so Ralph can read
 # private repositories the owner was invited to. The author, builder and
-# maintainer keep the push token written above. Rewritten every install, so
+# maintainer keep the push token written above. The default profile (the
+# top-level .env) gets it too. Rewritten every install, so
 # changing the setting takes effect.
 # Exported and passed by name only (-e READ_TOKEN), never as -e NAME=value,
 # so the token never appears in a process's command line.
 export READ_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
 if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     docker exec -i -u hermes -e READ_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
-        for f in "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
+        # The top-level .env is the `default` profile, which the WebUI chat
+        # uses unless a Ralph profile is picked; it reads like the others.
+        for f in "${HERMES_HOME:-$HOME/.hermes}"/.env "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
             case "$f" in */ralph-maintainer/*|*/ralph-builder/*|*/ralph-author/*) continue ;; esac
             [ -f "$f" ] || continue
             tmp=$(mktemp "$f.XXXXXX")
