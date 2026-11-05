@@ -175,12 +175,28 @@ class ChatReplyTests(unittest.TestCase):
     def test_missing_or_oversized_text_is_refused(self):
         self.cards[("queues", "t_intake")]["metadata"].pop("ack")
         self.assertEqual(2, self.handle("queues", "t_intake"))
-        self.cards[("queues", "t_intake")]["metadata"]["ack"] = "x" * 4001
+        self.cards[("queues", "t_intake")]["metadata"]["ack"] = "x" * (4000 * 5 + 1)
         self.assertEqual(2, self.handle("queues", "t_intake"))
         self.assertEqual([], self.sends())
 
-    def test_hermes_session_metadata_is_allowed(self):
+    def test_a_long_final_reply_is_sent_in_order_as_several_messages(self):
+        """t_0b621f03 / t_8037487e: 4,128-char drafts were refused 1,291 times."""
+        body = "\n\n".join(["a" * 1500, "b" * 1500, "c" * 1500])
+        self.cards[("ralph", "t_final")]["metadata"]["body"] = body
+        self.assertEqual(0, self.scan())
+        finals = [a for a in self.sends() if any("final" in x for x in a)]
+        texts = [a[a.index("send") + 2] for a in finals]
+        self.assertEqual(2, len(texts))
+        self.assertTrue(all(len(t) <= 4000 for t in texts))
+        self.assertEqual(body, "\n\n".join(texts))
+        ids = [a[a.index("--message-id") + 1] for a in finals]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(len(i) <= 63 for i in ids))
+
+    def test_extra_metadata_keys_are_ignored(self):
+        """t_8037487e added a `diagnosis` note and was refused on every scan."""
         self.cards[("queues", "t_intake")]["metadata"]["worker_session_id"] = "session-1"
+        self.cards[("queues", "t_intake")]["metadata"]["diagnosis"] = "why"
         self.assertEqual(0, self.handle("queues", "t_intake"))
 
 
