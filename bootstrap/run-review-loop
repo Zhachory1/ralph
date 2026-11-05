@@ -101,6 +101,13 @@ while true; do
         done
     fi
 
+    # Sandbox disk cleanup (#97), at most hourly. Never fails the loop.
+    stamp="$WORK/.cleanup-stamp"
+    if [ -z "$(find "$stamp" -mmin -60 2>/dev/null)" ]; then
+        python3 /ralph/bootstrap/cleanup-sandboxes --root "${RALPH_SANDBOX_DIR:-/workspaces/sandboxes}" \
+            && touch "$stamp" || echo "review loop: cleanup returned $?" >&2
+    fi
+
     # --once: one pass now instead of waiting up to INTERVAL for the next,
     # e.g. `docker compose exec review-loop /ralph/bootstrap/run-review-loop --once`.
     [ "${1:-}" = "--once" ] && break
