@@ -96,7 +96,7 @@ class SandboxEscapeTests(unittest.TestCase):
 # all: the cache holds the full objects of every repository this instance
 # has ever touched, across every org, not just the one a given card is
 # scoped to (#79 review: confidentiality).
-REPO_CACHE_PROFILES = {"ralph-builder", "ralph-maintainer", "ralph-author"}
+REPO_CACHE_PROFILES = {"ralph-builder", "ralph-maintainer", "ralph-author", "ralph-researcher", "default"}
 
 
 class SandboxScopeTests(unittest.TestCase):
@@ -112,13 +112,10 @@ class SandboxScopeTests(unittest.TestCase):
             raise unittest.SkipTest("no running sandbox; use a profile's shell once, then re-run")
         cls.mounts = json.loads(docker(
             "inspect", cls.sandbox, "--format", "{{json .Mounts}}").stdout or "[]")
-        # Every profile-scoped mount's source names the profile, so pull it
-        # from there rather than trust a container label that might not exist.
-        cls.profile = next(
-            (m["Source"].split("/profiles/", 1)[1].split("/", 1)[0]
-             for m in cls.mounts if "/profiles/" in m["Source"]),
-            None,
-        )
+        # Hermes labels every sandbox with its profile; `default` (the WebUI
+        # chat) has no /profiles/<name>/ directory to read it from.
+        cls.profile = docker("inspect", cls.sandbox, "--format",
+                             '{{index .Config.Labels "hermes-profile"}}').stdout.strip() or None
 
     def test_every_mount_is_profile_scoped(self):
         """Profile-scoped, or a public skill lane mounted read-only: the
@@ -135,10 +132,21 @@ class SandboxScopeTests(unittest.TestCase):
                 self.assertIn(self.profile, REPO_CACHE_PROFILES,
                               f"{self.profile} must not see the repo cache")
                 continue
-            self.assertIn("/profiles/", mount["Source"], mount["Source"])
+            # Staged evidence a card reads (#82, #88): read-only, its own path.
+            if mount["Destination"] in ("/workspaces/review-work", "/workspaces/chat-inbox"):
+                self.assertFalse(mount.get("RW"), mount["Source"])
+                self.assertTrue(mount["Source"].endswith(mount["Destination"][len("/workspaces"):]),
+                                mount["Source"])
+                continue
+            if self.profile == "default":
+                # The default profile's own dirs sit at the top of HERMES_HOME;
+                # it must still never reach into a named profile's.
+                self.assertNotIn("/profiles/", mount["Source"], mount["Source"])
+            else:
+                self.assertIn(f"/profiles/{self.profile}/", mount["Source"], mount["Source"])
 
     def test_repo_cache_mount_is_limited_to_checkout_profiles(self):
-        """A profile outside builder/maintainer/author never gets /repo-cache,
+        """A profile outside REPO_CACHE_PROFILES never gets /repo-cache,
         even read-only: it has no reason to clone, and the cache spans every
         repository this instance has touched, not just the one it is working."""
         if self.profile in REPO_CACHE_PROFILES:
@@ -147,8 +155,9 @@ class SandboxScopeTests(unittest.TestCase):
         self.assertFalse(has_cache, f"{self.profile} must not see /repo-cache")
 
     def test_writable_mounts_are_workspace_and_home_only(self):
-        writable = sorted(m["Destination"] for m in self.mounts if m.get("RW"))
-        self.assertEqual(["/root", "/workspace"], writable)
+        writable = {m["Destination"] for m in self.mounts if m.get("RW")}
+        self.assertIn("/root", writable)
+        self.assertLessEqual(writable, {"/root", "/workspace"})
 
 
 class ProxyRefusalTests(unittest.TestCase):

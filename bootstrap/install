@@ -100,13 +100,21 @@ sandbox_config() {
     # One sandbox's ceiling. A maintenance build of a large repository peaks at
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
+    # The default profile (the WebUI chat) browses the repo cache read-only,
+    # like the researcher (owner decision 2026-11-05).
+    if [ -n "$REPO_CACHE_SRC" ]; then
+        hermes $1 config set terminal.docker_volumes "[\"$REPO_CACHE_SRC:/repo-cache:ro\"]" >/dev/null
+    fi
 }
-# Profiles whose SOUL tells them to clone through /repo-cache. Every other
-# profile reads through gh api/gh search with no clone (plan in #77), so it
-# must not be able to see the cache at all.
+# Profiles that see /repo-cache: the three that clone through it, and the
+# researcher, which browses it read-only (owner decision 2026-11-05; the
+# default profile gets it in sandbox_config). Every other profile -- the
+# lenses, synthesis, chat-maintainer, orchestrator -- reads through gh only
+# and must not see the cache, which spans every repository this instance has
+# touched (#79 review).
 repo_cache_profile() {
     case "$1" in
-        builder|maintainer|author) return 0 ;;
+        builder|maintainer|author|researcher) return 0 ;;
         *) return 1 ;;
     esac
 }
