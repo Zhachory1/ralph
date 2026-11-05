@@ -107,9 +107,9 @@ class ReviewRoundCapTests(unittest.TestCase):
     def test_a_fourth_round_is_admitted(self):
         self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "c" * 40}))
 
-    def test_an_already_reviewed_head_is_rebuilt_idempotently(self):
-        """Rebuilding an already-reviewed head is idempotent, not a new round."""
-        self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "1" * 40}))
+    def test_an_already_reviewed_head_is_not_reviewed_again(self):
+        """Each head is reviewed once."""
+        self.assertEqual(0, self._admitted({"a" * 40, "b" * 40, "1" * 40}))
 
     def test_unreadable_reviews_skip_rather_than_spend(self):
         self.assertEqual(0, self._admitted(None))
@@ -160,8 +160,8 @@ class ReviewSpacingTests(unittest.TestCase):
                                return_value=({"aaaaaaaa", "bbbbbbbb", "cccccccc"}, False)):
             self.assertEqual(1, self.admitted({}))
 
-    def test_an_already_reviewed_head_is_rebuilt_not_a_new_round(self):
-        self.assertEqual(1, self.admitted({"1" * 40: self.ago(1)}))
+    def test_an_already_reviewed_head_is_not_reviewed_again(self):
+        self.assertEqual(0, self.admitted({"1" * 40: self.ago(1)}))
 
 
 class PerRunCapTests(unittest.TestCase):
@@ -275,31 +275,49 @@ class RepeatDiscoveryTests(unittest.TestCase):
     for this to silently consume anymore, but the "admitted" count in the
     printed summary should still reflect genuinely new work, not a repeat."""
 
-    def test_an_already_staged_operation_is_not_counted_as_newly_admitted(self):
+    def _built(self, prs, reviewed=(), on_board=(), max_per_run=1):
         import sys
-        with tempfile.TemporaryDirectory() as d:
-            work_root = pathlib.Path(d)
-            pr = fake_pr("a/repo", 1)
-            op_id = discover_reviews.operation_id("a/repo", 1, "1" * 40)
-            # Simulate an earlier run having already staged this exact head.
-            (work_root / op_id).mkdir(parents=True)
+        with tempfile.TemporaryDirectory() as d, \
+            mock.patch.object(discover_reviews, "search_assigned_prs", return_value=prs), \
+            mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+            mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+            mock.patch.object(discover_reviews, "reviews_by_me",
+                              side_effect=lambda r, n: {"1" * 40: 0} if n in reviewed else {}), \
+            mock.patch.object(discover_reviews, "review_graphs",
+                              side_effect=lambda b, r, n: ({"11111111"} if n in on_board else set(), False)), \
+            mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
+            with mock.patch.object(sys, "argv", argv):
+                discover_reviews.main()
+            return [c.args[0][c.args[0].index("--pr") + 1] for c in run.call_args_list
+                    if "build-review-graph" in " ".join(c.args[0])]
 
-            with mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[pr]), \
-                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
-                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
-                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
-                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x/a/repo")), \
-                mock.patch("subprocess.run") as run:
-                run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-                argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
-                       "--work-root", str(work_root), "--once-for-real"]
-                with mock.patch.object(sys, "argv", argv):
-                    code = discover_reviews.main()
-            self.assertEqual(0, code)
-            # build-review-graph is still invoked (it owns the real
-            # idempotency key), but the summary should not call this new.
-            calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
-            self.assertEqual(1, len(calls))
+    def setUp(self):
+        patcher = mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_reviewed_prs_do_not_use_up_the_per_run_cap(self):
+        """Live: 10 already-reviewed PRs filled every pass; 90 were never reached."""
+        prs = [fake_pr("a/repo", n) for n in (1, 2, 3)]
+        self.assertEqual(["3"], self._built(prs, reviewed={1, 2}))
+
+    def test_a_head_already_on_the_board_takes_no_slot(self):
+        prs = [fake_pr("a/repo", n) for n in (1, 2)]
+        self.assertEqual(["2"], self._built(prs, on_board={1}))
+
+    def test_a_failed_checkout_does_not_spend_a_slot(self):
+        """#89 review: an early failure must not starve the next PR."""
+        prs = [fake_pr("a/repo", n) for n in (1, 2)]
+        with mock.patch.object(discover_reviews, "ensure_checkout",
+                               side_effect=lambda root, r, n, b, h: None if n == 1 else pathlib.Path("/x")):
+            self.assertEqual(["2"], self._built(prs))
+
+    def test_a_staged_head_without_a_graph_is_retried(self):
+        """#89 review: a partial staging must not suppress the review forever."""
+        self.assertEqual(["1"], self._built([fake_pr("a/repo", 1)]))
 
 
 class SearchFailureTests(unittest.TestCase):

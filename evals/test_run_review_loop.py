@@ -97,5 +97,51 @@ class StartupTests(unittest.TestCase):
         self.assertIn("-- -label:dd-changes -repo:Zhachory1/docs", self.gh_search)
 
 
+
+
+class PublishSkipTests(unittest.TestCase):
+    """A done synthesis card with a final publish outcome is not re-checked."""
+
+    def run_pass(self, published, publish_rc):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            stub = d / "bin"
+            stub.mkdir()
+            calls = d / "calls"
+            (stub / "gh").write_text("#!/bin/sh\nexit 0\n")
+            (stub / "docker").write_text("#!/bin/sh\necho '[{\"id\": \"t_a\"}, {\"id\": \"t_b\"}]'\n")
+            (stub / "python3").write_text(
+                "#!/bin/sh\n"
+                'case "$1" in */publish-review) echo "$3" >> "$CALLS"; exit "$RC";; esac\n'
+                '[ "$1" = -c ] && exec /usr/bin/python3 "$@"\n'
+                "exit 0\n")
+            (stub / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
+            for f in stub.iterdir():
+                f.chmod(0o755)
+            record = d / "published"
+            record.write_text("".join(f"{i}\n" for i in published))
+            env = {"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": str(d), "CALLS": str(calls),
+                   "RC": str(publish_rc), "RALPH_HERMES_CONTAINER": "x",
+                   "RALPH_REVIEW_ALLOW": "o/r", "RALPH_REVIEW_PUBLISHED": str(record)}
+            subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=30)
+            return (calls.read_text().split() if calls.exists() else []), record.read_text().split()
+
+    def test_a_recorded_card_is_not_published_again(self):
+        called, _ = self.run_pass(["t_a"], 0)
+        self.assertEqual(["t_b"], called)
+
+    def test_a_final_outcome_is_recorded(self):
+        _, record = self.run_pass([], 2)
+        self.assertEqual(["t_a", "t_b"], record)
+
+    def test_an_ambiguous_post_is_not_retried(self):
+        """#89 review: re-running exit 3 risks a duplicate review."""
+        _, record = self.run_pass([], 3)
+        self.assertEqual(["t_a", "t_b"], record)
+
+    def test_an_error_is_retried_next_pass(self):
+        _, record = self.run_pass([], 1)
+        self.assertEqual([], record)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
