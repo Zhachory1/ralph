@@ -52,7 +52,8 @@ def boards():
     if r.returncode != 0:
         return None
     try:
-        return [b["slug"] for b in json.loads(r.stdout) if not b.get("archived")]
+        # Archived boards too: their cards' checkouts are still on disk.
+        return [b["slug"] for b in json.loads(r.stdout)]
     except (json.JSONDecodeError, KeyError, TypeError):
         return None
 
