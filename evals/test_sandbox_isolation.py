@@ -138,8 +138,12 @@ class SandboxScopeTests(unittest.TestCase):
                 self.assertTrue(mount["Source"].endswith(mount["Destination"][len("/workspaces"):]),
                                 mount["Source"])
                 continue
-            if self.profile == "default":
-                # The default profile's own dirs sit at the top of HERMES_HOME;
+            # The writable sandbox dirs live under RALPH_SANDBOX_ROOT/<profile>
+            # (#97); Hermes' read-only state dirs under the profile's home.
+            if mount["Destination"] in ("/workspace", "/root"):
+                self.assertIn(f"/sandboxes/{self.profile}/", mount["Source"], mount["Source"])
+            elif self.profile == "default":
+                # The default profile's state sits at the top of HERMES_HOME;
                 # it must still never reach into a named profile's.
                 self.assertNotIn("/profiles/", mount["Source"], mount["Source"])
             else:
