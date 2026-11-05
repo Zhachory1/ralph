@@ -390,7 +390,7 @@ def main() -> int:
          f"(not in --allow)")
 
     # The per-run cap counts only PRs whose current head still needs a
-    # review. A head already reviewed or already staged takes no slot: with
+    # review. A head already reviewed or already on the board takes no slot: with
     # the cap applied first, 10 already-reviewed PRs filled every pass and
     # the other 90 assigned PRs were never reached.
     admitted = 0
@@ -406,17 +406,18 @@ def main() -> int:
             print(f"  skip {repo}#{number}: could not read base/head SHAs", file=sys.stderr)
             continue
         base_sha, head_sha = shas
-        if _staging_dir_exists(args.work_root / operation_id(repo, number, head_sha)):
-            continue
-        slots += 1
         heads = reviews_by_me(repo, number)
         if heads is None:
             print(f"  skip {repo}#{number}: could not read its reviews", file=sys.stderr)
+            continue
+        # Already reviewed at this head: settled, and takes no slot.
+        if head_sha in heads:
             continue
         # Each head is reviewed once (deduped by head SHA), with no cap on
         # rounds. One review graph per PR runs at a time: a newer head waits
         # for it, then the latest head is reviewed.
         if not args.once_for_real:
+            slots += 1
             print(f"  {repo}#{number} @ {head_sha[:8]}")
             continue
         board_view = review_graphs(args.board, repo, number)
@@ -424,10 +425,15 @@ def main() -> int:
             print(f"  skip {repo}#{number}: could not read its review cards", file=sys.stderr)
             continue
         graphs, running = board_view
-        rounds = {h[:8] for h in heads} | graphs
-        if head_sha[:8] not in rounds and running:
+        # A graph on the board for this head is in progress or done awaiting
+        # publish: nothing to build, no slot. A failed or partial staging
+        # leaves no synthesis card, so it is retried here.
+        if head_sha[:8] in graphs:
+            continue
+        if running:
             print(f"  wait {repo}#{number}: a review is still running")
             continue
+        slots += 1
         print(f"  {repo}#{number} @ {head_sha[:8]}")
 
         # Was this operation already staged by an earlier run?
