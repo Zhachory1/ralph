@@ -285,7 +285,6 @@ class RepeatDiscoveryTests(unittest.TestCase):
                               side_effect=lambda r, n: {"1" * 40: 0} if n in reviewed else {}), \
             mock.patch.object(discover_reviews, "review_graphs",
                               side_effect=lambda b, r, n: ({"11111111"} if n in on_board else set(), False)), \
-            mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
             mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
             argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
@@ -295,6 +294,11 @@ class RepeatDiscoveryTests(unittest.TestCase):
             return [c.args[0][c.args[0].index("--pr") + 1] for c in run.call_args_list
                     if "build-review-graph" in " ".join(c.args[0])]
 
+    def setUp(self):
+        patcher = mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_reviewed_prs_do_not_use_up_the_per_run_cap(self):
         """Live: 10 already-reviewed PRs filled every pass; 90 were never reached."""
         prs = [fake_pr("a/repo", n) for n in (1, 2, 3)]
@@ -303,6 +307,13 @@ class RepeatDiscoveryTests(unittest.TestCase):
     def test_a_head_already_on_the_board_takes_no_slot(self):
         prs = [fake_pr("a/repo", n) for n in (1, 2)]
         self.assertEqual(["2"], self._built(prs, on_board={1}))
+
+    def test_a_failed_checkout_does_not_spend_a_slot(self):
+        """#89 review: an early failure must not starve the next PR."""
+        prs = [fake_pr("a/repo", n) for n in (1, 2)]
+        with mock.patch.object(discover_reviews, "ensure_checkout",
+                               side_effect=lambda root, r, n, b, h: None if n == 1 else pathlib.Path("/x")):
+            self.assertEqual(["2"], self._built(prs))
 
     def test_a_staged_head_without_a_graph_is_retried(self):
         """#89 review: a partial staging must not suppress the review forever."""

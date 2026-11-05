@@ -249,9 +249,11 @@ def main() -> int:
         task = envelope.get("task") or {}
 
         if task.get("status") != "done":
+            # Exit 1, not 2: a card that is not done yet is retried, while
+            # exit 2 is final and the review loop stops re-checking it.
             print(f"refused: {args.task} is {task.get('status')!r}, not done. "
                  "Nothing is published for an incomplete synthesis.", file=sys.stderr)
-            return 2
+            return 1
 
         fields = parse_body(task.get("body", ""))
         repo, number_s, head_sha = fields.get("repo"), fields.get("number"), fields.get("head_sha")

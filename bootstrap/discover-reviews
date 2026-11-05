@@ -433,7 +433,6 @@ def main() -> int:
         if running:
             print(f"  wait {repo}#{number}: a review is still running")
             continue
-        slots += 1
         print(f"  {repo}#{number} @ {head_sha[:8]}")
 
         # Was this operation already staged by an earlier run?
@@ -475,6 +474,9 @@ def main() -> int:
         if r.returncode != 0:
             print(r.stderr, file=sys.stderr)
             continue
+        # A slot is spent only by a graph actually built: a failed checkout
+        # or build does not starve later PRs.
+        slots += 1
         if not already_staged:
             admitted += 1
 
