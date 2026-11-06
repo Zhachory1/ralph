@@ -170,6 +170,17 @@ class Board:
         return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def parked_by_block_loop(detail: dict) -> bool:
+    """True when the card's latest status event is Hermes' block-loop routing."""
+    for event in reversed(detail.get("events") or []):
+        kind = event.get("kind")
+        if kind == "block_loop_detected":
+            return True
+        if kind in ("blocked", "unblocked", "promoted", "specified", "completed", "created"):
+            return False
+    return False
+
+
 def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
     """The human's decision, or None if they have not made one.
 
@@ -313,6 +324,10 @@ def main(argv=None) -> int:
     for task in board_client.pending(args.board):
         task_id = task["id"]
         detail = board_client.show(args.board, task_id)
+        # Only a gate Hermes parked for a repeated block; a card a person or
+        # another flow put in triage is not this notifier's to resume.
+        if task.get("status") == "triage" and not parked_by_block_loop(detail):
+            continue
         link = pull_request_for(detail)
         if not link:
             link = pull_request_from_ancestors(board_client, args.board, detail)
