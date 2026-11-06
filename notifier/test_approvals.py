@@ -318,6 +318,14 @@ class HumanGateTests(unittest.TestCase):
         board = self._run([{"id": "t_1", "status": "blocked"}])
         board.handoff.assert_called_once()
 
+    def test_a_gate_parked_in_triage_is_released_and_handed_back(self):
+        """docs#7: the author re-blocked the gate on a revision, Hermes moved it
+        to triage, and the dd-changes label was never picked up."""
+        board = self._run([{"id": "t_1", "status": "triage"}])
+        board.release_triage.assert_called_once_with("b", "t_1")
+        board.unblock.assert_not_called()
+        board.handoff.assert_called_once()
+
     def test_only_blocked_is_polled(self):
         board = self._run([])
         board.pending.assert_called_once_with("b")
