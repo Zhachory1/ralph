@@ -77,10 +77,16 @@ class CleanupTests(unittest.TestCase):
         self.run_clean({"t_ee": "done"})
         self.assertTrue(path.exists())
 
-    def test_non_card_directories_are_kept(self):
-        path = self.checkout("my-notes")
-        self.run_clean({"my-notes": "done"})
+    def test_a_recent_non_card_directory_is_kept(self):
+        path = self.checkout("master_check", mtime=NOW - 3600)
+        self.run_clean({})
         self.assertTrue(path.exists())
+
+    def test_a_non_card_directory_idle_a_day_is_deleted(self):
+        """Live: the maintainer cloned 1 GB into workspace/master_check."""
+        path = self.checkout("master_check", mtime=NOW - 25 * 3600)
+        self.run_clean({})
+        self.assertFalse(path.exists())
 
     def test_dry_run_deletes_nothing_but_reports(self):
         path = self.checkout("t_ff")
