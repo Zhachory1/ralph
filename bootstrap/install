@@ -97,7 +97,7 @@ sandbox_config() {
     hermes $1 config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
     # Credentials the sandbox needs for repository work. Nothing else is
     # forwarded: the model key and the chat webhook stay outside it.
-    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN"]' >/dev/null
+    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN"]' >/dev/null
     # One sandbox's ceiling. A maintenance build of a large repository peaks at
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
@@ -125,7 +125,7 @@ terminal_block() {
     echo "terminal:"
     echo "  backend: docker"
     echo "  docker_image: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}"
-    echo "  docker_forward_env: [GH_TOKEN, GITHUB_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, BUF_TOKEN]"
+    echo "  docker_forward_env: [GH_TOKEN, GITHUB_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, BUF_TOKEN, BUILDKITE_API_TOKEN]"
     echo "  container_memory: ${RALPH_SANDBOX_MEMORY_MB:-3072}"
     echo "  sandbox_dir: $RALPH_SANDBOX_ROOT/ralph-$2"
     # The instance's repository cache, so a card borrows its objects (git
@@ -208,6 +208,16 @@ if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
     echo "  author, builder and maintainer push with RALPH_MAINTAIN_TOKEN"
 fi
 
+# Agent-instruction files (AGENTS.md, CLAUDE.md, ...) need a human's
+# approval per write, and a card run has no human: the edit is refused even
+# when a reviewer asked for it (op3#17752). Opt-in per instance; on, the
+# file is guarded by review like any other.
+if [ "${RALPH_ALLOW_AGENT_FILE_EDITS:-}" = "1" ]; then
+    hermes config set security.protected_instruction_files false >/dev/null
+else
+    hermes config set security.protected_instruction_files true >/dev/null
+fi
+
 hermes kanban init >/dev/null 2>&1 || true
 if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
     hermes kanban boards create "$BOARD" \
@@ -276,6 +286,25 @@ for dir in "$PROFILES_DIR"/*/; do
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
 rm -f "$SRC_TMP"
+
+# CI logs for the profiles that fix failing builds. Runs after the profiles
+# are created, so a fresh install gets it too (#107 review). Only the maintainer and
+# builder get it, in their own .env, so it reaches only their sandboxes
+# (forwarded by name above; a profile without it forwards nothing). Unset:
+# removed, so turning it off takes effect.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -i -u hermes -e RALPH_BUILDKITE_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
+        for profile in ralph-maintainer ralph-builder; do
+            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
+            [ -d "$(dirname "$f")" ] || continue
+            [ -f "$f" ] || { : > "$f"; chmod 600 "$f"; }
+            tmp=$(mktemp "$f.XXXXXX")
+            rc=0; grep -v "^BUILDKITE_API_TOKEN=" "$f" > "$tmp" || rc=$?
+            [ "$rc" -le 1 ] || { rm -f "$tmp"; echo "cannot read $f" >&2; exit 1; }
+            [ -z "${RALPH_BUILDKITE_TOKEN:-}" ] || printf "BUILDKITE_API_TOKEN=%s\n" "$RALPH_BUILDKITE_TOKEN" >> "$tmp"
+            chmod 600 "$tmp" && mv "$tmp" "$f"
+        done'
+fi
 
 # A dispatched worker sees its own profile's .env, not the container's, so a
 # profile with no GH_TOKEN there has no repository access from a card

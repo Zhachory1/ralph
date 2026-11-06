@@ -64,9 +64,11 @@ HERE = pathlib.Path(__file__).resolve().parent
 MAX_RUNTIME = "3600"
 PENDING = ("todo", "ready", "running", "blocked")
 BREAKER_ROUNDS = int(os.environ.get("RALPH_MAINTAIN_BREAKER_ROUNDS", "3"))
-MAX_RETRIES = "1"  # Hermes refuses 0; this is the floor. A failed round
-# still spends the digest once retried, not twice: the retry runs against
-# the same card and the same idempotency key, not a second card.
+# Attempts per card: 1 plus 2 retries (owner, 2026-11-06). A gateway restart
+# reclaims every running card as a failure (stale_lock), and with 1 attempt
+# each one sat blocked until a person re-queued it. A retry runs against
+# the same card and idempotency key, not a second card.
+MAX_RETRIES = "3"
 
 
 def gh(*args) -> subprocess.CompletedProcess:
