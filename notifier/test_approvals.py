@@ -283,7 +283,7 @@ class HumanGateTests(unittest.TestCase):
     """A human gate is a blocked card. `review` belongs to the agent reviewer,
     and polling it would race the dispatcher for the same card."""
 
-    def _run(self, pending):
+    def _run(self, pending, events=()):
         github = mock.Mock()
         github.reviews.return_value = []
         github.diff_comments.return_value = []
@@ -294,6 +294,7 @@ class HumanGateTests(unittest.TestCase):
         board.show.return_value = {
             "latest_summary": "DD https://github.com/o/r/pull/3",
             "comments": [],
+            "events": list(events),
         }
         with mock.patch.object(approvals, "Board", return_value=board), \
              mock.patch.object(approvals, "GitHub", return_value=github):
@@ -316,6 +317,21 @@ class HumanGateTests(unittest.TestCase):
         pull-request URL unless a handoff event follows. Unblocking alone
         leaves it in `ready` forever."""
         board = self._run([{"id": "t_1", "status": "blocked"}])
+        board.handoff.assert_called_once()
+
+    def test_a_triage_card_not_parked_by_a_block_loop_is_left_alone(self):
+        """#102 review: a card a person put in triage is not ours to resume."""
+        board = self._run([{"id": "t_1", "status": "triage"}])
+        board.release_triage.assert_not_called()
+        board.handoff.assert_not_called()
+
+    def test_a_gate_parked_in_triage_is_released_and_handed_back(self):
+        """docs#7: the author re-blocked the gate on a revision, Hermes moved it
+        to triage, and the dd-changes label was never picked up."""
+        board = self._run([{"id": "t_1", "status": "triage"}],
+                          events=[{"kind": "block_loop_detected"}])
+        board.release_triage.assert_called_once_with("b", "t_1")
+        board.unblock.assert_not_called()
         board.handoff.assert_called_once()
 
     def test_only_blocked_is_polled(self):

@@ -98,6 +98,25 @@ class Board:
     def unblock(self, board: str, task_id: str):
         self._run("--board", board, "unblock", task_id)
 
+    def release_triage(self, board: str, task_id: str):
+        """Move a gate card Hermes parked in `triage` back to `todo`.
+
+        Hermes routes a card to triage when it is blocked for the same reason
+        twice (BLOCK_RECURRENCE_LIMIT). A design-doc gate is exactly that: the
+        author blocks it for approval on every revision. Triage has no
+        `unblock`, and `kanban specify` would rewrite the card with a model, so
+        this calls Hermes' own state change with the card left as it is.
+        """
+        script = ("import sys\n"
+                  "from hermes_cli import kanban_db as kb, kanban_db_connect as kbc\n"
+                  "with kbc.connect_closing(board=sys.argv[1]) as conn:\n"
+                  "    sys.exit(0 if kb.specify_triage_task(conn, sys.argv[2], author='ralph-notifier') else 1)\n")
+        argv = ["python3", "-c", script, board, task_id]
+        if os.environ.get("RALPH_HERMES_CONTAINER"):
+            argv = ["docker", "exec", "-u", "hermes", os.environ["RALPH_HERMES_CONTAINER"],
+                    "/opt/hermes/.venv/bin/python3", "-c", script, board, task_id]
+        subprocess.run(argv, capture_output=True, text=True, check=True)
+
     def handoff(self, board: str, task_id: str, decision: str, status: str = "blocked"):
         """Record that a human handed the card back, lifting the active_pr guard.
 
@@ -125,17 +144,21 @@ class Board:
     def pending(self, board: str):
         """Cards waiting on a human.
 
-        Only `blocked`. A card in `review` is waiting on the agent reviewer and
-        the dispatcher will pick it up; polling that status would race the
-        reviewer and let a human decision land mid-critique.
+        `blocked`, and `triage`, where Hermes parks a card blocked for the same
+        reason twice -- every revised design doc's gate (docs#7). A card in
+        `review` is waiting on the agent reviewer and the dispatcher will pick
+        it up; polling that status would race the reviewer.
         """
-        result = subprocess.run(
-            self._argv(["kanban", "--board", board, "list", "--status", "blocked", "--json"]),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return json.loads(result.stdout) if result.stdout.strip() else []
+        cards = []
+        for status in ("blocked", "triage"):
+            result = subprocess.run(
+                self._argv(["kanban", "--board", board, "list", "--status", status, "--json"]),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            cards += json.loads(result.stdout) if result.stdout.strip() else []
+        return cards
 
     def show(self, board: str, task_id: str):
         result = subprocess.run(
@@ -145,6 +168,17 @@ class Board:
             check=True,
         )
         return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+def parked_by_block_loop(detail: dict) -> bool:
+    """True when the card's latest status event is Hermes' block-loop routing."""
+    for event in reversed(detail.get("events") or []):
+        kind = event.get("kind")
+        if kind == "block_loop_detected":
+            return True
+        if kind in ("blocked", "unblocked", "promoted", "specified", "completed", "created"):
+            return False
+    return False
 
 
 def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
@@ -259,7 +293,10 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
     note = "Approved in GitHub." if decision == "approved" else "Changes requested in GitHub."
     board_client.comment(board, task_id, f"{note} {text}".strip())
 
-    if status == "blocked":
+    if status == "triage":
+        board_client.release_triage(board, task_id)
+        board_client.handoff(board, task_id, decision, "blocked")
+    elif status == "blocked":
         board_client.unblock(board, task_id)
         # Unblocking is not enough on its own. The dispatcher refuses to
         # respawn a card whose recent comments contain a pull-request URL --
@@ -287,6 +324,10 @@ def main(argv=None) -> int:
     for task in board_client.pending(args.board):
         task_id = task["id"]
         detail = board_client.show(args.board, task_id)
+        # Only a gate Hermes parked for a repeated block; a card a person or
+        # another flow put in triage is not this notifier's to resume.
+        if task.get("status") == "triage" and not parked_by_block_loop(detail):
+            continue
         link = pull_request_for(detail)
         if not link:
             link = pull_request_from_ancestors(board_client, args.board, detail)
