@@ -160,6 +160,17 @@ class Board:
             cards += json.loads(result.stdout) if result.stdout.strip() else []
         return cards
 
+    def waiting(self, board: str):
+        """Cards in `ready` or `todo`: where a resumed gate lands."""
+        cards = []
+        for status in ("ready", "todo"):
+            result = subprocess.run(
+                self._argv(["kanban", "--board", board, "list", "--status", status, "--json"]),
+                capture_output=True, text=True, check=True,
+            )
+            cards += json.loads(result.stdout) if result.stdout.strip() else []
+        return cards
+
     def show(self, board: str, task_id: str):
         result = subprocess.run(
             self._argv(["kanban", "--board", board, "show", task_id, "--json"]),
@@ -179,6 +190,30 @@ def parked_by_block_loop(detail: dict) -> bool:
         if kind in ("blocked", "unblocked", "promoted", "specified", "completed", "created"):
             return False
     return False
+
+
+DECISION_NOTES = ("Approved in GitHub.", "Changes requested in GitHub.")
+
+
+def stranded(detail: dict) -> str | None:
+    """The decision of a gate this notifier resumed but never handed off.
+
+    `apply` comments the decision, moves the card (unblock or triage release),
+    then hands it off with an `assigned` event, which lifts Hermes' active_pr
+    guard. If the move succeeded and the handoff failed, the card left the
+    polled statuses and sits undispatchable (#103). Returns "approved" or
+    "changes" when the newest decision comment has no handoff after it.
+    """
+    notes = [c for c in detail.get("comments") or []
+             if (c.get("body") or "").startswith(DECISION_NOTES)]
+    if not notes:
+        return None
+    last = max(notes, key=lambda c: c.get("created_at") or 0)
+    after = last.get("created_at") or 0
+    if any(e.get("kind") in ("assigned", "changes_requested", "review_reopened")
+           and (e.get("created_at") or 0) > after for e in detail.get("events") or []):
+        return None
+    return "approved" if last["body"].startswith(DECISION_NOTES[0]) else "changes"
 
 
 def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
@@ -320,6 +355,19 @@ def main(argv=None) -> int:
 
     board_client, github = Board(), GitHub()
     resumed = 0
+
+    # A gate resumed on an earlier poll whose handoff failed (#103): redo the
+    # handoff only. The card already moved and the decision is on it.
+    for task in board_client.waiting(args.board):
+        detail = board_client.show(args.board, task["id"])
+        decision = stranded(detail)
+        if decision is None:
+            continue
+        if args.dry_run:
+            print(f"{task['id']} <- re-handoff ({decision})")
+        else:
+            board_client.handoff(args.board, task["id"], decision, "blocked")
+        resumed += 1
 
     for task in board_client.pending(args.board):
         task_id = task["id"]

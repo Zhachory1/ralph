@@ -203,6 +203,7 @@ class GateAddressPropagationTests(unittest.TestCase):
 
     def test_address_propagates_from_a_completed_ancestor(self):
         board = mock.Mock()
+        board.waiting.return_value = []
         board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
 
         def show(_board, task_id):
@@ -226,6 +227,7 @@ class GateAddressPropagationTests(unittest.TestCase):
 
     def test_gate_with_nothing_resolvable_is_reported_not_skipped_silently(self):
         board = mock.Mock()
+        board.waiting.return_value = []
         board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
         board.show.return_value = {"latest_summary": None, "comments": [], "parents": []}
         github = self._github()
@@ -290,6 +292,7 @@ class HumanGateTests(unittest.TestCase):
         github.issue_comments.return_value = []
         github.pull_request.return_value = {"merged": True, "labels": []}
         board = mock.Mock()
+        board.waiting.return_value = []
         board.pending.return_value = pending
         board.show.return_value = {
             "latest_summary": "DD https://github.com/o/r/pull/3",
@@ -378,6 +381,7 @@ class LabelClearingTests(unittest.TestCase):
         github.pull_request.return_value = {"merged": False, "labels": [{"name": "dd-changes"}]}
 
         board = mock.Mock()
+        board.waiting.return_value = []
         board.pending.return_value = [{"id": "t_1", "status": "review"}]
         board.show.return_value = {
             "latest_summary": "DD https://github.com/o/r/pull/3",
@@ -404,6 +408,41 @@ class CliTests(unittest.TestCase):
             with self.assertRaises(json.JSONDecodeError):
                 approvals.GitHub().reviews("o/r", 1)
 
+
+
+
+class StrandedHandoffTests(unittest.TestCase):
+    """#103: the card moved, the handoff failed, and it left the polled statuses."""
+
+    def detail(self, events, note="Changes requested in GitHub. fix it", at=100):
+        return {"comments": [{"body": "https://github.com/o/r/pull/3", "created_at": 50},
+                             {"body": note, "created_at": at}],
+                "events": events}
+
+    def test_a_decision_with_no_handoff_after_it_is_stranded(self):
+        self.assertEqual("changes", approvals.stranded(self.detail([{"kind": "unblocked", "created_at": 101}])))
+
+    def test_a_handoff_after_the_decision_is_not_stranded(self):
+        self.assertIsNone(approvals.stranded(self.detail([{"kind": "assigned", "created_at": 101}])))
+
+    def test_a_handoff_before_the_decision_does_not_count(self):
+        self.assertEqual("approved", approvals.stranded(self.detail(
+            [{"kind": "assigned", "created_at": 99}], note="Approved in GitHub.")))
+
+    def test_a_card_with_no_decision_is_not_stranded(self):
+        self.assertIsNone(approvals.stranded({"comments": [], "events": []}))
+
+    def test_the_poll_redoes_only_the_handoff(self):
+        board = mock.Mock()
+        board.waiting.return_value = [{"id": "t_1", "status": "ready"}]
+        board.pending.return_value = []
+        board.show.return_value = self.detail([{"kind": "unblocked", "created_at": 101}])
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=mock.Mock()):
+            approvals.main(["--board", "b"])
+        board.handoff.assert_called_once_with("b", "t_1", "changes", "blocked")
+        board.unblock.assert_not_called()
+        board.comment.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
