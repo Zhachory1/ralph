@@ -82,6 +82,12 @@ class CleanupTests(unittest.TestCase):
         self.run_clean({})
         self.assertTrue(path.exists())
 
+    def test_a_stray_directory_of_a_busy_profile_is_kept(self):
+        """#101 review: a running card may be working in it."""
+        path = self.checkout("master_check", mtime=NOW - 25 * 3600)
+        self.run_clean({}, running={"ralph-maintainer"})
+        self.assertTrue(path.exists())
+
     def test_a_non_card_directory_idle_a_day_is_deleted(self):
         """Live: the maintainer cloned 1 GB into workspace/master_check."""
         path = self.checkout("master_check", mtime=NOW - 25 * 3600)

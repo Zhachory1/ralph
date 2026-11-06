@@ -13,7 +13,8 @@ Under the root, each profile has `<profile>/docker/default/{workspace,home}`.
    any board, and untouched for CHECKOUT_AGE_SECONDS, is deleted. A card that
    is todo, ready, running or blocked -- or that no board knows -- is kept.
    Any other directory in a workspace (an agent that cloned under its own
-   name, e.g. `master_check`) is deleted once untouched for STRAY_AGE_SECONDS.
+   name, e.g. `master_check`) is deleted once untouched for STRAY_AGE_SECONDS,
+   and only while that profile has no card in flight.
 2. Caches. When a profile's `home` exceeds HOME_LIMIT_BYTES and the profile has
    no card in flight (todo, ready, running or blocked), its package caches are
    deleted: `.cache`, `.npm`, and Go's module cache `go/pkg/mod` -- never
@@ -130,7 +131,10 @@ def clean(root, states, busy, now, dry_run):
                     if now - newest_mtime(checkout) < CHECKOUT_AGE_SECONDS:
                         continue
                     removed.append((checkout, remove(checkout, dry_run), "finished card"))
-                elif now - newest_mtime(checkout) >= STRAY_AGE_SECONDS:
+                # A stray dir has no card to check, so it is spared while
+                # the profile has any card in flight: that card may be using it.
+                elif profile_dir.name not in busy \
+                        and now - newest_mtime(checkout) >= STRAY_AGE_SECONDS:
                     removed.append((checkout, remove(checkout, dry_run), "stray, idle a day"))
         home = base / "home"
         if home.is_dir() and profile_dir.name not in busy \
