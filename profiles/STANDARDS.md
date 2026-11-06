@@ -1,6 +1,6 @@
 # Engineering standards
 
-Every profile follows these when it writes code, tests, or documents, or reviews them. They condense the owner's Coding Standards, Pragmatic Guide to Tests, E2E Ownership Manifesto, Knowledge Management Runbook, and Document Dependency Structure. A repository's own rules come first where they are stricter.
+Every profile follows these when it writes code, tests, or documents, or reviews them. They condense the owner's engineering practices for code, tests, ownership, and documents. A repository's own rules come first where they are stricter.
 
 ## Code
 
@@ -35,7 +35,7 @@ Every profile follows these when it writes code, tests, or documents, or reviews
 
 Two tracks. **Neither is Google Docs or Drive.** Do not create, store, or link new documents there.
 
-- **Why (PRDs, design docs, ADRs, strategy, research, post-mortems):** in this instance's docs repository (`RALPH_DOCS_REPO`), approved by merging its PR. When a document is shared with others, publish it to Rokt Hub (`hub.roktinternal.com`). If Hub is unavailable, use Docshare (`docshare.roktinternal.com`).
+- **Why (PRDs, design docs, ADRs, strategy, research, post-mortems):** in this instance's docs repository (`RALPH_DOCS_REPO`), approved by merging its PR. Each document carries front matter (id, status, owner, the card it came from, related PRs) and links to other documents by id, so its state is readable from the repository. To share one, send the link to the merged file or its PR; do not copy it elsewhere.
 - **How (as-built):** each service's repository, in `/docs` or its root `README.md`.
   - `README.md`: one-line purpose, owner, and links to the design, the on-call runbook, and the SLO dashboard.
   - `ARCHITECTURE.md`: dependencies in and out, and API contracts.

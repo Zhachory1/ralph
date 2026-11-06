@@ -197,6 +197,21 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(2, install.count('cat "$PROFILES_DIR/STANDARDS.md"'))
         self.assertIn("Neither is Google Docs", (ROOT / "profiles" / "STANDARDS.md").read_text())
 
+    def test_standards_name_no_employer_hosts_or_document_standards(self):
+        """AGENTS.md: this repository is public, so no internal hostnames and
+        no document-standard names. Documents are tracked in the docs repository."""
+        standards = (ROOT / "profiles" / "STANDARDS.md").read_text()
+        readme = (ROOT / "README.md").read_text()
+        for text in (standards, readme):
+            for banned in ("roktinternal", "Rokt", "Docshare", "Hub or"):
+                self.assertNotIn(banned, text)
+        for banned in ("Knowledge Management Runbook", "Document Dependency Structure",
+                       "E2E Ownership Manifesto", "Pragmatic Guide to Tests"):
+            self.assertNotIn(banned, standards)
+        self.assertIn("RALPH_DOCS_REPO", standards)
+        self.assertIn("front matter", standards)
+        self.assertIn("Neither is Google Docs", standards)
+
     def test_read_profiles_use_the_configured_read_token(self):
         """Decision 0002: an instance can give its read profiles the owner's token."""
         install = (ROOT / "bootstrap" / "install").read_text()
