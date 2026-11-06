@@ -203,6 +203,16 @@ class VoiceTests(unittest.TestCase):
         self.assertIn("READ_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}", install)
         self.assertNotIn('-e READ_TOKEN="', install, "a token on a command line is visible to ps")
 
+    def test_buildkite_token_goes_only_to_maintainer_and_builder_after_profiles_exist(self):
+        """#107: CI logs for the profiles that fix builds; written after the
+        profile loop so a fresh install gets it (review finding)."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        block = install[install.index("# CI logs for the profiles"):]
+        self.assertIn("for profile in ralph-maintainer ralph-builder; do", block)
+        self.assertLess(install.index('for dir in "$PROFILES_DIR"/*/; do'),
+                        install.index("# CI logs for the profiles"))
+        self.assertIn('[ -f "$f" ] || { : > "$f"; chmod 600 "$f"; }', block)
+
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
             with self.subTest(profile=p.name):

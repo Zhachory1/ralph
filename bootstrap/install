@@ -208,23 +208,6 @@ if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
     echo "  author, builder and maintainer push with RALPH_MAINTAIN_TOKEN"
 fi
 
-# CI logs for the profiles that fix failing builds. Only the maintainer and
-# builder get it, in their own .env, so it reaches only their sandboxes
-# (forwarded by name above; a profile without it forwards nothing). Unset:
-# removed, so turning it off takes effect.
-if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    docker exec -i -u hermes -e RALPH_BUILDKITE_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
-        for profile in ralph-maintainer ralph-builder; do
-            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
-            [ -f "$f" ] || continue
-            tmp=$(mktemp "$f.XXXXXX")
-            rc=0; grep -v "^BUILDKITE_API_TOKEN=" "$f" > "$tmp" || rc=$?
-            [ "$rc" -le 1 ] || { rm -f "$tmp"; echo "cannot read $f" >&2; exit 1; }
-            [ -z "${RALPH_BUILDKITE_TOKEN:-}" ] || printf "BUILDKITE_API_TOKEN=%s\n" "$RALPH_BUILDKITE_TOKEN" >> "$tmp"
-            chmod 600 "$tmp" && mv "$tmp" "$f"
-        done'
-fi
-
 # Agent-instruction files (AGENTS.md, CLAUDE.md, ...) need a human's
 # approval per write, and a card run has no human: the edit is refused even
 # when a reviewer asked for it (op3#17752). Opt-in per instance; on, the
@@ -303,6 +286,25 @@ for dir in "$PROFILES_DIR"/*/; do
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
 rm -f "$SRC_TMP"
+
+# CI logs for the profiles that fix failing builds. Runs after the profiles
+# are created, so a fresh install gets it too (#107 review). Only the maintainer and
+# builder get it, in their own .env, so it reaches only their sandboxes
+# (forwarded by name above; a profile without it forwards nothing). Unset:
+# removed, so turning it off takes effect.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -i -u hermes -e RALPH_BUILDKITE_TOKEN "$RALPH_HERMES_CONTAINER" sh -eu -c '
+        for profile in ralph-maintainer ralph-builder; do
+            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
+            [ -d "$(dirname "$f")" ] || continue
+            [ -f "$f" ] || { : > "$f"; chmod 600 "$f"; }
+            tmp=$(mktemp "$f.XXXXXX")
+            rc=0; grep -v "^BUILDKITE_API_TOKEN=" "$f" > "$tmp" || rc=$?
+            [ "$rc" -le 1 ] || { rm -f "$tmp"; echo "cannot read $f" >&2; exit 1; }
+            [ -z "${RALPH_BUILDKITE_TOKEN:-}" ] || printf "BUILDKITE_API_TOKEN=%s\n" "$RALPH_BUILDKITE_TOKEN" >> "$tmp"
+            chmod 600 "$tmp" && mv "$tmp" "$f"
+        done'
+fi
 
 # A dispatched worker sees its own profile's .env, not the container's, so a
 # profile with no GH_TOKEN there has no repository access from a card
