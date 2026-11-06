@@ -133,7 +133,7 @@ services:
       TERMINAL_DOCKER_IMAGE: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}
       # Same story as the image above: the env var wins over the config key,
       # so setting only the config leaves the sandbox without these.
-      TERMINAL_DOCKER_FORWARD_ENV: '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN"]' 
+      TERMINAL_DOCKER_FORWARD_ENV: '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN"]'
       # Repository work inside the sandbox. This is the only credential that
       # crosses into it; the model key and the chat webhook do not.
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:-}

@@ -62,11 +62,12 @@ PROFILE_FOR_ROLE = {
     "mvp": "ralph-lens-mvp",
     "security": "ralph-lens-security",
 }
-# Per-card cost bound, section 5 of the design: 8 minutes, no retry. A timed-
-# out card re-queuing itself is the thing that makes queue spend
-# non-deterministic, which for a review lens is the wrong failure mode.
+# Per-card cost bound, section 5 of the design: 8 minutes per attempt.
+# Attempts: 1 plus 2 retries (owner, 2026-11-06). A gateway restart reclaims
+# every running lens as a failure, and with 1 attempt each review graph
+# stalled until a person re-queued it; bounded retries cost at most 3x.
 MAX_RUNTIME = "480"
-MAX_RETRIES = "1"
+MAX_RETRIES = "3"
 
 
 def hermes(*args):
