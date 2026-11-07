@@ -162,6 +162,9 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     fi
 fi
 sandbox_config "" default
+# The default profile is the WebUI chat. It plans and hands off work like the
+# orchestrator, so it gets the board (#105); Hermes ships it disabled.
+hermes tools enable kanban >/dev/null
 # hermes-webui runs profiles in-process and its image has no docker client;
 # give it the hermes image's own, in the shared volume (HERMES_DOCKER_BINARY).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then

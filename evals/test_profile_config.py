@@ -140,11 +140,34 @@ class DeclarationTests(unittest.TestCase):
                 disabled = (config.get("agent") or {}).get("disabled_toolsets") or []
                 self.assertNotIn("terminal", disabled)
 
-    def test_the_researcher_reads_the_web_and_cannot_plan(self):
+    def test_the_researcher_reads_the_web_and_reaches_the_board(self):
+        """#105: it can hand work to the orchestrator; it still runs no code."""
         declared = self.toolsets("researcher")
         self.assertIn("web", declared)
-        for forbidden in ("kanban", "code_execution"):
-            self.assertNotIn(forbidden, declared, forbidden)
+        self.assertIn("kanban", declared)
+        self.assertNotIn("code_execution", declared)
+
+    def test_general_profiles_reach_the_board(self):
+        """#105: every profile that is not a narrow machine job has kanban."""
+        for name in ("analyst", "auditor", "author", "builder", "experimenter",
+                     "maintainer", "orchestrator", "researcher", "reviewer", "watcher"):
+            with self.subTest(profile=name):
+                self.assertIn("kanban", self.toolsets(name))
+
+    def test_isolated_profiles_stay_off_the_board(self):
+        """Lenses and synthesis must not plan or change their own review graph;
+        the chat and inbox profiles read untrusted text with a fixed shape."""
+        import yaml
+        for name in ("lens-generalist", "lens-mvp", "lens-reliability", "lens-security",
+                     "review-synthesis", "chat-maintainer", "chat-summarizer", "inbox-drafter"):
+            with self.subTest(profile=name):
+                self.assertNotIn("kanban", self.toolsets(name))
+                config = yaml.safe_load((ROOT / "profiles" / name / "config.yaml").read_text())
+                self.assertIn("kanban", config["agent"]["disabled_toolsets"])
+
+    def test_install_enables_the_board_for_the_default_profile(self):
+        self.assertIn("hermes tools enable kanban",
+                      (ROOT / "bootstrap" / "install").read_text())
 
     def test_the_chat_maintainer_reads_untrusted_chat_and_holds_nothing_else(self):
         """It reads what strangers wrote to the owner, so it gets the drafter's

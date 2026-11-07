@@ -8,6 +8,7 @@ platform_toolsets:
     - terminal
     - file
     - web
+    - kanban
   api_server: [no_mcp]
 approvals:
   # A profile's config replaces the global one rather than merging into it,
