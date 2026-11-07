@@ -344,7 +344,17 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
     note = "Approved in GitHub." if decision == "approved" else "Changes requested in GitHub."
     board_client.comment(board, task_id, f"{note} {text}".strip())
 
-    if status == "triage":
+    if decision == "approved" and status in ("blocked", "triage") \
+            and not board_client.assignee(board, task_id):
+        # An approval gate (#56): an unassigned card between a design and its
+        # build. No worker runs it, so approving it is completing it, which
+        # releases the cards that depend on it.
+        if status == "triage":
+            board_client.release_triage(board, task_id)
+        else:
+            board_client.unblock(board, task_id)
+        board_client.complete(board, task_id, f"Approved in GitHub. {text}".strip())
+    elif status == "triage":
         board_client.release_triage(board, task_id)
         board_client.handoff(board, task_id, decision, "blocked")
     elif status == "blocked":

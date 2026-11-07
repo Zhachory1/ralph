@@ -472,5 +472,34 @@ class PaginationTests(unittest.TestCase):
             [{"state": "CHANGES_REQUESTED", "submitted_at": "2026-02-01T00:00:00Z"}]]))
         self.assertEqual("changes", approvals.verdict(items))
 
+
+
+class ApprovalGateTests(unittest.TestCase):
+    """#56: an unassigned gate between design and build is completed on
+    approval, so its dependants release; changes requested leave it held."""
+
+    def board(self, assignee=None):
+        board = mock.Mock()
+        board.assignee.return_value = assignee
+        return board
+
+    def test_approving_an_unassigned_gate_completes_it(self):
+        board = self.board()
+        approvals.apply(board, "b", "t_gate", "approved", "", status="blocked")
+        board.unblock.assert_called_once_with("b", "t_gate")
+        board.complete.assert_called_once()
+        board.handoff.assert_not_called()
+
+    def test_changes_on_an_unassigned_gate_do_not_complete_it(self):
+        board = self.board()
+        approvals.apply(board, "b", "t_gate", "changes", "fix", status="blocked")
+        board.complete.assert_not_called()
+
+    def test_an_assigned_card_is_handed_back_not_completed(self):
+        board = self.board("ralph-author")
+        approvals.apply(board, "b", "t_dd", "approved", "", status="blocked")
+        board.complete.assert_not_called()
+        board.handoff.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
