@@ -440,8 +440,15 @@ def main(argv=None) -> int:
 
         repo, number = link
         reviews = github.reviews(repo, number)
-        decision = verdict(reviews, github.pull_request(repo, number))
+        pull = github.pull_request(repo, number)
+        decision = verdict(reviews, pull)
         if not decision:
+            continue
+        # A design gate opens only on a merge: the owner approves a design by
+        # merging its PR, as the orchestrator SOUL says, not by an APPROVED
+        # review that leaves the PR open (#110 review).
+        if decision == "approved" and not (pull or {}).get("merged") \
+                and is_approval_gate(detail):
             continue
 
         text = feedback(

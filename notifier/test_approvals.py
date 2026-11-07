@@ -501,6 +501,24 @@ class ApprovalGateTests(unittest.TestCase):
         board.handoff.assert_not_called()
         board.comment.assert_not_called()
 
+    def test_an_approved_review_on_an_open_pr_does_not_open_the_gate(self):
+        """#110 review: the gate opens on a merge, not an APPROVED review."""
+        board = mock.Mock()
+        board.waiting.return_value = []
+        board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
+        board.show.return_value = {
+            "task": {"assignee": None, "title": "Approve design: x"},
+            "latest_summary": "https://github.com/o/r/pull/3", "comments": [], "events": []}
+        github = mock.Mock()
+        github.reviews.return_value = [{"state": "APPROVED", "submitted_at": "2026-01-01T00:00:00Z"}]
+        github.pull_request.return_value = {"merged": False, "labels": []}
+        github.diff_comments.return_value = github.issue_comments.return_value = []
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+        board.complete.assert_not_called()
+        board.unblock.assert_not_called()
+
     def test_an_unassigned_card_that_is_not_a_gate_is_not_completed(self):
         """#110 review: only the orchestrator's gate is completed on approval."""
         board = self.board(title="some unassigned card")
