@@ -51,14 +51,30 @@ class GitHub:
             return []
         return json.loads(result.stdout)
 
+    def _list(self, path: str):
+        """Every item of a GitHub list endpoint, not its first page of 30.
+
+        A busy design-doc PR passes 30 reviews or comments, and GitHub returns
+        oldest first: the first page alone missed the latest verdict and the
+        newest feedback (#59). `--slurp` wraps all pages in one array."""
+        result = subprocess.run(
+            [self.binary, "api", "--paginate", "--slurp", f"{path}?per_page=100"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if not result.stdout.strip():
+            return []
+        return [item for page in json.loads(result.stdout) for item in page]
+
     def reviews(self, repo: str, number: int):
-        return self._api(f"repos/{repo}/pulls/{number}/reviews")
+        return self._list(f"repos/{repo}/pulls/{number}/reviews")
 
     def diff_comments(self, repo: str, number: int):
-        return self._api(f"repos/{repo}/pulls/{number}/comments")
+        return self._list(f"repos/{repo}/pulls/{number}/comments")
 
     def issue_comments(self, repo: str, number: int):
-        return self._api(f"repos/{repo}/issues/{number}/comments")
+        return self._list(f"repos/{repo}/issues/{number}/comments")
 
     def remove_label(self, repo: str, number: int, label: str):
         subprocess.run(
