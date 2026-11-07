@@ -255,7 +255,12 @@ def verdict(reviews: list[dict], pull: dict | None = None) -> str | None:
     if CHANGES_LABEL in labels:
         return "changes"
 
-    decisions = [r for r in reviews if r.get("state") in VERDICTS]
+    # A review decision counts only on the PR's current head: an old
+    # CHANGES_REQUESTED must not replay against a revision the author pushed
+    # since (#64). Merge and the label above are always current.
+    head = (pull.get("head") or {}).get("sha")
+    decisions = [r for r in reviews if r.get("state") in VERDICTS
+                 and (not head or r.get("commit_id") == head)]
     if not decisions:
         return None
     latest = max(decisions, key=lambda r: r.get("submitted_at") or "")
