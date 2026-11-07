@@ -209,6 +209,15 @@ def parked_by_block_loop(detail: dict) -> bool:
 
 
 DECISION_NOTES = ("Approved in GitHub.", "Changes requested in GitHub.")
+GATE_TITLE = "Approve design:"
+
+
+def is_approval_gate(detail: dict) -> bool:
+    """The orchestrator's design approval gate (#56): titled `Approve design:`
+    and assigned to nobody. Other unassigned cards are not this notifier's to
+    complete (#110 review)."""
+    task = detail.get("task") or {}
+    return not task.get("assignee") and (task.get("title") or "").startswith(GATE_TITLE)
 
 
 def stranded(detail: dict) -> str | None:
@@ -345,7 +354,7 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
     board_client.comment(board, task_id, f"{note} {text}".strip())
 
     if decision == "approved" and status in ("blocked", "triage") \
-            and not board_client.assignee(board, task_id):
+            and is_approval_gate(board_client.show(board, task_id)):
         # An approval gate (#56): an unassigned card between a design and its
         # build. No worker runs it, so approving it is completing it, which
         # releases the cards that depend on it.
@@ -389,8 +398,13 @@ def main(argv=None) -> int:
         decision = stranded(detail)
         if decision is None:
             continue
+        # An approval gate the notifier unblocked but failed to complete
+        # (#110 review): finish it, so the build it holds is released.
+        gate = decision == "approved" and is_approval_gate(detail)
         if args.dry_run:
-            print(f"{task['id']} <- re-handoff ({decision})")
+            print(f"{task['id']} <- {'complete gate' if gate else 're-handoff'} ({decision})")
+        elif gate:
+            board_client.complete(args.board, task["id"], "Approved in GitHub.")
         else:
             board_client.handoff(args.board, task["id"], decision, "blocked")
         resumed += 1

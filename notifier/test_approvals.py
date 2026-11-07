@@ -478,9 +478,10 @@ class ApprovalGateTests(unittest.TestCase):
     """#56: an unassigned gate between design and build is completed on
     approval, so its dependants release; changes requested leave it held."""
 
-    def board(self, assignee=None):
+    def board(self, assignee=None, title="Approve design: x"):
         board = mock.Mock()
         board.assignee.return_value = assignee
+        board.show.return_value = {"task": {"assignee": assignee, "title": title}}
         return board
 
     def test_approving_an_unassigned_gate_completes_it(self):
@@ -494,6 +495,27 @@ class ApprovalGateTests(unittest.TestCase):
         board = self.board()
         approvals.apply(board, "b", "t_gate", "changes", "fix", status="blocked")
         board.complete.assert_not_called()
+
+    def test_an_unassigned_card_that_is_not_a_gate_is_not_completed(self):
+        """#110 review: only the orchestrator's gate is completed on approval."""
+        board = self.board(title="some unassigned card")
+        approvals.apply(board, "b", "t_x", "approved", "", status="blocked")
+        board.complete.assert_not_called()
+
+    def test_a_gate_left_unblocked_but_not_completed_is_finished_next_poll(self):
+        """#110 review: an interrupted gate completion is retried."""
+        board = mock.Mock()
+        board.waiting.return_value = [{"id": "t_gate", "status": "ready"}]
+        board.pending.return_value = []
+        board.show.return_value = {
+            "task": {"assignee": None, "title": "Approve design: x"},
+            "comments": [{"body": "Approved in GitHub.", "created_at": 100}],
+            "events": [{"kind": "unblocked", "created_at": 101}]}
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=mock.Mock()):
+            approvals.main(["--board", "b"])
+        board.complete.assert_called_once_with("b", "t_gate", "Approved in GitHub.")
+        board.handoff.assert_not_called()
 
     def test_an_assigned_card_is_handed_back_not_completed(self):
         board = self.board("ralph-author")
