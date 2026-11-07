@@ -15,16 +15,18 @@ DIGEST_STAMP=${RALPH_DIGEST_STAMP:-/var/lib/ralph/digest-sent}
 echo "ralph notifier: board=${BOARD} every ${INTERVAL}s"
 
 while true; do
+    # Decisions first, then alerts: a gate the owner has just decided on is
+    # moved before the poller can announce it as still waiting (#64).
+    if [ -n "${GH_TOKEN:-}" ]; then
+        python3 /ralph/notifier/approvals.py --board "$BOARD" \
+            || echo "notifier: approval poll failed, will retry" >&2
+    fi
+
     if [ -n "${GCHAT_WEBHOOK_URL:-}" ]; then
         python3 /ralph/notifier/poller.py --board "$BOARD" --state "$STATE" \
             || echo "notifier: poll failed, will retry" >&2
     else
         echo "notifier: GCHAT_WEBHOOK_URL unset, skipping alerts" >&2
-    fi
-
-    if [ -n "${GH_TOKEN:-}" ]; then
-        python3 /ralph/notifier/approvals.py --board "$BOARD" \
-            || echo "notifier: approval poll failed, will retry" >&2
     fi
 
     # The morning digest, once a day. A stamp file rather than a timer, so a

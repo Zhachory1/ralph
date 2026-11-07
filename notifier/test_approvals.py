@@ -7,6 +7,7 @@ most of these pin what must *not* unblock a card.
 
 import io
 import json
+import pathlib
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
@@ -545,6 +546,37 @@ class ApprovalGateTests(unittest.TestCase):
         approvals.apply(board, "b", "t_dd", "approved", "", status="blocked")
         board.complete.assert_not_called()
         board.handoff.assert_called_once()
+
+
+
+class StaleReviewTests(unittest.TestCase):
+    """#64: an old review decision must not replay against a newer head."""
+
+    def review(self, state, sha, at="2026-01-01T00:00:00Z"):
+        return {"state": state, "commit_id": sha, "submitted_at": at}
+
+    def test_a_review_on_an_older_head_is_not_a_decision(self):
+        pull = {"head": {"sha": "new"}, "labels": []}
+        self.assertIsNone(approvals.verdict([self.review("CHANGES_REQUESTED", "old")], pull))
+
+    def test_a_review_on_the_current_head_is_a_decision(self):
+        pull = {"head": {"sha": "new"}, "labels": []}
+        self.assertEqual("changes", approvals.verdict([self.review("CHANGES_REQUESTED", "new")], pull))
+
+    def test_the_label_and_a_merge_stay_current_whatever_the_head(self):
+        self.assertEqual("changes", approvals.verdict(
+            [], {"head": {"sha": "new"}, "labels": [{"name": "dd-changes"}]}))
+        self.assertEqual("approved", approvals.verdict(
+            [self.review("CHANGES_REQUESTED", "old")], {"head": {"sha": "new"}, "merged": True}))
+
+
+class NotifierOrderTests(unittest.TestCase):
+    """#64: decisions are applied before alerts, so a gate just decided is
+    not announced as still waiting."""
+
+    def test_approvals_run_before_the_poller(self):
+        text = (pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "run-notifier").read_text()
+        self.assertLess(text.index("approvals.py"), text.index("poller.py"))
 
 if __name__ == "__main__":
     unittest.main()
