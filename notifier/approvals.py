@@ -350,11 +350,17 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
     for a card a human reaches while the agent reviewer still holds it;
     `unblock` rejects a reviewed card, which is how this was found.
     """
+    gate = status in ("blocked", "triage") and is_approval_gate(board_client.show(board, task_id))
+    if gate and decision == "changes":
+        # The gate waits for approval, not for work: changes go to the design
+        # PR's author, and the gate stays blocked so a later approval is still
+        # seen on the next poll (#110 review). Nothing to record here.
+        return
+
     note = "Approved in GitHub." if decision == "approved" else "Changes requested in GitHub."
     board_client.comment(board, task_id, f"{note} {text}".strip())
 
-    if decision == "approved" and status in ("blocked", "triage") \
-            and is_approval_gate(board_client.show(board, task_id)):
+    if gate:
         # An approval gate (#56): an unassigned card between a design and its
         # build. No worker runs it, so approving it is completing it, which
         # releases the cards that depend on it.

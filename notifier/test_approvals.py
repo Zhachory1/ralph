@@ -491,10 +491,15 @@ class ApprovalGateTests(unittest.TestCase):
         board.complete.assert_called_once()
         board.handoff.assert_not_called()
 
-    def test_changes_on_an_unassigned_gate_do_not_complete_it(self):
+    def test_changes_on_a_gate_leave_it_blocked_and_untouched(self):
+        """#110 review: unblocking it on changes stopped a later approval
+        from ever being polled."""
         board = self.board()
         approvals.apply(board, "b", "t_gate", "changes", "fix", status="blocked")
         board.complete.assert_not_called()
+        board.unblock.assert_not_called()
+        board.handoff.assert_not_called()
+        board.comment.assert_not_called()
 
     def test_an_unassigned_card_that_is_not_a_gate_is_not_completed(self):
         """#110 review: only the orchestrator's gate is completed on approval."""
