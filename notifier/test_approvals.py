@@ -444,5 +444,33 @@ class StrandedHandoffTests(unittest.TestCase):
         board.unblock.assert_not_called()
         board.comment.assert_not_called()
 
+
+
+class PaginationTests(unittest.TestCase):
+    """#59: every page is read, so a verdict or comment past the 30th counts."""
+
+    def run_list(self, stdout):
+        github = approvals.GitHub()
+        with mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(stdout=stdout)
+            items = github.reviews("o/r", 7)
+        return run.call_args.args[0], items
+
+    def test_lists_ask_for_every_page(self):
+        argv, _ = self.run_list("[[]]")
+        self.assertIn("--paginate", argv)
+        self.assertIn("--slurp", argv)
+        self.assertTrue(argv[-1].endswith("/pulls/7/reviews?per_page=100"))
+
+    def test_pages_are_flattened_in_order(self):
+        _, items = self.run_list('[[{"id": 1}, {"id": 2}], [{"id": 3}]]')
+        self.assertEqual([1, 2, 3], [i["id"] for i in items])
+
+    def test_a_late_verdict_on_page_two_wins(self):
+        _, items = self.run_list(json.dumps([
+            [{"state": "APPROVED", "submitted_at": "2026-01-01T00:00:00Z"}] * 30,
+            [{"state": "CHANGES_REQUESTED", "submitted_at": "2026-02-01T00:00:00Z"}]]))
+        self.assertEqual("changes", approvals.verdict(items))
+
 if __name__ == "__main__":
     unittest.main()
