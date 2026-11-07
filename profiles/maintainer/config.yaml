@@ -28,6 +28,7 @@ platform_toolsets:
   cli:
     - terminal
     - file
+    - kanban
   api_server: [no_mcp]
 approvals:
   single_query_mode: approve
