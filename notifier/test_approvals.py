@@ -472,5 +472,79 @@ class PaginationTests(unittest.TestCase):
             [{"state": "CHANGES_REQUESTED", "submitted_at": "2026-02-01T00:00:00Z"}]]))
         self.assertEqual("changes", approvals.verdict(items))
 
+
+
+class ApprovalGateTests(unittest.TestCase):
+    """#56: an unassigned gate between design and build is completed on
+    approval, so its dependants release; changes requested leave it held."""
+
+    def board(self, assignee=None, title="Approve design: x"):
+        board = mock.Mock()
+        board.assignee.return_value = assignee
+        board.show.return_value = {"task": {"assignee": assignee, "title": title}}
+        return board
+
+    def test_approving_an_unassigned_gate_completes_it(self):
+        board = self.board()
+        approvals.apply(board, "b", "t_gate", "approved", "", status="blocked")
+        board.unblock.assert_called_once_with("b", "t_gate")
+        board.complete.assert_called_once()
+        board.handoff.assert_not_called()
+
+    def test_changes_on_a_gate_leave_it_blocked_and_untouched(self):
+        """#110 review: unblocking it on changes stopped a later approval
+        from ever being polled."""
+        board = self.board()
+        approvals.apply(board, "b", "t_gate", "changes", "fix", status="blocked")
+        board.complete.assert_not_called()
+        board.unblock.assert_not_called()
+        board.handoff.assert_not_called()
+        board.comment.assert_not_called()
+
+    def test_an_approved_review_on_an_open_pr_does_not_open_the_gate(self):
+        """#110 review: the gate opens on a merge, not an APPROVED review."""
+        board = mock.Mock()
+        board.waiting.return_value = []
+        board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
+        board.show.return_value = {
+            "task": {"assignee": None, "title": "Approve design: x"},
+            "latest_summary": "https://github.com/o/r/pull/3", "comments": [], "events": []}
+        github = mock.Mock()
+        github.reviews.return_value = [{"state": "APPROVED", "submitted_at": "2026-01-01T00:00:00Z"}]
+        github.pull_request.return_value = {"merged": False, "labels": []}
+        github.diff_comments.return_value = github.issue_comments.return_value = []
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+        board.complete.assert_not_called()
+        board.unblock.assert_not_called()
+
+    def test_an_unassigned_card_that_is_not_a_gate_is_not_completed(self):
+        """#110 review: only the orchestrator's gate is completed on approval."""
+        board = self.board(title="some unassigned card")
+        approvals.apply(board, "b", "t_x", "approved", "", status="blocked")
+        board.complete.assert_not_called()
+
+    def test_a_gate_left_unblocked_but_not_completed_is_finished_next_poll(self):
+        """#110 review: an interrupted gate completion is retried."""
+        board = mock.Mock()
+        board.waiting.return_value = [{"id": "t_gate", "status": "ready"}]
+        board.pending.return_value = []
+        board.show.return_value = {
+            "task": {"assignee": None, "title": "Approve design: x"},
+            "comments": [{"body": "Approved in GitHub.", "created_at": 100}],
+            "events": [{"kind": "unblocked", "created_at": 101}]}
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=mock.Mock()):
+            approvals.main(["--board", "b"])
+        board.complete.assert_called_once_with("b", "t_gate", "Approved in GitHub.")
+        board.handoff.assert_not_called()
+
+    def test_an_assigned_card_is_handed_back_not_completed(self):
+        board = self.board("ralph-author")
+        approvals.apply(board, "b", "t_dd", "approved", "", status="blocked")
+        board.complete.assert_not_called()
+        board.handoff.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()

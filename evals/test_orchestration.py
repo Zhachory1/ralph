@@ -82,6 +82,28 @@ class HumanGateTests(BoardTest):
         )
 
 
+class DesignApprovalGateTests(BoardTest):
+    """#56: an agent reviewer completing a design is not the owner approving
+    it. An unassigned gate card between design and decompose holds the build
+    until a person (through the notifier) completes it."""
+
+    def test_reviewed_design_does_not_release_the_build_until_the_gate_is_approved(self):
+        design = self.card("design")
+        gate = self.card("Approve design: x", assignee=None, parent=design)
+        decompose = self.card("decompose", assignee="ralph-orchestrator", parent=gate)
+
+        self.board.complete(design, "reviewer: design ok")
+        self.assertEqual("ready", self.board.status(gate))
+        self.assertFalse(self.board.would_spawn(gate), "no worker may run the gate")
+        self.board.block(gate, "review-required: approve design")
+        self.assertEqual("todo", self.board.status(decompose))
+        self.assertFalse(self.board.would_spawn(decompose))
+
+        self.board.unblock(gate)
+        self.board.complete(gate, "Approved in GitHub.")
+        self.assertEqual("ready", self.board.status(decompose))
+
+
 class RespawnGuardTests(BoardTest):
     """A card whose comments hold a pull-request URL is guarded against
     respawn, so a crashed worker cannot open a second PR. The guard lifts on a

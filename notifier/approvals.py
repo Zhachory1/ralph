@@ -209,6 +209,15 @@ def parked_by_block_loop(detail: dict) -> bool:
 
 
 DECISION_NOTES = ("Approved in GitHub.", "Changes requested in GitHub.")
+GATE_TITLE = "Approve design:"
+
+
+def is_approval_gate(detail: dict) -> bool:
+    """The orchestrator's design approval gate (#56): titled `Approve design:`
+    and assigned to nobody. Other unassigned cards are not this notifier's to
+    complete (#110 review)."""
+    task = detail.get("task") or {}
+    return not task.get("assignee") and (task.get("title") or "").startswith(GATE_TITLE)
 
 
 def stranded(detail: dict) -> str | None:
@@ -341,10 +350,26 @@ def apply(board_client, board: str, task_id: str, decision: str, text: str, stat
     for a card a human reaches while the agent reviewer still holds it;
     `unblock` rejects a reviewed card, which is how this was found.
     """
+    gate = status in ("blocked", "triage") and is_approval_gate(board_client.show(board, task_id))
+    if gate and decision == "changes":
+        # The gate waits for approval, not for work: changes go to the design
+        # PR's author, and the gate stays blocked so a later approval is still
+        # seen on the next poll (#110 review). Nothing to record here.
+        return
+
     note = "Approved in GitHub." if decision == "approved" else "Changes requested in GitHub."
     board_client.comment(board, task_id, f"{note} {text}".strip())
 
-    if status == "triage":
+    if gate:
+        # An approval gate (#56): an unassigned card between a design and its
+        # build. No worker runs it, so approving it is completing it, which
+        # releases the cards that depend on it.
+        if status == "triage":
+            board_client.release_triage(board, task_id)
+        else:
+            board_client.unblock(board, task_id)
+        board_client.complete(board, task_id, f"Approved in GitHub. {text}".strip())
+    elif status == "triage":
         board_client.release_triage(board, task_id)
         board_client.handoff(board, task_id, decision, "blocked")
     elif status == "blocked":
@@ -379,8 +404,13 @@ def main(argv=None) -> int:
         decision = stranded(detail)
         if decision is None:
             continue
+        # An approval gate the notifier unblocked but failed to complete
+        # (#110 review): finish it, so the build it holds is released.
+        gate = decision == "approved" and is_approval_gate(detail)
         if args.dry_run:
-            print(f"{task['id']} <- re-handoff ({decision})")
+            print(f"{task['id']} <- {'complete gate' if gate else 're-handoff'} ({decision})")
+        elif gate:
+            board_client.complete(args.board, task["id"], "Approved in GitHub.")
         else:
             board_client.handoff(args.board, task["id"], decision, "blocked")
         resumed += 1
@@ -410,8 +440,15 @@ def main(argv=None) -> int:
 
         repo, number = link
         reviews = github.reviews(repo, number)
-        decision = verdict(reviews, github.pull_request(repo, number))
+        pull = github.pull_request(repo, number)
+        decision = verdict(reviews, pull)
         if not decision:
+            continue
+        # A design gate opens only on a merge: the owner approves a design by
+        # merging its PR, as the orchestrator SOUL says, not by an APPROVED
+        # review that leaves the PR open (#110 review).
+        if decision == "approved" and not (pull or {}).get("merged") \
+                and is_approval_gate(detail):
             continue
 
         text = feedback(
