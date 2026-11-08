@@ -209,15 +209,15 @@ def parked_by_block_loop(detail: dict) -> bool:
 
 
 DECISION_NOTES = ("Approved in GitHub.", "Changes requested in GitHub.")
-GATE_TITLE = "Approve design:"
+GATE_TITLES = ("Approve design:", "Approve PRD:")
 
 
 def is_approval_gate(detail: dict) -> bool:
-    """The orchestrator's design approval gate (#56): titled `Approve design:`
-    and assigned to nobody. Other unassigned cards are not this notifier's to
-    complete (#110 review)."""
+    """The orchestrator's approval gates: `Approve PRD:` (#65) and `Approve
+    design:` (#56), assigned to nobody. Other unassigned cards are not this
+    notifier's to complete (#110 review)."""
     task = detail.get("task") or {}
-    return not task.get("assignee") and (task.get("title") or "").startswith(GATE_TITLE)
+    return not task.get("assignee") and (task.get("title") or "").startswith(GATE_TITLES)
 
 
 def stranded(detail: dict) -> str | None:
@@ -449,9 +449,9 @@ def main(argv=None) -> int:
         decision = verdict(reviews, pull)
         if not decision:
             continue
-        # A design gate opens only on a merge: the owner approves a design by
-        # merging its PR, as the orchestrator SOUL says, not by an APPROVED
-        # review that leaves the PR open (#110 review).
+        # A PRD or design gate opens only on a merge: the owner approves a
+        # document by merging its PR, as the orchestrator SOUL says, not by an
+        # APPROVED review that leaves the PR open (#110 review).
         if decision == "approved" and not (pull or {}).get("merged") \
                 and is_approval_gate(detail):
             continue
