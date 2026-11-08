@@ -144,9 +144,25 @@ class Board:
             self._run("--board", board, "reopen-review", task_id,
                       "--reason", "Changes requested in GitHub")
             return
-        owner = self.assignee(board, task_id)
+        owner = self.assignee(board, task_id) or self.last_owner(board, task_id)
         if owner:
+            # Hermes' active_pr guard lifts only on an `assigned` event that
+            # moves the card to a DIFFERENT profile; re-assigning the same
+            # author is a no-op to it and the card sat `ready` forever (#66).
+            # Unassign, then assign the same author back: two real moves,
+            # made only for a fresh human decision, so duplicate-PR protection
+            # still holds for a crashed or retried worker.
+            self._run("--board", board, "assign", task_id, "none")
             self._run("--board", board, "assign", task_id, owner)
+
+    def last_owner(self, board: str, task_id: str):
+        """The profile an interrupted handoff unassigned (#114 review): the
+        `from` of the newest unassign event, so a retry can put it back."""
+        for event in reversed(self.show(board, task_id).get("events") or []):
+            payload = event.get("payload") or {}
+            if event.get("kind") == "assigned" and not payload.get("assignee") and payload.get("from"):
+                return payload["from"]
+        return None
 
     def assignee(self, board: str, task_id: str):
         return (self.show(board, task_id).get("task") or {}).get("assignee")
@@ -235,8 +251,9 @@ def stranded(detail: dict) -> str | None:
         return None
     last = max(notes, key=lambda c: c.get("created_at") or 0)
     after = last.get("created_at") or 0
-    if any(e.get("kind") in ("assigned", "changes_requested", "review_reopened")
-           and (e.get("created_at") or 0) > after for e in detail.get("events") or []):
+    if any(e.get("kind") in ("changes_requested", "review_reopened")
+           or (e.get("kind") == "assigned" and (e.get("payload") or {}).get("assignee"))
+           for e in detail.get("events") or [] if (e.get("created_at") or 0) > after):
         return None
     return "approved" if last["body"].startswith(DECISION_NOTES[0]) else "changes"
 
