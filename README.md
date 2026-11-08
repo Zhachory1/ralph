@@ -120,6 +120,13 @@ Still open, and each needs a live worker rather than CLI probing:
 - [ ] Whether skills can be pinned or made read-only, so self-optimization can't touch invariant-adjacent skills
 - [ ] Whether one Hermes container can host all profiles with a shared board, versus one container per profile
 
+## Docs
+
+- [Infrastructure](docs/infrastructure.md): instances, containers, sandboxes, profiles, credentials, schedules.
+- [Workflows](docs/workflows.md): feature, review, maintenance, Chat, digest and cleanup, with diagrams.
+- [Operations and onboarding](docs/operations.md): new instance, safe changes, pause and stop, stuck cards, logs, glossary.
+- [Decisions](docs/decisions/).
+
 ## Running it
 
 Everything self-hosted runs as one Docker Compose stack on your own machine, on an open-source runtime (Colima or Podman on macOS, Docker Engine on Linux). Every connection starts from your machine: GitHub is polled rather than receiving webhooks, because a local machine can't accept them without a public tunnel.
