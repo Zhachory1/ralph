@@ -104,6 +104,29 @@ class DesignApprovalGateTests(BoardTest):
         self.assertEqual("ready", self.board.status(decompose))
 
 
+class PrdApprovalGateTests(BoardTest):
+    """#65: PRD and design are separate cards with a PRD gate between them;
+    no design starts until the owner approves the PRD, and no build until the
+    owner approves the design."""
+
+    def test_design_waits_for_the_prd_gate_and_build_for_the_design_gate(self):
+        prd = self.card("PRD")
+        prd_gate = self.card("Approve PRD: x", assignee=None, parent=prd)
+        design = self.card("design", parent=prd_gate)
+        dd_gate = self.card("Approve design: x", assignee=None, parent=design)
+        decompose = self.card("decompose", assignee="ralph-orchestrator", parent=dd_gate)
+
+        self.board.complete(prd, "reviewer: PRD ok")
+        self.board.block(prd_gate, "review-required: approve PRD")
+        self.assertEqual("todo", self.board.status(design))
+        self.assertFalse(self.board.would_spawn(design), "an agent review must not release the design")
+
+        self.board.unblock(prd_gate)
+        self.board.complete(prd_gate, "Approved in GitHub.")
+        self.assertEqual("ready", self.board.status(design))
+        self.assertEqual("todo", self.board.status(decompose))
+
+
 class RespawnGuardTests(BoardTest):
     """A card whose comments hold a pull-request URL is guarded against
     respawn, so a crashed worker cannot open a second PR. The guard lifts on a
