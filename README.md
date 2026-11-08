@@ -122,6 +122,7 @@ Still open, and each needs a live worker rather than CLI probing:
 
 ## Docs
 
+- [System diagram](docs/diagrams/system.svg): I/O, System and Tools on one page.
 - [Infrastructure](docs/infrastructure.md): instances, containers, sandboxes, profiles, credentials, schedules.
 - [Workflows](docs/workflows.md): feature, review, maintenance, Chat, digest and cleanup, with diagrams.
 - [Operations and onboarding](docs/operations.md): new instance, safe changes, pause and stop, stuck cards, logs, glossary.
