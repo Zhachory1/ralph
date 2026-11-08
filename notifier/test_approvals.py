@@ -594,6 +594,18 @@ class SameAuthorReworkTests(unittest.TestCase):
                           mock.call("--board", "b", "assign", "t_1", "ralph-author")],
                          run.call_args_list)
 
+    def test_a_retry_after_an_interrupted_handoff_restores_the_owner(self):
+        """#114 review: the card was left unassigned; the retry puts the
+        author back from the unassign event."""
+        board = approvals.Board()
+        detail = {"task": {"assignee": None},
+                  "events": [{"kind": "assigned", "payload": {"assignee": None, "from": "ralph-author"}}]}
+        with mock.patch.object(board, "show", return_value=detail), \
+             mock.patch.object(board, "_run") as run:
+            board.handoff("b", "t_1", "changes", "blocked")
+        self.assertEqual(mock.call("--board", "b", "assign", "t_1", "ralph-author"),
+                         run.call_args_list[-1])
+
     def test_an_unassign_alone_is_not_a_completed_handoff(self):
         """Interrupted between the two assigns: still stranded, so it retries."""
         detail = {"comments": [{"body": "Changes requested in GitHub. x", "created_at": 100}],

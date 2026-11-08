@@ -144,7 +144,7 @@ class Board:
             self._run("--board", board, "reopen-review", task_id,
                       "--reason", "Changes requested in GitHub")
             return
-        owner = self.assignee(board, task_id)
+        owner = self.assignee(board, task_id) or self.last_owner(board, task_id)
         if owner:
             # Hermes' active_pr guard lifts only on an `assigned` event that
             # moves the card to a DIFFERENT profile; re-assigning the same
@@ -154,6 +154,15 @@ class Board:
             # still holds for a crashed or retried worker.
             self._run("--board", board, "assign", task_id, "none")
             self._run("--board", board, "assign", task_id, owner)
+
+    def last_owner(self, board: str, task_id: str):
+        """The profile an interrupted handoff unassigned (#114 review): the
+        `from` of the newest unassign event, so a retry can put it back."""
+        for event in reversed(self.show(board, task_id).get("events") or []):
+            payload = event.get("payload") or {}
+            if event.get("kind") == "assigned" and not payload.get("assignee") and payload.get("from"):
+                return payload["from"]
+        return None
 
     def assignee(self, board: str, task_id: str):
         return (self.show(board, task_id).get("task") or {}).get("assignee")
