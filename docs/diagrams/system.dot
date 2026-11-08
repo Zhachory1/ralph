@@ -51,7 +51,7 @@ digraph ralph {
       g_prd  [label="Approve PRD gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
       g_dd   [label="Approve design gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
       dedup  [label="dedup: one review per head SHA,\none review graph per PR,\none maintenance round per PR", shape=note, fillcolor="#FBE9D9"];
-      breaker[label="breaker: hold after 3 rounds\nwith only CI changing", shape=note, fillcolor="#FBE9D9"];
+      breaker[label="breaker: hold after 3 rounds\nwith the same review feedback\n(only CI changing)", shape=note, fillcolor="#FBE9D9"];
       guards [label="active_pr guard, triage release,\nstranded-handoff retry", shape=note, fillcolor="#FBE9D9"];
     }
 
@@ -151,7 +151,7 @@ digraph ralph {
   dispatch -> hermes   [style=dotted, label="runs on", lhead=cluster_runtime];
   hermes -> proxy -> sandbox;
   cleanup -> sandbox [style=dotted];
-  builder -> cache [style=dotted, ltail=cluster_work, lhead=cluster_context, label="reads cache, evidence,\ndocs repo; follows SOUL + skills"];
+  builder -> cache [style=dotted, ltail=cluster_work, lhead=cluster_context, label="reads the repo cache;\nfollows SOUL + skills"];
   builder -> ghcli [style=dotted, ltail=cluster_work, lhead=cluster_ext, label="gh, Buildkite"];
   synth -> lenstools [style=dotted, ltail=cluster_review, label="restricted MCP"];
   chatreply -> gws [style=dotted];

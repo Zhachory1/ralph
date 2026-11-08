@@ -41,7 +41,7 @@ digraph systemflow {
   subgraph cluster_rel { label="Reliability"; style="rounded,filled"; fillcolor="#FBE9D9"; color="#B5651D";
     g_prd  [label="Approve PRD gate\nopens on merge", shape=octagon];
     g_dd   [label="Approve design gate\nopens on merge", shape=octagon];
-    breaker[label="breaker: hold after 3 rounds,\nonly CI changing", shape=note];
+    breaker[label="breaker: hold after 3 rounds\nwith the same review feedback,\nonly CI changing", shape=note];
     dedup  [label="one review per head,\none graph / round per PR", shape=note];
     guards [label="triage release, active_pr lift,\nstranded-handoff retry", shape=note];
   }
