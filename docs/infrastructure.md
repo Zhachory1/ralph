@@ -46,7 +46,7 @@ flowchart LR
 | Container | Runs | Can touch |
 |---|---|---|
 | `socket-proxy` | Docker API filter | Containers, exec, images. Not volumes, not `info`. |
-| `init` | `bootstrap/install`, then exits | Writes profiles, SOULs, configs and tokens into the hermes volume. Runs when the stack starts or a dependent service is recreated; run it by hand after a change (`docker compose run --rm init`). |
+| `init` | `bootstrap/install`, then exits | Writes profiles, SOULs, configs and tokens into the hermes volume. Starts after `hermes` (it configures hermes through the CLI there); `hermes-webui` waits for it to finish. Run it by hand after a change. |
 | `hermes` | Gateway, Kanban dispatcher, cron scheduler | The board database, every profile's home, the Docker API through the proxy. |
 | `hermes-webui` | Chat UI on `127.0.0.1:$RALPH_WEBUI_PORT` | Same hermes home; runs profiles in-process, with commands in the sandbox. |
 | `notifier` | `bootstrap/run-notifier`: approvals, gate alerts, morning digest | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, the Chat webhook. |
@@ -112,4 +112,4 @@ sha256sum bootstrap/discover-reviews
 docker exec <instance>-hermes-1 sha256sum /home/hermes/.hermes/profiles/ralph-builder/SOUL.md
 ```
 
-After a merge that changes profiles or `bootstrap/install`, re-run `init` for each instance: `RALPH_ENV_FILE=.env.<name> docker compose --env-file .env.<name> run --rm init`.
+After a merge that changes profiles or `bootstrap/install`, re-run `init` for each instance, from `compose/`: `RALPH_ENV_FILE=.env.<name> docker compose --env-file .env.<name> run --rm init`.
