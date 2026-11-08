@@ -2,6 +2,12 @@
 
 Where each part of Ralph runs, what it can touch, and how to check it is healthy. Workflows are in [workflows.md](workflows.md); day-to-day operations in [operations.md](operations.md).
 
+## System overview
+
+![Ralph system overview](diagrams/system.svg)
+
+Three bands: **I/O** (how people and services reach Ralph and how it answers), **System** (intake → plan → work → review → deliver, with the gates and guards that keep it reliable), and **Tools** (runtime, context and knowledge, external tools, and what is planned but not wired). Source: [`diagrams/system.dot`](diagrams/system.dot); regenerate with `dot -Tsvg docs/diagrams/system.dot -o docs/diagrams/system.svg` (and `-Tpng`).
+
 ## Instances
 
 One checkout runs several independent Ralphs. Each is a compose project named by `RALPH_INSTANCE`, with its own env file, containers, volumes, boards, ports and workspaces.

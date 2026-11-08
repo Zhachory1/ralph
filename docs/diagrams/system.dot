@@ -1,0 +1,160 @@
+digraph ralph {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=20, labelloc=t, nodesep=0.35, ranksep=0.9, compound=true, newrank=true,
+         label="Ralph: system overview\n(solid = live, dashed = planned or not wired)"];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor=white];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+  /* ===================== I/O ===================== */
+  subgraph cluster_io {
+    label="I/O: how the outside world reaches Ralph"; style="rounded,filled"; fillcolor="#E8F1FB"; color="#4A78B5"; fontsize=16;
+    owner      [label="Owner", shape=ellipse, fillcolor="#FFF6D6"];
+    requester  [label="Chat requesters", shape=ellipse, fillcolor="#FFF6D6"];
+    reviewers  [label="PR reviewers\n(people + bots)", shape=ellipse, fillcolor="#FFF6D6"];
+    subgraph cluster_in {
+      label="In"; style=dashed; color="#4A78B5";
+      webui    [label="WebUI chat\n(default profile)\nlocalhost:9220/9230"];
+      dash     [label="Hermes dashboard\nlocalhost:9219"];
+      gchat_in [label="Google Chat spaces\n(chat inbox, every 2 min)"];
+      gh_in    [label="GitHub\nassigned PRs, reviews,\nthreads, labels, merges, CI"];
+    }
+    subgraph cluster_out {
+      label="Out"; style=dashed; color="#4A78B5";
+      gchat_out [label="Google Chat\nack + final reply (same thread)"];
+      notify    [label="Chat webhook\ngate alerts, morning digest,\ndaily work digest"];
+      gh_out    [label="GitHub\nPRs, reviews, thread replies,\nresolved threads"];
+    }
+  }
+
+  /* ===================== SYSTEM ===================== */
+  subgraph cluster_sys {
+    label="System: take a request, plan it reliably, do the work, present it back"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48"; fontsize=16;
+
+    subgraph cluster_intake {
+      label="1. Intake"; style="rounded"; color="#4E8F48";
+      chat_inbox [label="chat_inbox.py (overlay cron)\nstages whole thread,\nskips client-ralph-*"];
+      cm         [label="chat-maintainer\nroute / reply / ignore"];
+      discover   [label="review-loop: discover-reviews\nassigned PRs, 10 new/pass"];
+      maintain   [label="review-loop: maintain-pr\nfeedback digest per PR"];
+      approvals  [label="notifier: approvals.py\ndd-changes, merges"];
+    }
+
+    subgraph cluster_plan {
+      label="2. Plan"; style="rounded"; color="#4E8F48";
+      orch  [label="orchestrator\ncard graph on board 'ralph'", fillcolor="#DFF0DA"];
+      board_r [label="Kanban board: ralph\nfeature work", shape=cylinder, fillcolor="#F4F4F4"];
+      board_q [label="Kanban board: queues\nreviews, maintenance, chat", shape=cylinder, fillcolor="#F4F4F4"];
+      dispatch [label="Hermes dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
+    }
+
+    subgraph cluster_gates {
+      label="Reliability (gates and guards)"; style="rounded,dashed"; color="#B5651D";
+      g_prd  [label="Approve PRD gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
+      g_dd   [label="Approve design gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
+      dedup  [label="dedup: one review per head SHA,\none review graph per PR,\none maintenance round per PR", shape=note, fillcolor="#FBE9D9"];
+      breaker[label="breaker: hold after 3 rounds\nwith only CI changing", shape=note, fillcolor="#FBE9D9"];
+      guards [label="active_pr guard, triage release,\nstranded-handoff retry", shape=note, fillcolor="#FBE9D9"];
+    }
+
+    subgraph cluster_work {
+      label="3. Work (each in its own sandbox)"; style="rounded"; color="#4E8F48";
+      researcher [label="researcher"]; author [label="author\nPRD, then design"]; builder [label="builder"];
+      maintainer [label="maintainer"]; reviewer [label="reviewer"];
+      others [label="analyst, experimenter,\nauditor, watcher"];
+      inbox_drafter [label="inbox-drafter\nchat-summarizer"];
+    }
+
+    subgraph cluster_review {
+      label="4. Review"; style="rounded"; color="#4E8F48";
+      lenses [label="lenses\ngeneralist, reliability,\nmvp, security"];
+      synth  [label="review-synthesis\nverdict"];
+    }
+
+    subgraph cluster_deliver {
+      label="5. Deliver"; style="rounded"; color="#4E8F48";
+      publish   [label="publish-review\none review per head"];
+      chatreply [label="chat-reply (host LaunchAgent, 60 s)\nsplits >4,000 chars"];
+      poller    [label="notifier: poller + digest\nonce per block reason"];
+    }
+  }
+
+  /* ===================== TOOLS ===================== */
+  subgraph cluster_tools {
+    label="Tools: what the system works with"; style="rounded,filled"; fillcolor="#F3EEF9"; color="#7A5BA6"; fontsize=16;
+
+    subgraph cluster_runtime {
+      label="Runtime (per instance: personal, work)"; style="rounded"; color="#7A5BA6";
+      hermes   [label="hermes container\ngateway, cron, board DB"];
+      proxy    [label="socket-proxy\n(no volumes, no info)"];
+      sandbox  [label="agent sandboxes\none per profile, own /workspace\n(ralph-sandbox image: git, gh, mise)"];
+      cleanup  [label="cleanup-sandboxes (hourly)\nfinished checkouts, big caches"];
+    }
+
+    subgraph cluster_context {
+      label="Context and knowledge"; style="rounded"; color="#7A5BA6";
+      souls   [label="SOUL = PRINCIPLES + STANDARDS\n+ role (every profile)"];
+      skills  [label="Skills\npublic lanes: code, debug, plan,\nreview, write, ops, ui, voice, meta\nprivate overlay: code, write, analysis"];
+      cache   [label="repo cache (read-only)\ngit show / git grep, clone --reference", shape=cylinder];
+      evidence[label="staged evidence\nreview-work, chat-inbox", shape=cylinder];
+      docsrepo[label="docs repo (RALPH_DOCS_REPO)\nPRD + design PRs", shape=cylinder];
+      decisions[label="docs/: decisions, infrastructure,\nworkflows, operations"];
+    }
+
+    subgraph cluster_ext {
+      label="External tools"; style="rounded"; color="#7A5BA6";
+      ghcli   [label="gh / GitHub API\n(owner token on personal,\nzhach1 on work)"];
+      bk      [label="Buildkite API\n(builder, maintainer, work)"];
+      lenstools [label="lens-tools MCP\n(restricted: evidence + own card)"];
+      gws     [label="Google Workspace\n(host credential, Chat send)"];
+    }
+
+    subgraph cluster_planned {
+      label="Planned / not wired"; style="rounded,dashed"; color="#999999"; fontcolor="#777777";
+      redmine [label="Redmine (work)\nprivate issue tracking\nDD awaiting approval", style="rounded,dashed", fontcolor="#777777"];
+      memory  [label="Agent memory\n(disabled on all profiles)", style="rounded,dashed", fontcolor="#777777"];
+      mcps    [label="Shared MCP set\n(install does not copy mcp_servers)", style="rounded,dashed", fontcolor="#777777"];
+      hub     [label="Rokt Hub / Docshare\ndocument publishing", style="rounded,dashed", fontcolor="#777777"];
+      rag     [label="Document RAG\n(beyond repo cache)", style="rounded,dashed", fontcolor="#777777"];
+    }
+  }
+
+  /* ===================== EDGES: I/O -> System ===================== */
+  owner -> webui; owner -> dash; owner -> gh_in [label="merge, dd-changes"];
+  requester -> gchat_in; reviewers -> gh_in;
+  webui -> orch [label="creates card"];
+  gchat_in -> chat_inbox -> cm;
+  cm -> orch [label="route"];
+  gh_in -> discover; gh_in -> maintain; gh_in -> approvals;
+
+  /* plan */
+  orch -> board_r; discover -> board_q; maintain -> board_q; cm -> board_q [style=dotted];
+  board_r -> dispatch; board_q -> dispatch;
+  approvals -> g_prd [label="merge completes"]; approvals -> g_dd [label="merge completes"];
+  approvals -> author [label="dd-changes: feedback,\nresume same author"];
+
+  /* work */
+  dispatch -> researcher; dispatch -> author; dispatch -> builder; dispatch -> maintainer;
+  dispatch -> reviewer; dispatch -> others; dispatch -> lenses; dispatch -> inbox_drafter;
+  author -> g_prd [style=dashed, label="PRD PR"]; g_prd -> author [label="design card"];
+  author -> g_dd [style=dashed, label="design PR"]; g_dd -> builder [label="decompose:\nbuild chains"];
+  dedup -> discover [style=dotted, arrowhead=none]; dedup -> maintain [style=dotted, arrowhead=none];
+  breaker -> maintain [style=dotted, arrowhead=none]; guards -> approvals [style=dotted, arrowhead=none];
+
+  /* review + deliver */
+  builder -> reviewer [label="PR"];
+  lenses -> synth -> publish -> gh_out;
+  maintainer -> gh_out [label="push, resolve threads"];
+  builder -> gh_out [label="PRs"]; author -> gh_out [label="doc PRs"];
+  cm -> chatreply [label="ack / reply / send"]; chatreply -> gchat_out;
+  board_r -> poller [style=dotted]; poller -> notify;
+
+  /* System -> Tools: one edge per relationship, cluster to cluster */
+  dispatch -> hermes   [style=dotted, label="runs on", lhead=cluster_runtime];
+  hermes -> proxy -> sandbox;
+  cleanup -> sandbox [style=dotted];
+  builder -> cache [style=dotted, ltail=cluster_work, lhead=cluster_context, label="reads cache, evidence,\ndocs repo; follows SOUL + skills"];
+  builder -> ghcli [style=dotted, ltail=cluster_work, lhead=cluster_ext, label="gh, Buildkite"];
+  synth -> lenstools [style=dotted, ltail=cluster_review, label="restricted MCP"];
+  chatreply -> gws [style=dotted];
+  souls -> dispatch [style=dotted, ltail=cluster_context, label="loaded into every card"];
+  redmine -> orch [style=dashed, color="#999999", ltail=cluster_planned, label="planned: tracking, memory,\nMCPs, publishing, RAG"];
+}
