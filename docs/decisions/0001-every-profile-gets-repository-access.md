@@ -18,7 +18,7 @@ In practice the boundary kept stopping ordinary work. A Chat request needed fact
 ## Consequences
 
 - Any profile can read repositories, so the orchestrator can route research to the profile that fits the question rather than the one that happens to hold a token.
-- `terminal`, not `code_execution`, carries the token: `code_execution` scrubs variables whose names contain `TOKEN`.
+- `terminal`, not `code_execution`, carries the token: `code_execution` scrubs variables whose names contain `TOKEN` ([0003](0003-repository-credentials-only-in-the-terminal.md)).
 - **Accepted risk.** A profile that reads untrusted text can now be prompted toward a GitHub action with the instance token, for example a comment or review as that token's account. SOULs say which profiles must not write, but that is prose, not a permission.
 - Merging stays a human act, enforced by branch protection on each repository, not by missing tools.
 - Token identities are unchanged: builder, maintainer and author still push as the PR author; every other profile uses the stack's review token. [0002](0002-personal-profiles-read-with-the-owner-token.md) lets an instance give those profiles the owner's token instead.
