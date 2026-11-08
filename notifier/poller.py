@@ -204,6 +204,7 @@ def main(argv=None) -> int:
             # retries only the undelivered gates, not the ones already posted
             # this tick (#60). Never record an announcement that failed.
             print(f"delivery failed: {error}", file=sys.stderr)
+            prune(seen, gates)
             save_state(args.state, seen)
             return 1
         record(delivered, seen)
