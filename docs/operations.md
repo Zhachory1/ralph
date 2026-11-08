@@ -5,9 +5,9 @@ How to stand Ralph up, change it safely, and recover it. Components are describe
 ## A new instance from zero
 
 1. `cd compose && cp .env.example .env.<name>`. Set `RALPH_INSTANCE`, ports, `RALPH_WORKSPACES`, an absolute `RALPH_SANDBOX_ROOT`, the GitHub tokens and logins, and the model provider.
-2. `RALPH_ENV_FILE=.env.<name> ../bootstrap/secrets` fills generated secrets.
+2. `../bootstrap/secrets --env .env.<name>` fills generated secrets into that file.
 3. `RALPH_ENV_FILE=.env.<name> docker compose --env-file .env.<name> up -d`. This runs `init` (profiles, boards, configs), then the services.
-4. Sign in to the model provider if it uses a browser flow: `./bootstrap/login`.
+4. Sign in to the model provider if it uses a browser flow, from the repository root: `RALPH_ENV_FILE=.env.<name> ./bootstrap/login`.
 5. Allowlist repositories (`RALPH_REVIEW_ALLOW`, `RALPH_MAINTAIN_ALLOW`) and the docs repo (`RALPH_DOCS_REPO`).
 6. Check: `docker compose ps`, then a dispatched card that runs `gh api user` from the terminal.
 
