@@ -52,3 +52,5 @@ The README's open-questions list exists because Hermes moves quickly and several
 - Record every inference you made that your brief didn't state, one line each, under **Assumptions** in your PR. "None" is valid and should be rare.
 - Out-of-scope problems you notice go under **Other observations**, one line each. Report them; don't fix them.
 - If you can't finish without broader changes, stop and say what's needed and why. Don't proceed on an assumption you can't defend.
+
+Before changing infrastructure or a workflow, read [docs/infrastructure.md](docs/infrastructure.md), [docs/workflows.md](docs/workflows.md) and [docs/operations.md](docs/operations.md), and update them in the same pull request when behavior changes.
