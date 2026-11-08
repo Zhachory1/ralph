@@ -23,7 +23,7 @@ digraph systemflow {
     dispatch [label="dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
   }
   subgraph cluster_work { label="3. Work (each in its own sandbox)"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
-    author     [label="author\nPRD PR, then design PR"];
+    author     [label="author\nPRD, design, plan PRs"];
     builder    [label="builder\ncode PRs"];
     maintainer [label="maintainer\nfix, resolve threads"];
     researcher [label="researcher, analyst,\nexperimenter, auditor, watcher"];
@@ -41,6 +41,7 @@ digraph systemflow {
   subgraph cluster_rel { label="Reliability"; style="rounded,filled"; fillcolor="#FBE9D9"; color="#B5651D";
     g_prd  [label="Approve PRD gate\nopens on merge", shape=octagon];
     g_dd   [label="Approve design gate\nopens on merge", shape=octagon];
+    g_plan [label="Approve plan gate\nopens on merge", shape=octagon];
     breaker[label="breaker: hold after 3 rounds\nwith the same review feedback,\nonly CI changing", shape=note];
     dedup  [label="one review per head,\none graph / round per PR", shape=note];
     guards [label="triage release, active_pr lift,\nstranded-handoff retry", shape=note];
@@ -53,7 +54,9 @@ digraph systemflow {
   dispatch -> author; dispatch -> builder; dispatch -> maintainer; dispatch -> researcher;
   dispatch -> lenses; dispatch -> reviewer;
   author -> g_prd [label="PRD merged"]; g_prd -> orch [label="releases design card"];
-  author -> g_dd [label="design merged"]; g_dd -> orch [label="releases decompose"]; orch -> builder [style=dashed, label="build chains"];
+  author -> g_dd [label="design merged"]; g_dd -> orch [label="releases plan card"];
+  author -> g_plan [label="plan merged"]; g_plan -> orch [label="releases decompose"]; orch -> builder [style=dashed, label="one card per planned PR"];
+  approvals -> g_plan [style=dashed];
   approvals -> g_prd [style=dashed]; approvals -> g_dd [style=dashed];
   approvals -> author [label="dd-changes:\nsame author, feedback"];
   builder -> reviewer; lenses -> synth -> publish;

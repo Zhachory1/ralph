@@ -4,7 +4,7 @@ Each workflow: entry, exit, owners, and how it fails. Where the parts run is in 
 
 ![Ralph System: intake, plan, work, review, deliver](diagrams/system-flow.svg)
 
-## Feature: PRD → design → build
+## Feature: PRD → design → plan → build
 
 **Entry:** a request to the orchestrator (WebUI, Chat, or a card on `ralph`). **Exit:** merged code PRs. **Owners:** orchestrator (plans), author (documents), reviewer (agent review), builder (code), owner (approval gates).
 
@@ -24,11 +24,16 @@ sequenceDiagram
     A->>Owner: design-only PR, card blocked
     Owner-->>N: merge
     N->>O: completes "Approve design" gate
-    O->>B: decompose: one build chain per planned PR
+    O->>A: plan card
+    A->>Owner: implementation-plan PR, card blocked
+    Owner-->>N: merge
+    N->>O: completes "Approve plan" gate
+    O->>B: decompose: one build card per planned PR, as written
 ```
 
-- The author grounds the PRD in current code, tools and decisions first; PRD and design are separate pull requests.
-- `Approve PRD:` and `Approve design:` cards have no assignee. They open only when the owner **merges** the document PR; an agent review or an open approval does not.
+- The author grounds the PRD in current code, tools and decisions first. PRD, design and implementation plan are separate pull requests.
+- The plan lists each PR: goal, design section, `<planned_files>`, dependencies, size under 400 lines, test plan, and the build order. Decompose copies it onto build cards without re-splitting.
+- `Approve PRD:`, `Approve design:` and `Approve plan:` cards have no assignee. They open only when the owner **merges** the document PR; an agent review or an open approval does not.
 - `dd-changes` on a document PR returns it to the same author with the feedback; the label is removed once acted on.
 
 **Failure modes:**
