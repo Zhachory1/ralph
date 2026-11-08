@@ -180,5 +180,54 @@ class CliParsingTests(unittest.TestCase):
                 poller.HermesBoard().list_tasks("b", "blocked")
 
 
+
+
+class PartialDeliveryTests(unittest.TestCase):
+    """#60: when the webhook fails part-way, gates already posted this tick
+    are recorded, and only the undelivered ones are retried."""
+
+    def test_only_undelivered_gates_retry(self):
+        import tempfile, pathlib, urllib.error
+        gates = [poller.Gate(f"t_{i}", "DD", "blocked", f"reason {i}") for i in range(3)]
+        board = mock.Mock()
+        with tempfile.TemporaryDirectory() as d:
+            state = pathlib.Path(d) / "state.json"
+            posted = []
+
+            def post(_url, text):
+                if len(posted) == 2:
+                    raise urllib.error.URLError("down")
+                posted.append(text)
+
+            with mock.patch.object(poller, "pending_gates", return_value=gates), \
+                 mock.patch.object(poller, "HermesBoard", return_value=board), \
+                 mock.patch.object(poller, "post", side_effect=post), \
+                 mock.patch.dict("os.environ", {"GCHAT_WEBHOOK_URL": "http://x"}):
+                self.assertEqual(1, poller.main(["--board", "b", "--state", str(state)]))
+                seen = json.loads(state.read_text())
+                self.assertEqual({"t_0", "t_1"}, set(seen))
+
+                posted.clear()
+                retried = []
+                with mock.patch.object(poller, "post", side_effect=lambda _u, t: retried.append(t)):
+                    self.assertEqual(0, poller.main(["--board", "b", "--state", str(state)]))
+                self.assertEqual(1, len(retried))
+                self.assertIn("reason 2", retried[0])
+
+    def test_a_failed_tick_still_prunes_resolved_gates(self):
+        """#112 review: without pruning, a gate that resolved and reopened
+        with the same reason would never be announced again."""
+        import tempfile, pathlib, urllib.error
+        with tempfile.TemporaryDirectory() as d:
+            state = pathlib.Path(d) / "state.json"
+            state.write_text(json.dumps({"t_gone": "old reason"}))
+            gates = [poller.Gate("t_new", "DD", "blocked", "r")]
+            with mock.patch.object(poller, "pending_gates", return_value=gates), \
+                 mock.patch.object(poller, "HermesBoard", return_value=mock.Mock()), \
+                 mock.patch.object(poller, "post", side_effect=urllib.error.URLError("down")), \
+                 mock.patch.dict("os.environ", {"GCHAT_WEBHOOK_URL": "http://x"}):
+                self.assertEqual(1, poller.main(["--board", "b", "--state", str(state)]))
+            self.assertNotIn("t_gone", json.loads(state.read_text()))
+
 if __name__ == "__main__":
     unittest.main()
