@@ -189,23 +189,25 @@ def main(argv=None) -> int:
     seen = load_state(args.state)
 
     if args.digest:
-        messages = [render_digest(gates)] if gates else []
+        messages = [(render_digest(gates), [])] if gates else []
     else:
-        messages = [render(g) for g in unannounced(gates, seen)]
+        messages = [(render(g), [g]) for g in unannounced(gates, seen)]
 
-    for text in messages:
+    for text, delivered in messages:
         if args.dry_run:
             print(text)
-        else:
-            try:
-                post(webhook, text)
-            except urllib.error.URLError as error:
-                # Don't record an announcement that never arrived.
-                print(f"delivery failed: {error}", file=sys.stderr)
-                return 1
+            continue
+        try:
+            post(webhook, text)
+        except urllib.error.URLError as error:
+            # Record what did arrive before stopping, so a flaky webhook
+            # retries only the undelivered gates, not the ones already posted
+            # this tick (#60). Never record an announcement that failed.
+            print(f"delivery failed: {error}", file=sys.stderr)
+            save_state(args.state, seen)
+            return 1
+        record(delivered, seen)
 
-    if not args.digest:
-        record(gates, seen)
     prune(seen, gates)
     save_state(args.state, seen)
     return 0

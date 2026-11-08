@@ -180,5 +180,39 @@ class CliParsingTests(unittest.TestCase):
                 poller.HermesBoard().list_tasks("b", "blocked")
 
 
+
+
+class PartialDeliveryTests(unittest.TestCase):
+    """#60: when the webhook fails part-way, gates already posted this tick
+    are recorded, and only the undelivered ones are retried."""
+
+    def test_only_undelivered_gates_retry(self):
+        import tempfile, pathlib, urllib.error
+        gates = [poller.Gate(f"t_{i}", "DD", "blocked", f"reason {i}") for i in range(3)]
+        board = mock.Mock()
+        with tempfile.TemporaryDirectory() as d:
+            state = pathlib.Path(d) / "state.json"
+            posted = []
+
+            def post(_url, text):
+                if len(posted) == 2:
+                    raise urllib.error.URLError("down")
+                posted.append(text)
+
+            with mock.patch.object(poller, "pending_gates", return_value=gates), \
+                 mock.patch.object(poller, "HermesBoard", return_value=board), \
+                 mock.patch.object(poller, "post", side_effect=post), \
+                 mock.patch.dict("os.environ", {"GCHAT_WEBHOOK_URL": "http://x"}):
+                self.assertEqual(1, poller.main(["--board", "b", "--state", str(state)]))
+                seen = json.loads(state.read_text())
+                self.assertEqual({"t_0", "t_1"}, set(seen))
+
+                posted.clear()
+                retried = []
+                with mock.patch.object(poller, "post", side_effect=lambda _u, t: retried.append(t)):
+                    self.assertEqual(0, poller.main(["--board", "b", "--state", str(state)]))
+                self.assertEqual(1, len(retried))
+                self.assertIn("reason 2", retried[0])
+
 if __name__ == "__main__":
     unittest.main()
