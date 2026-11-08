@@ -1,0 +1,56 @@
+digraph tools {
+  graph [rankdir=TB, fontname="Helvetica", fontsize=18, labelloc=t, nodesep=0.35, ranksep=0.6,
+         label="Ralph Tools: what each profile works with (dashed = planned, not wired)"];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor=white];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+  subgraph cluster_runtime { label="Runtime (per instance: personal, work)"; style="rounded,filled"; fillcolor="#F3EEF9"; color="#7A5BA6";
+    hermes  [label="hermes container\ngateway, dispatcher, cron, board DB"];
+    webui   [label="hermes-webui\nprofiles in-process"];
+    proxy   [label="socket-proxy\nno volumes, no info"];
+    sandbox [label="agent sandboxes\none per profile, own /workspace + home\nralph-sandbox image: git, gh, mise, chromium"];
+    cleanup [label="cleanup-sandboxes\nhourly, review-loop"];
+    hermes -> proxy; webui -> proxy; proxy -> sandbox; cleanup -> sandbox [style=dotted];
+  }
+
+  subgraph cluster_ctx { label="Context and knowledge"; style="rounded,filled"; fillcolor="#F3EEF9"; color="#7A5BA6";
+    soul   [label="SOUL\nPRINCIPLES + STANDARDS + role"];
+    skills [label="Skills\npublic: code, debug, plan, review,\nwrite, ops, ui, voice, meta\nprivate overlay: code, write, analysis"];
+    docs   [label="docs/\ndecisions, infrastructure,\nworkflows, operations"];
+    cache  [label="repo cache (read-only)\n/repo-cache", shape=cylinder];
+    evid   [label="staged evidence (read-only)\nreview-work, chat-inbox", shape=cylinder];
+    docrepo[label="docs repo\nPRD + design PRs", shape=cylinder];
+    docs -> soul [style=dotted, label="pointed to by"];
+  }
+
+  subgraph cluster_ext { label="External tools"; style="rounded,filled"; fillcolor="#F3EEF9"; color="#7A5BA6";
+    gh    [label="gh / GitHub API\nterminal only, never execute_code"];
+    bk    [label="Buildkite API"];
+    lt    [label="lens-tools MCP\nevidence + own card only"];
+    gws   [label="Google Workspace\nhost credential, Chat send"];
+    kanban[label="Kanban tools\nlist, show, comment, create"];
+  }
+
+  subgraph cluster_planned { label="Planned / not wired"; style="rounded,dashed"; color="#999999"; fontcolor="#777777";
+    node [style="rounded,dashed", fontcolor="#777777"];
+    redmine [label="Redmine (work)\nprivate issue tracking"];
+    memory  [label="Agent memory\n(off on every profile)"];
+    mcps    [label="Shared MCP set\n(install skips mcp_servers)"];
+    hub     [label="Rokt Hub / Docshare\npublishing"];
+    rag     [label="Document RAG\nbeyond the repo cache"];
+  }
+
+  subgraph cluster_profiles { label="Who gets what"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    p_general [label="general profiles + default\n(orchestrator, author, builder, maintainer,\nresearcher, reviewer, analyst, ...)"];
+    p_clone   [label="author, builder, maintainer,\nresearcher, default"];
+    p_ci      [label="builder, maintainer\n(work instance)"];
+    p_lens    [label="lenses, review-synthesis"];
+    p_chat    [label="chat-maintainer"];
+  }
+
+  p_general -> soul; p_general -> skills [style=dotted]; p_general -> gh; p_general -> kanban;
+  p_clone -> cache; p_ci -> bk; p_lens -> evid; p_lens -> lt; p_chat -> evid; p_chat -> lt;
+  p_general -> docrepo [label="author"];
+  p_general -> sandbox [label="every command", style=dotted];
+  gws -> p_chat [style=dotted, label="via host chat-reply", dir=back];
+}

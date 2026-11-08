@@ -1,0 +1,38 @@
+digraph io {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=18, labelloc=t, nodesep=0.4, ranksep=1.0,
+         label="Ralph I/O: how the outside world reaches Ralph, and how Ralph answers"];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor=white];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+  subgraph cluster_people { label="People"; style="rounded,filled"; fillcolor="#FFF6D6"; color="#C9A227";
+    owner     [label="Owner", shape=ellipse];
+    requester [label="Chat requesters", shape=ellipse];
+    reviewers [label="PR reviewers\n(people + bots)", shape=ellipse];
+  }
+
+  subgraph cluster_in { label="In"; style="rounded,filled"; fillcolor="#E8F1FB"; color="#4A78B5";
+    webui    [label="WebUI chat\ndefault profile\nlocalhost:9220 / 9230"];
+    dash     [label="Hermes dashboard\nlocalhost:9219"];
+    gchat_in [label="Google Chat spaces\nallowed spaces only\npolled every 2 min"];
+    gh_in    [label="GitHub\nassigned PRs, reviews, threads,\ndd-changes label, merges, CI"];
+    cron_ui  [label="WebUI Crons panel\nscheduled jobs per profile"];
+  }
+
+  ralph [label="Ralph\n(System band)", shape=box3d, fillcolor="#EEF7EC", fontsize=14];
+
+  subgraph cluster_out { label="Out"; style="rounded,filled"; fillcolor="#E8F1FB"; color="#4A78B5";
+    gchat_out [label="Google Chat, same thread\nack, reply, final result\n(split over 4,000 chars)"];
+    notify    [label="Chat webhook\ngate alerts (once per reason),\nmorning digest, daily work digest"];
+    gh_out    [label="GitHub\nPRs (code + docs), reviews,\nthread replies, resolved threads"];
+  }
+
+  owner -> webui [label="asks, plans"]; owner -> dash [label="watches board"];
+  owner -> cron_ui [label="schedules"];
+  owner -> gh_in [label="merge = approve,\ndd-changes = rework"];
+  requester -> gchat_in; reviewers -> gh_in [label="reviews, threads"];
+  webui -> ralph; dash -> ralph [style=dotted]; cron_ui -> ralph; gchat_in -> ralph; gh_in -> ralph;
+  ralph -> gchat_out; ralph -> notify; ralph -> gh_out;
+  gchat_out -> requester [style=dashed, constraint=false];
+  notify -> owner [style=dashed, constraint=false];
+  gh_out -> reviewers [style=dashed, constraint=false];
+}

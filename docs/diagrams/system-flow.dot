@@ -1,0 +1,69 @@
+digraph systemflow {
+  graph [rankdir=LR, fontname="Helvetica", fontsize=18, labelloc=t, nodesep=0.35, ranksep=0.8, newrank=true,
+         label="Ralph System: take a request, plan it reliably, do the work, present it back"];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor=white];
+  edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+  in_chat [label="Chat message", shape=cds, fillcolor="#E8F1FB"];
+  in_web  [label="WebUI request", shape=cds, fillcolor="#E8F1FB"];
+  in_pr   [label="Assigned PR /\nPR feedback", shape=cds, fillcolor="#E8F1FB"];
+  in_dec  [label="Owner decision\n(merge, dd-changes)", shape=cds, fillcolor="#E8F1FB"];
+
+  subgraph cluster_intake { label="1. Intake"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    inbox    [label="chat_inbox.py\nstage whole thread"];
+    cm       [label="chat-maintainer\nroute / reply / ignore"];
+    discover [label="discover-reviews\n10 new per pass"];
+    maintain [label="maintain-pr\nfeedback digest"];
+    approvals[label="approvals.py\ndecisions first"];
+  }
+  subgraph cluster_plan { label="2. Plan"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    orch     [label="orchestrator\nplans card graph", fillcolor="#DFF0DA"];
+    board_r  [label="board: ralph", shape=cylinder, fillcolor="#F4F4F4"];
+    board_q  [label="board: queues", shape=cylinder, fillcolor="#F4F4F4"];
+    dispatch [label="dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
+  }
+  subgraph cluster_work { label="3. Work (each in its own sandbox)"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    author     [label="author\nPRD PR, then design PR"];
+    builder    [label="builder\ncode PRs"];
+    maintainer [label="maintainer\nfix, resolve threads"];
+    researcher [label="researcher, analyst,\nexperimenter, auditor, watcher"];
+  }
+  subgraph cluster_review { label="4. Review"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    reviewer [label="reviewer\n(own PRs)"];
+    lenses   [label="lenses: generalist,\nreliability, mvp, security"];
+    synth    [label="review-synthesis\nverdict"];
+  }
+  subgraph cluster_deliver { label="5. Deliver"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    publish  [label="publish-review\none per head SHA"];
+    reply    [label="chat-reply\nhost, every 60 s"];
+    poller   [label="poller + digest"];
+  }
+  subgraph cluster_rel { label="Reliability"; style="rounded,filled"; fillcolor="#FBE9D9"; color="#B5651D";
+    g_prd  [label="Approve PRD gate\nopens on merge", shape=octagon];
+    g_dd   [label="Approve design gate\nopens on merge", shape=octagon];
+    breaker[label="breaker: hold after 3 rounds,\nonly CI changing", shape=note];
+    dedup  [label="one review per head,\none graph / round per PR", shape=note];
+    guards [label="triage release, active_pr lift,\nstranded-handoff retry", shape=note];
+  }
+
+  in_chat -> inbox -> cm; in_web -> orch; in_pr -> discover; in_pr -> maintain; in_dec -> approvals;
+  cm -> orch [label="route + ack"]; cm -> reply [label="ack / reply / send"];
+  orch -> board_r; discover -> board_q; maintain -> board_q;
+  board_r -> dispatch; board_q -> dispatch;
+  dispatch -> author; dispatch -> builder; dispatch -> maintainer; dispatch -> researcher;
+  dispatch -> lenses; dispatch -> reviewer;
+  author -> g_prd [label="PRD merged"]; g_prd -> author [label="design card"];
+  author -> g_dd [label="design merged"]; g_dd -> builder [label="decompose"];
+  approvals -> g_prd [style=dashed]; approvals -> g_dd [style=dashed];
+  approvals -> author [label="dd-changes:\nsame author, feedback"];
+  builder -> reviewer; lenses -> synth -> publish;
+  board_r -> poller [style=dotted];
+  dedup -> discover [style=dotted, arrowhead=none]; breaker -> maintain [style=dotted, arrowhead=none];
+  guards -> approvals [style=dotted, arrowhead=none];
+
+  out_gh   [label="GitHub", shape=cds, fillcolor="#E8F1FB"];
+  out_chat [label="Chat thread", shape=cds, fillcolor="#E8F1FB"];
+  out_hook [label="Chat webhook", shape=cds, fillcolor="#E8F1FB"];
+  publish -> out_gh; builder -> out_gh; author -> out_gh; maintainer -> out_gh;
+  reply -> out_chat; poller -> out_hook;
+}

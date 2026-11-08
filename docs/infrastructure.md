@@ -6,7 +6,13 @@ Where each part of Ralph runs, what it can touch, and how to check it is healthy
 
 ![Ralph system overview](diagrams/system.svg)
 
-Three bands: **I/O** (how people and services reach Ralph and how it answers), **System** (intake → plan → work → review → deliver, with the gates and guards that keep it reliable), and **Tools** (runtime, context and knowledge, external tools, and what is planned but not wired). Source: [`diagrams/system.dot`](diagrams/system.dot); regenerate with `dot -Tsvg docs/diagrams/system.dot -o docs/diagrams/system.svg` (and `-Tpng`).
+Three bands: **I/O** (how people and services reach Ralph and how it answers), **System** (intake → plan → work → review → deliver, with the gates and guards that keep it reliable), and **Tools** (runtime, context and knowledge, external tools, and what is planned but not wired). The same picture, one band at a time:
+
+- [I/O](diagrams/io.svg): who reaches Ralph, through what, and how it answers.
+- [System](diagrams/system-flow.svg): intake → plan → work → review → deliver, with the reliability band.
+- [Tools](diagrams/tools.svg): runtime, context and knowledge, external tools, which profile gets what, and what is planned.
+
+Sources are the `.dot` files in [`diagrams/`](diagrams/). Regenerate after a change with `for f in docs/diagrams/*.dot; do dot -Tsvg "$f" -o "${f%.dot}.svg"; dot -Tpng "$f" -o "${f%.dot}.png"; done`.
 
 ## Instances
 

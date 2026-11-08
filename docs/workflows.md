@@ -2,6 +2,8 @@
 
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
+![Ralph System: intake, plan, work, review, deliver](diagrams/system-flow.svg)
+
 ## Feature: PRD → design → build
 
 **Entry:** a request to the orchestrator (WebUI, Chat, or a card on `ralph`). **Exit:** merged code PRs. **Owners:** orchestrator (plans), author (documents), reviewer (agent review), builder (code), owner (approval gates).
