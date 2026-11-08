@@ -108,17 +108,15 @@ Safety mechanisms come before builder autonomy.
 
 ## Open questions
 
-These are verified before the code that depends on them is written, not after. A first round is done: see [`docs/spikes/hermes-capabilities.md`](docs/spikes/hermes-capabilities.md), which found that the approval gate, the council fan-out, durable workspaces, and multiple boards are all native and don't need building.
+All answered (2026-11-08), from a first round of CLI probing ([`docs/spikes/hermes-capabilities.md`](docs/spikes/hermes-capabilities.md)) and then from live workers. Each answer links the change or test that settled it.
 
-Still open, and each needs a live worker rather than CLI probing:
-
-- [ ] Whether a worker re-spawns with the review thread in context after `unblock`
-- [ ] Whether `request-changes` round-trips a design doc back to its author
-- [ ] Whether a `dir:` workspace stays stable across repeated dispatches of one card
-- [ ] How Hermes scopes its Docker sandbox, and whether builder and experimenter can get separate ones
-- [ ] How Hermes resolves two skills with the same name, needed for layer-3 overrides
-- [ ] Whether skills can be pinned or made read-only, so self-optimization can't touch invariant-adjacent skills
-- [ ] Whether one Hermes container can host all profiles with a shared board, versus one container per profile
+- [x] **Does a worker re-spawn with the review thread in context after `unblock`?** Yes. The decision and feedback are commented on the card before the move, and the resumed worker reads the card. `unblock` alone does **not** re-spawn a card whose comments hold a PR link: Hermes' `active_pr` guard holds it until a handoff to a *different* profile, so the notifier unassigns and reassigns the owner (#114). Live on docs#7, cycled several times.
+- [x] **Does `request-changes` round-trip a design doc back to its author?** Not that verb: Hermes accepts it only for a card in an active review run, and a design gate is blocked, not in review. The round trip is the `dd-changes` label: the notifier attaches the feedback, removes the label and resumes the same author (#102, #104, #114). A design that has to change its premise goes back to a PRD round (#115).
+- [x] **Does a `dir:` workspace stay stable across repeated dispatches of one card?** Yes. Probed: `workspace_path` is unchanged after block, unblock and reassignment. Review and chat cards rely on it (`dir:` staged evidence), and each sandbox's `/workspace` is per profile and instance under `RALPH_SANDBOX_ROOT` (#98).
+- [x] **How does Hermes scope its Docker sandbox, and can builder and experimenter get separate ones?** One sandbox container per profile per instance, labelled `hermes-profile`; its writable mounts are only that profile's `/workspace` and home (#78, #98). So builder and experimenter are separate by construction. `evals/test_sandbox_isolation.py` checks a live sandbox for host, socket, board and cross-profile access.
+- [x] **How does Hermes resolve two skills with the same name?** By tier, lowest wins: trusted project > local profile > `skills.create_dir` > `skills.external_dirs` (`agent/skill_utils.py`). Two different skills with the same name *in one tier* are refused, never guessed. So a private overlay lane mounted as `create_dir` shadows a public `external_dirs` skill of the same name; live on work, the builder's `standards` resolves from `create_dir`.
+- [x] **Can skills be pinned or made read-only?** Both. The shipped and overlay skill trees are mounted read-only (`/ralph/skills`, `/ralph/private-skills`), so no agent can rewrite them: writes fail with `Read-only file system`. Hermes' own `pinned` flag guards deletion only, so the read-only mount is the boundary that matters.
+- [x] **One Hermes container for all profiles, or one per profile?** One per instance. A single `hermes` container hosts all 18 profiles and both boards; isolation comes from a sandbox per profile, not a container per profile. Two instances (personal, work) run side by side on one VM (#40).
 
 ## Docs
 
