@@ -424,7 +424,8 @@ class StrandedHandoffTests(unittest.TestCase):
         self.assertEqual("changes", approvals.stranded(self.detail([{"kind": "unblocked", "created_at": 101}])))
 
     def test_a_handoff_after_the_decision_is_not_stranded(self):
-        self.assertIsNone(approvals.stranded(self.detail([{"kind": "assigned", "created_at": 101}])))
+        self.assertIsNone(approvals.stranded(self.detail(
+            [{"kind": "assigned", "created_at": 101, "payload": {"assignee": "ralph-author", "from": None}}])))
 
     def test_a_handoff_before_the_decision_does_not_count(self):
         self.assertEqual("approved", approvals.stranded(self.detail(
@@ -577,6 +578,28 @@ class NotifierOrderTests(unittest.TestCase):
     def test_approvals_run_before_the_poller(self):
         text = (pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "run-notifier").read_text()
         self.assertLess(text.index("approvals.py"), text.index("poller.py"))
+
+
+
+class SameAuthorReworkTests(unittest.TestCase):
+    """#66: Hermes lifts active_pr only on an assign to a different profile,
+    so the handoff unassigns and then assigns the same author back."""
+
+    def test_handoff_unassigns_then_assigns_the_same_owner(self):
+        board = approvals.Board()
+        with mock.patch.object(board, "assignee", return_value="ralph-author"), \
+             mock.patch.object(board, "_run") as run:
+            board.handoff("b", "t_1", "changes", "blocked")
+        self.assertEqual([mock.call("--board", "b", "assign", "t_1", "none"),
+                          mock.call("--board", "b", "assign", "t_1", "ralph-author")],
+                         run.call_args_list)
+
+    def test_an_unassign_alone_is_not_a_completed_handoff(self):
+        """Interrupted between the two assigns: still stranded, so it retries."""
+        detail = {"comments": [{"body": "Changes requested in GitHub. x", "created_at": 100}],
+                  "events": [{"kind": "assigned", "created_at": 101,
+                              "payload": {"assignee": None, "from": "ralph-author"}}]}
+        self.assertEqual("changes", approvals.stranded(detail))
 
 if __name__ == "__main__":
     unittest.main()
