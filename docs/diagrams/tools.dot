@@ -41,6 +41,7 @@ digraph tools {
   }
 
   subgraph cluster_profiles { label="Who gets what"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
+    p_all;
     p_general [label="general profiles + default\n(orchestrator, author, builder, maintainer,\nresearcher, reviewer, analyst, ...)"];
     p_clone   [label="author, builder, maintainer,\nresearcher, default"];
     p_ci      [label="builder, maintainer\n(work instance)"];
@@ -48,7 +49,9 @@ digraph tools {
     p_chat    [label="chat-maintainer"];
   }
 
-  p_general -> soul; p_general -> skills [style=dotted]; p_general -> gh; p_general -> kanban;
+  p_all [label="every profile\n(terminal + gh, decision 0001)", fillcolor="#DFF0DA"];
+  p_all -> gh; p_all -> soul;
+  p_general -> skills [style=dotted]; p_general -> kanban;
   p_clone -> cache; p_ci -> bk; p_lens -> evid; p_lens -> lt; p_chat -> evid; p_chat -> lt;
   p_general -> docrepo [label="author"];
   p_general -> sandbox [label="every command", style=dotted];
