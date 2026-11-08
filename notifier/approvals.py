@@ -225,12 +225,12 @@ def parked_by_block_loop(detail: dict) -> bool:
 
 
 DECISION_NOTES = ("Approved in GitHub.", "Changes requested in GitHub.")
-GATE_TITLES = ("Approve design:", "Approve PRD:")
+GATE_TITLES = ("Approve design:", "Approve PRD:", "Approve plan:")
 
 
 def is_approval_gate(detail: dict) -> bool:
-    """The orchestrator's approval gates: `Approve PRD:` (#65) and `Approve
-    design:` (#56), assigned to nobody. Other unassigned cards are not this
+    """The orchestrator's approval gates: `Approve PRD:` (#65), `Approve
+    design:` (#56) and `Approve plan:` (#119), assigned to nobody. Other unassigned cards are not this
     notifier's to complete (#110 review)."""
     task = detail.get("task") or {}
     return not task.get("assignee") and (task.get("title") or "").startswith(GATE_TITLES)

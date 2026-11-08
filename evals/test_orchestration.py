@@ -127,6 +127,32 @@ class PrdApprovalGateTests(BoardTest):
         self.assertEqual("todo", self.board.status(decompose))
 
 
+class PlanApprovalGateTests(BoardTest):
+    """#119: an approved design releases only the plan card; decompose waits
+    for the owner to approve the plan."""
+
+    def test_decompose_waits_for_the_plan_gate(self):
+        dd_gate = self.card("Approve design: x", assignee=None)
+        plan = self.card("plan", parent=dd_gate)
+        plan_gate = self.card("Approve plan: x", assignee=None, parent=plan)
+        decompose = self.card("decompose", assignee="ralph-orchestrator", parent=plan_gate)
+
+        self.board.block(dd_gate, "review-required: approve design")
+        self.board.unblock(dd_gate)
+        self.board.complete(dd_gate, "Approved in GitHub.")
+        self.assertEqual("ready", self.board.status(plan))
+        self.assertEqual("todo", self.board.status(decompose))
+
+        self.board.complete(plan, "reviewer: plan ok")
+        self.board.block(plan_gate, "review-required: approve plan")
+        self.assertEqual("todo", self.board.status(decompose))
+        self.assertFalse(self.board.would_spawn(decompose))
+
+        self.board.unblock(plan_gate)
+        self.board.complete(plan_gate, "Approved in GitHub.")
+        self.assertEqual("ready", self.board.status(decompose))
+
+
 class RespawnGuardTests(BoardTest):
     """A card whose comments hold a pull-request URL is guarded against
     respawn, so a crashed worker cannot open a second PR. The guard lifts on a

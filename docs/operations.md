@@ -59,7 +59,7 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 |---|---|
 | **Card** | A Kanban task assigned to one profile, with a completion condition. |
 | **Board** | `ralph` (feature work, planned by the orchestrator) or `queues` (machine-created: reviews, maintenance, chat intake). |
-| **Gate** | A blocked card waiting on the owner. A doc gate opens on merge or `dd-changes`; an `Approve PRD:` / `Approve design:` card opens only on merge. |
+| **Gate** | A blocked card waiting on the owner. A doc gate opens on merge or `dd-changes`; an `Approve PRD:` / `Approve design:` / `Approve plan:` card opens only on merge. |
 | **Lens** | One review perspective (generalist, reliability, MVP, security); review-synthesis combines them. |
 | **Round** | One maintenance pass on a PR's current feedback. |
 | **operation_id** | The stable id tying a review, maintenance round or chat request to its cards. |

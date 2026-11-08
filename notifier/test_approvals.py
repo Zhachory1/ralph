@@ -527,6 +527,12 @@ class ApprovalGateTests(unittest.TestCase):
         approvals.apply(board, "b", "t_gate", "approved", "", status="blocked")
         board.complete.assert_called_once()
 
+    def test_approving_a_plan_gate_completes_it(self):
+        """#119: the plan gate works like the PRD and design gates."""
+        board = self.board(title="Approve plan: x")
+        approvals.apply(board, "b", "t_gate", "approved", "", status="blocked")
+        board.complete.assert_called_once()
+
     def test_an_unassigned_card_that_is_not_a_gate_is_not_completed(self):
         """#110 review: only the orchestrator's gate is completed on approval."""
         board = self.board(title="some unassigned card")

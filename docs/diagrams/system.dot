@@ -50,6 +50,7 @@ digraph ralph {
       label="Reliability (gates and guards)"; style="rounded,dashed"; color="#B5651D";
       g_prd  [label="Approve PRD gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
       g_dd   [label="Approve design gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
+      g_plan [label="Approve plan gate\n(opens on merge)", shape=octagon, fillcolor="#FBE9D9"];
       dedup  [label="dedup: one review per head SHA,\none review graph per PR,\none maintenance round per PR", shape=note, fillcolor="#FBE9D9"];
       breaker[label="breaker: hold after 3 rounds\nwith the same review feedback\n(only CI changing)", shape=note, fillcolor="#FBE9D9"];
       guards [label="active_pr guard, triage release,\nstranded-handoff retry", shape=note, fillcolor="#FBE9D9"];
@@ -57,7 +58,7 @@ digraph ralph {
 
     subgraph cluster_work {
       label="3. Work (each in its own sandbox)"; style="rounded"; color="#4E8F48";
-      researcher [label="researcher"]; author [label="author\nPRD, then design"]; builder [label="builder"];
+      researcher [label="researcher"]; author [label="author\nPRD, design, plan"]; builder [label="builder"];
       maintainer [label="maintainer"]; reviewer [label="reviewer"];
       others [label="analyst, experimenter,\nauditor, watcher"];
       inbox_drafter [label="inbox-drafter\nchat-summarizer"];
@@ -135,7 +136,9 @@ digraph ralph {
   dispatch -> researcher; dispatch -> author; dispatch -> builder; dispatch -> maintainer;
   dispatch -> reviewer; dispatch -> others; dispatch -> lenses; dispatch -> inbox_drafter;
   author -> g_prd [style=dashed, label="PRD PR"]; g_prd -> orch [label="releases design card"];
-  author -> g_dd [style=dashed, label="design PR"]; g_dd -> orch [label="releases decompose"]; orch -> builder [style=dashed, label="build chains"];
+  author -> g_dd [style=dashed, label="design PR"]; g_dd -> orch [label="releases plan card"];
+  author -> g_plan [style=dashed, label="plan PR"]; g_plan -> orch [label="releases decompose"]; orch -> builder [style=dashed, label="one card per planned PR"];
+  approvals -> g_plan [label="merge completes"];
   dedup -> discover [style=dotted, arrowhead=none]; dedup -> maintain [style=dotted, arrowhead=none];
   breaker -> maintain [style=dotted, arrowhead=none]; guards -> approvals [style=dotted, arrowhead=none];
 
