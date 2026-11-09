@@ -96,9 +96,9 @@ digraph ralph {
       skills  [label="Skills\npublic lanes: code, debug, plan,\nreview, write, ops, ui, voice, meta\nprivate overlay: code, write, analysis"];
       cache   [label="repo cache (read-only)\ngit show / git grep, clone --reference", shape=cylinder];
       evidence[label="staged evidence\nreview-work, chat-inbox", shape=cylinder];
-      docsrepo[label="docs repo (RALPH_DOCS_REPO)\nPRD + design + plan PRs\nmemory/ notes (direct writes)", shape=cylinder];
-      knowledge[label="knowledge service (QMD)\nindex: docs repo + docs/\nHTTP MCP, hourly refresh", shape=cylinder];
-      decisions[label="docs/: decisions, infrastructure,\nworkflows, operations"];
+      docsrepo[label="Instance docs repo (RALPH_DOCS_REPO)\nseparate repo, one per instance\nPRDs, designs, plans, memory/ notes", shape=cylinder];
+      knowledge[label="knowledge service (QMD)\nindex: instance docs repo\n+ Ralph's own docs\nHTTP MCP, hourly refresh", shape=cylinder];
+      decisions[label="Ralph's own docs\n(docs/ in this repo, every instance)\ninfrastructure, workflows,\noperations, decisions"];
     }
 
     subgraph cluster_ext {

@@ -28,7 +28,7 @@ digraph systemflow {
     maintainer [label="maintainer\nfix, resolve threads"];
     researcher [label="researcher, analyst,\nexperimenter, auditor, watcher"];
   }
-  knowledge [label="knowledge (QMD)\nsearch before plan/write;\nmemories to docs repo", shape=cylinder, fillcolor="#F3EEF9"];
+  knowledge [label="knowledge (QMD)\nsearch before plan/write;\nmemories to instance docs repo", shape=cylinder, fillcolor="#F3EEF9"];
   subgraph cluster_review { label="4. Review"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
     reviewer [label="reviewer\n(own PRs)"];
     lenses   [label="lenses: generalist,\nreliability, mvp, security"];

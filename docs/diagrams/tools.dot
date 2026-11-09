@@ -16,11 +16,11 @@ digraph tools {
   subgraph cluster_ctx { label="Context and knowledge"; style="rounded,filled"; fillcolor="#F3EEF9"; color="#7A5BA6";
     soul   [label="SOUL\nPRINCIPLES + STANDARDS + role"];
     skills [label="Skills\npublic: code, debug, plan, review,\nwrite, ops, ui, voice, meta\nprivate overlay: code, write, analysis"];
-    docs   [label="docs/\ndecisions, infrastructure,\nworkflows, operations"];
+    docs   [label="Ralph's own docs\n(docs/ in this repo, every instance)\ninfrastructure, workflows,\noperations, decisions"];
     cache  [label="repo cache (read-only)\n/repo-cache", shape=cylinder];
     evid   [label="staged evidence (read-only)\nreview-work, chat-inbox", shape=cylinder];
-    docrepo[label="docs repo\nPRD + design + plan PRs\nmemory/ notes", shape=cylinder];
-    kn     [label="knowledge MCP (QMD)\nquery, get, multi_get, status\nindex: docs repo + docs/", shape=cylinder];
+    docrepo[label="Instance docs repo (RALPH_DOCS_REPO)\nseparate repo, one per instance\nPRDs, designs, plans, memory/ notes", shape=cylinder];
+    kn     [label="knowledge MCP (QMD)\nquery, get, multi_get, status\nindex: instance docs repo\n+ Ralph's own docs", shape=cylinder];
     docrepo -> kn [style=dotted, label="hourly refresh"]; docs -> kn [style=dotted];
     docs -> soul [style=dotted, label="pointed to by"];
   }
