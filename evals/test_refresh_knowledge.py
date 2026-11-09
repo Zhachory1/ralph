@@ -8,6 +8,7 @@ qmd is stubbed; git is real, against a local bare repository.
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -86,6 +87,21 @@ class RefreshTests(unittest.TestCase):
         self.assertFalse(s["ok"])
         self.assertIn("embed failed", s["error"])
         self.assertEqual("", s["last_success"])
+
+
+    @unittest.skipUnless(shutil.which("flock"), "flock (util-linux) is in the knowledge image, not macOS")
+    def test_refreshes_are_serialized(self):
+        """#125 review: a second refresh waits for the first's lock."""
+        self.root.mkdir(exist_ok=True)
+        lock = open(self.root / ".refresh.lock", "w")
+        self.addCleanup(lock.close)
+        import fcntl
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            subprocess.run(["bash", str(REFRESH)], env=self.env, capture_output=True, timeout=2)
+        self.assertFalse((self.d / "calls").exists())
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        self.assertEqual(0, self.refresh().returncode)
 
 
 class LoopTests(unittest.TestCase):
