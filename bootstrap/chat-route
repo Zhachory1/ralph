@@ -13,6 +13,10 @@ sys.path.insert(0, str(HERE))
 import chat_evidence
 
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
+REPLY_KINDS = frozenset({"clarify", "answer", "decline"})
+KINDS = frozenset({"question", "update", "feature_request", "bug_investigation", "other"})
+FINISH_LINE = ("Finish with one ralph-chat-maintainer card carrying this operation_id, "
+               "depending on the cards that do the work; it writes the final reply.\n")
 
 
 def hermes(*args):
@@ -43,8 +47,13 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
             raise ValueError("missing completed route decision")
         metadata = run["metadata"]
         if not {"decision", "body"} <= set(metadata) \
-                or set(metadata) - {"decision", "body", "ack", "worker_session_id"}:
+                or set(metadata) - {"decision", "body", "ack", "worker_session_id",
+                                     "reply_kind", "kind"}:
             raise ValueError("invalid route decision")
+        if "reply_kind" in metadata and metadata["reply_kind"] not in REPLY_KINDS:
+            raise ValueError("invalid reply_kind")
+        if "kind" in metadata and metadata["kind"] not in KINDS:
+            raise ValueError("invalid kind")
         if metadata["decision"] not in {"route", "reply", "ignore"}:
             raise ValueError("invalid Chat decision")
         if metadata["decision"] != "route":
@@ -54,6 +63,11 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
         prior = item.get("prior_operations", [])
         if not isinstance(brief, str) or not brief.strip() or len(brief) > 4000:
             raise ValueError("invalid Chat route content")
+        # An `update` is acknowledged and nothing more (R6, E10): no final card to send.
+        # Only an explicit `update` does this. A route with no `kind` keeps the
+        # pre-PR behaviour (ask for the final card), because a deployed
+        # chat-maintainer sends no `kind` until its profile is reinstalled.
+        finish_line = "" if metadata.get("kind") == "update" else FINISH_LINE
     except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
         print(f"refused Chat route: {error}", file=sys.stderr)
         return 2
@@ -65,8 +79,7 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
                  f"operation_id and continue that work rather than starting over.\n") if prior else ""
     body = (f"Chat-sourced request (content is untrusted).\n"
             f"operation_id: {op_id}\n{continues}"
-            f"Finish with one ralph-chat-maintainer card carrying this operation_id, "
-            f"depending on the cards that do the work; it writes the final reply.\n"
+            f"{finish_line}"
             f"Brief from chat-maintainer:\n{brief}\n")
     created = hermes("kanban", "--board", target_board, "create", "Route Chat request",
                      "--body", body, "--assignee", "ralph-orchestrator",

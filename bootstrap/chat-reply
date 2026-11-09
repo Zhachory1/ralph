@@ -26,7 +26,11 @@ import chat_evidence
 
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
-MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "final": ".final-sent"}
+MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "clarify": ".clarify-sent",
+           "decline": ".decline-sent", "final": ".final-sent"}
+# `reply_kind` picks one of these three reply markers; an unrecognized or absent
+# `reply_kind` falls back to the legacy "reply" marker.
+REPLY_MARKERS = {"clarify": "clarify", "decline": "decline", "answer": "reply"}
 MAX_TEXT = 4000
 # A long reply is split into at most this many messages, in order.
 MAX_PARTS = 5
@@ -136,6 +140,10 @@ def mark(root, op_id, kind):
 
 
 def sent(root, op_id, kind):
+    # A thread already answered before markers became per kind carries only the
+    # legacy `.reply-sent`; it satisfies every reply kind so no reply resends.
+    if kind in REPLY_MARKERS.values() and (root / op_id / MARKERS["reply"]).is_file():
+        return True
     return (root / op_id / MARKERS[kind]).is_file()
 
 
@@ -161,7 +169,8 @@ def handle(container, root, allowed_spaces, board, task_id):
             if choice == "route":
                 kind, body = "ack", text(metadata.get("ack"))
             elif choice == "reply":
-                kind, body = "reply", text(metadata["body"])
+                kind = REPLY_MARKERS.get(metadata.get("reply_kind"), "reply")
+                body = text(metadata["body"])
             else:
                 return 0
         else:
@@ -227,7 +236,8 @@ def scan(instance_env):
                 continue
             if board == "ralph" and sent(root, op_id, "final"):
                 continue
-            if board == "queues" and (sent(root, op_id, "ack") or sent(root, op_id, "reply")):
+            if board == "queues" and (sent(root, op_id, "ack") or sent(root, op_id, "reply")
+                                       or sent(root, op_id, "clarify") or sent(root, op_id, "decline")):
                 continue
             if handle(container, root, allowed_spaces, board, task["id"]) == 1:
                 status = 1
