@@ -28,6 +28,7 @@ digraph systemflow {
     maintainer [label="maintainer\nfix, resolve threads"];
     researcher [label="researcher, analyst,\nexperimenter, auditor, watcher"];
   }
+  knowledge [label="knowledge (QMD)\nsearch before plan/write;\nmemories to docs repo", shape=cylinder, fillcolor="#F3EEF9"];
   subgraph cluster_review { label="4. Review"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
     reviewer [label="reviewer\n(own PRs)"];
     lenses   [label="lenses: generalist,\nreliability, mvp, security"];
@@ -60,6 +61,8 @@ digraph systemflow {
   approvals -> g_prd [style=dashed]; approvals -> g_dd [style=dashed];
   approvals -> author [label="dd-changes:\nsame author, feedback"];
   builder -> reviewer; lenses -> synth -> publish;
+  orch -> knowledge [style=dotted, dir=both]; author -> knowledge [style=dotted, dir=both, label="search, cite,\nwrite memories"];
+  researcher -> knowledge [style=dotted, dir=both]; maintainer -> knowledge [style=dotted, dir=both];
   board_r -> poller [style=dotted];
   dedup -> discover [style=dotted, arrowhead=none]; breaker -> maintain [style=dotted, arrowhead=none];
   guards -> approvals [style=dotted, arrowhead=none];

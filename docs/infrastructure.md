@@ -30,6 +30,7 @@ RALPH_ENV_FILE=.env.work docker compose --env-file .env.work ps      # work
 | `RALPH_ENV_FILE` | which env file the containers load |
 | `RALPH_WORKSPACES` | the host folder mounted at `/workspaces` (repo cache, review evidence, chat inbox) |
 | `RALPH_SANDBOX_ROOT` | the host folder for agent sandboxes, mounted at the same path inside |
+| `RALPH_DOCS_REPO` | the docs repository: documents, memories, and what the knowledge service indexes (its own volume per instance) |
 | `RALPH_DASHBOARD_PORT`, `RALPH_WEBUI_PORT` | localhost ports |
 
 `.env.example` documents every setting. Env files are gitignored and never committed.

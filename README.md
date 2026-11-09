@@ -102,7 +102,7 @@ Safety mechanisms come before builder autonomy.
 2. **Safety before autonomy** — kill-switch scripts, per-profile scoped tokens, branch protection, merge commands blocked in the builder's toolset. *Done when* the first kill-switch drill and the sandbox canary's security checks pass.
 3. **Builder and reviewer** — agent PR conventions and scope discipline, with the CI scope check live. *Done when* an approved design doc produces reviewed PRs in a sandbox org, then on one real low-risk feature.
 4. **Cron** — maintenance sweep, morning digest carrying the day's operational metrics, docs gardener, auditor running the weekly trend report. *Done when* a full week runs with no missed or duplicate alerts.
-5. **Local search** over the docs repo. *Done when* every profile can find the current design doc for a feature.
+5. **Local search** over the docs repo. *Done when* every profile can find the current design doc for a feature. Built (#121): a QMD service per instance, MCP tools for the searching profiles, memories in the docs repo, hourly refresh.
 6. **Launch plans**, with you advancing every stage.
 7. **Analyst, then experimenter.** Analyst is read-only and low risk; experimenter spends money, so it comes last.
 
@@ -121,9 +121,9 @@ All answered (2026-11-08), from a first round of CLI probing ([`docs/spikes/herm
 ## Docs
 
 - [System diagram](docs/diagrams/system.svg): I/O, System and Tools on one page.
-- [Infrastructure](docs/infrastructure.md): instances, containers, sandboxes, profiles, credentials, schedules.
-- [Workflows](docs/workflows.md): feature, review, maintenance, Chat, digest and cleanup, with diagrams.
-- [Operations and onboarding](docs/operations.md): new instance, safe changes, pause and stop, stuck cards, logs, glossary.
+- [Infrastructure](docs/infrastructure.md): instances, containers, sandboxes, profiles, credentials, schedules, knowledge.
+- [Workflows](docs/workflows.md): feature, review, maintenance, Chat, digest, cleanup, and knowledge search and memories, with diagrams.
+- [Operations and onboarding](docs/operations.md): new instance, safe changes, pause and stop, stuck cards, logs, knowledge index, glossary.
 - [Decisions](docs/decisions/).
 
 ## Running it

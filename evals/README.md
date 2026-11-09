@@ -49,6 +49,15 @@ python3 evals/test_profile_config.py
 
 Checks the installer applies what a repo profile declares, and that the shipped profiles declare the toolsets their jobs need. It used to copy only the model block, so the orchestrator ran a whole feature without the kanban toolset: able to reason about a card graph and unable to create one, with nothing erroring to say so.
 
+## Knowledge tests
+
+```bash
+python3 evals/test_knowledge_service.py
+python3 evals/test_refresh_knowledge.py
+```
+
+The first checks install and compose wiring: the index config has both collections and no query-expansion model, the token never appears on a command line, the service is unpublished and runs only when `COMPOSE_PROFILES` selects it. The second runs the real `refresh-knowledge` against a local git repository with `qmd` stubbed: it fast-forwards and re-indexes; a failed fetch keeps the index and records the error; a failed first clone is retried; refreshes are serialized. The lock test needs `flock`, so run that file in the knowledge image to cover it; on macOS it skips.
+
 ## What each group is for
 
 | Group | Claim under test |
