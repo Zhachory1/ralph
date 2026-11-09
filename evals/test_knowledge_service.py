@@ -72,6 +72,12 @@ class KnowledgeServiceTests(unittest.TestCase):
         self.assertIn("knowledge:/var/lib/ralph-knowledge", svc["volumes"])
         self.assertIn("knowledge", COMPOSE["volumes"])
 
+    def test_service_does_not_start_unless_selected(self):
+        """#122 review: RALPH_KNOWLEDGE=0 must actually leave it out."""
+        self.assertEqual(["knowledge"], COMPOSE["services"]["knowledge"]["profiles"])
+        example = (ROOT / "compose" / ".env.example").read_text()
+        self.assertIn("COMPOSE_PROFILES=knowledge", example)
+
     def test_dockerfile_pins_qmd_and_forces_cpu(self):
         text = (ROOT / "compose" / "Dockerfile.knowledge").read_text()
         self.assertIn("ARG QMD_VERSION=2.8.3", text)

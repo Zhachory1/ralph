@@ -278,9 +278,13 @@ services:
 
   # knowledge: QMD over this instance's docs repository, served to profiles as
   # an HTTP MCP server (#121, dd-ralph-knowledge D1). One process loads the
-  # models once; nothing is published to the host. Off: RALPH_KNOWLEDGE=0
-  # (install then skips it and adds no MCP server).
+  # models once; nothing is published to the host. Off: RALPH_KNOWLEDGE=0 and
+  # drop "knowledge" from COMPOSE_PROFILES; the service then never starts and
+  # install skips it.
   knowledge:
+    # In the default compose profile only when RALPH_KNOWLEDGE is not 0:
+    # COMPOSE_PROFILES in the env file selects it (see .env.example).
+    profiles: ["knowledge"]
     image: ghcr.io/zhachory1/ralph-knowledge:${RALPH_VERSION:-dev}
     build:
       context: ..
