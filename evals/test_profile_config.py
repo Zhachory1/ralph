@@ -81,6 +81,7 @@ class ApplyTests(unittest.TestCase):
 ALL = (
     "orchestrator", "author", "reviewer", "builder", "researcher",
     "analyst", "experimenter", "auditor", "watcher", "chat-maintainer",
+    "librarian",
 )
 
 
@@ -129,6 +130,32 @@ class DeclarationTests(unittest.TestCase):
         for name in ("researcher", "analyst", "watcher"):
             self.assertNotIn("code_execution", self.toolsets(name), name)
 
+    def test_librarian_has_terminal_and_not_code_execution(self):
+        """#130, D-A: it pushes a branch through terminal/gh; it has nothing
+        to compute, so code_execution is withheld rather than left unused."""
+        declared = self.toolsets("librarian")
+        self.assertIn("terminal", declared)
+        self.assertNotIn("code_execution", declared)
+
+    def test_librarian_pushes_with_the_maintain_token(self):
+        """#130, D-A: the librarian reuses RALPH_MAINTAIN_TOKEN, like the
+        author, builder and maintainer, and keeps it rather than losing it
+        to the read-token sweep."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        push_block = install[install.index("for profile in ralph-maintainer"):]
+        push_block = push_block[:push_block.index("done'")]
+        self.assertIn("ralph-librarian", push_block)
+        self.assertIn("*/ralph-librarian/*", install)
+
+    def test_librarian_does_not_get_the_repo_cache_mount(self):
+        """dd-ralph-librarian 4.2: the cache spans every repository the
+        instance has touched; the librarian needs one small repository and
+        clones it instead."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        block = install[install.index("repo_cache_profile() {"):]
+        block = block[:block.index("}")]
+        self.assertNotIn("librarian", block)
+
     def test_every_profile_can_reach_github_from_a_terminal(self):
         """docs/decisions/0001: every profile can use gh. terminal is the toolset
         that carries the forwarded token; code_execution scrubs it."""
@@ -150,7 +177,8 @@ class DeclarationTests(unittest.TestCase):
     def test_general_profiles_reach_the_board(self):
         """#105: every profile that is not a narrow machine job has kanban."""
         for name in ("analyst", "auditor", "author", "builder", "experimenter",
-                     "maintainer", "orchestrator", "researcher", "reviewer", "watcher"):
+                     "maintainer", "orchestrator", "researcher", "reviewer", "watcher",
+                     "librarian"):
             with self.subTest(profile=name):
                 self.assertIn("kanban", self.toolsets(name))
 
@@ -259,7 +287,7 @@ class VoiceTests(unittest.TestCase):
         block = install[install.index("knowledge_profile() {"):]
         block = block[:block.index("}")]
         for name in ("orchestrator", "author", "builder", "maintainer", "researcher",
-                     "reviewer", "analyst", "experimenter", "auditor", "watcher"):
+                     "reviewer", "analyst", "experimenter", "auditor", "watcher", "librarian"):
             self.assertIn(name, block)
         for name in ("lens-", "review-synthesis", "chat-maintainer", "chat-summarizer", "inbox-drafter"):
             self.assertNotIn(name, block)
