@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# The knowledge index's health (#121, dd-ralph-knowledge D8): collections,
+# document and vector counts, models, and the last refresh. Run on the host.
+#
+#   bootstrap/knowledge-status <RALPH_INSTANCE>   e.g. ralph, ralph-personal
+set -euo pipefail
+c="${1:?usage: knowledge-status <RALPH_INSTANCE>}-knowledge-1"
+docker exec "$c" sh -c 'qmd status 2>/dev/null; echo; echo "Refresh: $(cat "$KNOWLEDGE_ROOT/status.json" 2>/dev/null || echo never)"'

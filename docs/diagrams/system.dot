@@ -96,7 +96,8 @@ digraph ralph {
       skills  [label="Skills\npublic lanes: code, debug, plan,\nreview, write, ops, ui, voice, meta\nprivate overlay: code, write, analysis"];
       cache   [label="repo cache (read-only)\ngit show / git grep, clone --reference", shape=cylinder];
       evidence[label="staged evidence\nreview-work, chat-inbox", shape=cylinder];
-      docsrepo[label="docs repo (RALPH_DOCS_REPO)\nPRD + design PRs", shape=cylinder];
+      docsrepo[label="docs repo (RALPH_DOCS_REPO)\nPRD + design + plan PRs\nmemory/ notes (direct writes)", shape=cylinder];
+      knowledge[label="knowledge service (QMD)\nindex: docs repo + docs/\nHTTP MCP, hourly refresh", shape=cylinder];
       decisions[label="docs/: decisions, infrastructure,\nworkflows, operations"];
     }
 
@@ -111,10 +112,7 @@ digraph ralph {
     subgraph cluster_planned {
       label="Planned / not wired"; style="rounded,dashed"; color="#999999"; fontcolor="#777777";
       redmine [label="Redmine (work)\nprivate issue tracking\nDD awaiting approval", style="rounded,dashed", fontcolor="#777777"];
-      memory  [label="Agent memory\n(disabled on all profiles)", style="rounded,dashed", fontcolor="#777777"];
-      mcps    [label="Shared MCP set\n(install does not copy mcp_servers)", style="rounded,dashed", fontcolor="#777777"];
       hub     [label="Rokt Hub / Docshare\ndocument publishing", style="rounded,dashed", fontcolor="#777777"];
-      rag     [label="Document RAG\n(beyond repo cache)", style="rounded,dashed", fontcolor="#777777"];
     }
   }
 
@@ -159,5 +157,6 @@ digraph ralph {
   synth -> lenstools [style=dotted, ltail=cluster_review, label="restricted MCP"];
   chatreply -> gws [style=dotted];
   souls -> dispatch [style=dotted, ltail=cluster_context, label="loaded into every card"];
-  redmine -> orch [style=dashed, color="#999999", ltail=cluster_planned, label="planned: tracking, memory,\nMCPs, publishing, RAG"];
+  docsrepo -> knowledge [style=dotted, label="indexed"];
+  redmine -> orch [style=dashed, color="#999999", ltail=cluster_planned, label="planned: tracking, publishing"];
 }

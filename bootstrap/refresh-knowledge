@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Bring this instance's knowledge index up to date (#121, dd-ralph-knowledge D3):
+# fast-forward the docs checkout, re-index, embed what changed, record the
+# outcome in status.json. Runs inside the knowledge container: hourly from the
+# review loop, and at the end of knowledge-init. A failure leaves the previous
+# index answering and records the error, keeping last_success as it was. A
+# fetch failure also keeps the checkout; after a successful pull, a failed
+# update or embed leaves the checkout ahead of the index, and the next refresh
+# indexes it (qmd update compares files, not commits).
+#
+#   GH_TOKEN         read token, passed by name; never on a command line
+#   KNOWLEDGE_REPO   owner/name to clone when there is no checkout yet
+set -uo pipefail
+
+ROOT=${KNOWLEDGE_ROOT:-/var/lib/ralph-knowledge}
+STATUS="$ROOT/status.json"
+
+# One refresh at a time (init and the hourly loop can overlap, #125 review):
+# the second waits, then finds little left to do.
+exec 9>"$ROOT/.refresh.lock"
+flock 9
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+last_success=$(sed -n 's/.*"last_success": *"\([^"]*\)".*/\1/p' "$STATUS" 2>/dev/null)
+
+record() {  # record <error or empty>
+    local ok=true err=${1:-} head
+    [ -z "$err" ] || ok=false
+    [ "$ok" = false ] || last_success=$now
+    head=$(git -C "$ROOT/repo" rev-parse --short HEAD 2>/dev/null || true)
+    printf '{"last_attempt": "%s", "last_success": "%s", "ok": %s, "head": "%s", "error": "%s"}\n' \
+        "$now" "$last_success" "$ok" "$head" "${err//\"/\'}" > "$STATUS.tmp" && mv "$STATUS.tmp" "$STATUS"
+    [ "$ok" = true ]
+}
+
+git_auth=(-c credential.helper= -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; }; f')
+if [ -d "$ROOT/repo/.git" ]; then
+    git "${git_auth[@]}" -C "$ROOT/repo" pull -q --ff-only 2>/dev/null \
+        || { record "fetch failed; kept the previous checkout and index"; exit 1; }
+elif [ -n "${KNOWLEDGE_REPO:-}" ]; then
+    # First clone, or a retry after one failed (#125 review).
+    rm -rf "$ROOT/repo" && git "${git_auth[@]}" clone -q "https://github.com/$KNOWLEDGE_REPO.git" "$ROOT/repo" 2>/dev/null \
+        || { mkdir -p "$ROOT/repo"; record "clone of the docs repository failed; retrying next refresh"; exit 1; }
+fi
+qmd update >/dev/null 2>&1 || { record "qmd update failed; the previous index still answers"; exit 1; }
+qmd embed >/dev/null 2>&1 || { record "qmd embed failed; new text is keyword-searchable only"; exit 1; }
+record ""
