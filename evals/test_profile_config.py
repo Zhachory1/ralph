@@ -428,6 +428,22 @@ class VoiceTests(unittest.TestCase):
             self.assertIn("other: 1", cfg.read_text())
             self.assertIn("mine:", cfg.read_text())
 
+    def test_atomic_write_keeps_owner_and_mode(self):
+        """#134: as root, a renamed temp file would be root-owned and lock
+        Hermes out of a 640 config. Owner and mode carry over."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("a: 1\n")
+            cfg.chmod(0o640)
+            st = cfg.stat()
+            with mock.patch.object(wpc.os, "chown") as chown:
+                wpc.write_atomic(cfg, "a: 2\n")
+            chown.assert_called_once()
+            self.assertEqual((st.st_uid, st.st_gid), chown.call_args.args[1:])
+            self.assertEqual(0o640, cfg.stat().st_mode & 0o777)
+            self.assertEqual("a: 2\n", cfg.read_text())
+
     def test_overlay_mcp_server_names_are_plain(self):
         """#134 review: a comma or space would break install's name record."""
         import json
