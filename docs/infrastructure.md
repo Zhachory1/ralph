@@ -119,7 +119,7 @@ Cron jobs can also be created from the WebUI's Crons panel; pick the Ralph profi
 
 ## Knowledge
 
-One QMD index per instance over two collections: `docs` (a checkout of `RALPH_DOCS_REPO`) and `ralph` (this repo's `docs/`). Agents search it through the MCP tools and cite what they used. They write memories as single files under `memory/` in the docs repo, directly on its default branch (PRINCIPLES, "Write down what lasts"). Install writes `RALPH_DOCS_REPO` and `RALPH_DOCS_PUBLIC` into every profile; a public docs repo (or one whose visibility cannot be read) gets the public-safety rule. Models (embeddinggemma-300M, qwen3-reranker-0.6b) run locally; there is no query-expansion model and no cloud call. A re-ranked query takes ~30–45 s on CPU; `rerank: false` takes under a second.
+One QMD index per instance over two collections: `docs` (a checkout of `RALPH_DOCS_REPO`) and `ralph` (this repo's `docs/`). Agents search it through the MCP tools and cite what they used. They write memories as single files under `memory/` in the docs repo, directly on its default branch (PRINCIPLES, "Write down what lasts"). Install writes `RALPH_DOCS_REPO` and `RALPH_DOCS_PUBLIC` into every profile; a public docs repo (or one whose visibility cannot be read) gets the public-safety rule. Models (embeddinggemma-300M, qwen3-reranker-0.6b) run locally; there is no query-expansion model and no cloud call. Agents search with typed `searches` and `rerank: false` (PRINCIPLES), about a second per query. Re-ranking takes minutes on CPU (108–239 s measured), so it is only for the rare case where fast results look wrong. A plain-text `query` is never used: it loads the 1.3 GB expansion model.
 
 ## Private overlay
 

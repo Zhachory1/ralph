@@ -126,7 +126,7 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 
 **Entry:** any card or WebUI chat on a profile with the knowledge tools. **Exit:** an answer that cites documents, and maybe one memory note. **Owners:** the knowledge service, `refresh-knowledge`, every searching profile.
 
-- **Search:** `query` with typed searches (`lex` keywords, `vec` meaning) over `docs` and `ralph`; `get` / `multi_get` read a hit in full. No query expansion runs.
+- **Search:** `query` with typed searches (`lex` keywords, `vec` meaning) and `rerank: false` over `docs` and `ralph`, about a second; `get` / `multi_get` read a hit in full. Re-ranking is the exception (minutes on CPU). A plain-text `query` is never used: it runs query expansion.
 - **Write:** at completion, a lasting finding becomes one file, `memory/<kind>/<date>-<slug>-<card>.md`, written with a single `gh api -X PUT contents` on the docs repo's default branch. With `RALPH_DOCS_PUBLIC=1`, a note that would name people, employers, spaces, private repositories, message content or secrets is not written; the completion says why.
 - **Refresh:** review-loop runs `refresh-knowledge` at most hourly. It fast-forwards the checkout, runs `qmd update` and `qmd embed`, and writes `status.json`. A new memory is searchable within the hour.
 
