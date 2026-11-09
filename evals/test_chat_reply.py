@@ -4,9 +4,11 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -53,11 +55,28 @@ class ChatReplyTests(unittest.TestCase):
         }
         self.calls = []
         self.reply = load_script()
+        # No webhook configured: notify() must print, not reach the network.
+        env_patch = patch.dict(os.environ, {"RALPH_NOTIFY_URL": "", "GCHAT_WEBHOOK_URL": ""})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
 
     def write_item(self):
         path = self.evidence / "item.json"
         path.write_text(json.dumps(self.item))
         path.chmod(0o600)
+
+    def make_operation(self, message, prior=()):
+        """A second operation in the same thread, chained to `prior` operations."""
+        op = "chat-" + hashlib.sha256(message.encode()).hexdigest()
+        evidence = self.root / op / "evidence"
+        evidence.mkdir(parents=True)
+        item = {"kind": "inbound", "sender_trusted": True, "space": "spaces/example",
+                "thread": THREAD, "messages": [{"name": message, "text": "another message"}],
+                "prior_operations": list(prior)}
+        path = evidence / "item.json"
+        path.write_text(json.dumps(item))
+        path.chmod(0o600)
+        return op
 
     def command(self, argv):
         self.calls.append(argv)
@@ -72,12 +91,17 @@ class ChatReplyTests(unittest.TestCase):
             }), "")
         if "/ralph/bootstrap/chat-route" in argv:
             return subprocess.CompletedProcess(argv, 0, "routed: t_orchestrator\n", "")
+        if "block" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
         if "send" in argv:
             return subprocess.CompletedProcess(argv, 0, json.dumps({"sent": True}), "")
         raise AssertionError(argv)
 
     def sends(self):
         return [a for a in self.calls if "send" in a and "/ralph/bootstrap/chat-route" not in a]
+
+    def blocks(self):
+        return [a for a in self.calls if "block" in a]
 
     def handle(self, board, task_id):
         with patch.object(self.reply, "command", side_effect=self.command):
@@ -248,6 +272,108 @@ class ChatReplyTests(unittest.TestCase):
                     "decision": "reply", "reply_kind": reply_kind, "body": "some reply text"}
                 self.assertEqual(0, self.scan())
         self.assertEqual([], self.sends())
+
+    def test_third_clarify_in_one_thread_refuses_and_blocks_card(self):
+        """A17: at most 2 clarify per thread; counts span prior_operations directories."""
+        del self.cards[("ralph", "t_final")]
+        first = self.make_operation("spaces/example/messages/two")
+        (self.root / first / ".clarify-sent").touch()
+        second = self.make_operation("spaces/example/messages/three", prior=[first])
+        (self.root / second / ".clarify-sent").touch()
+        third = self.make_operation("spaces/example/messages/four", prior=[first, second])
+        self.cards[("queues", "t_third")] = {
+            "task": {"id": "t_third", "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": f"operation_id: {third}\n",
+                     "workspace_path": f"/workspaces/chat-inbox/{third}"},
+            "metadata": {"decision": "reply", "reply_kind": "clarify", "body": "which one do you mean?"}}
+        self.assertEqual(2, self.handle("queues", "t_third"))
+        self.assertEqual([], self.sends())
+        self.assertFalse((self.root / third / ".clarify-sent").is_file())
+        self.assertEqual(1, len(self.blocks()))
+        self.assertEqual("t_third", self.blocks()[0][self.blocks()[0].index("block") + 1])
+
+    def test_second_decline_in_one_thread_refuses_and_blocks_card(self):
+        """A15/R7: at most 1 decline per thread; counts span prior_operations directories."""
+        del self.cards[("ralph", "t_final")]
+        first = self.make_operation("spaces/example/messages/two")
+        (self.root / first / ".decline-sent").touch()
+        second = self.make_operation("spaces/example/messages/three", prior=[first])
+        self.cards[("queues", "t_second")] = {
+            "task": {"id": "t_second", "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": f"operation_id: {second}\n",
+                     "workspace_path": f"/workspaces/chat-inbox/{second}"},
+            "metadata": {"decision": "reply", "reply_kind": "decline", "body": "I can't help with that."}}
+        self.assertEqual(2, self.handle("queues", "t_second"))
+        self.assertEqual([], self.sends())
+        self.assertEqual(1, len(self.blocks()))
+
+    def test_held_or_absent_marker_does_not_count_toward_a_ceiling(self):
+        other = self.make_operation("spaces/example/messages/two")
+        item = {"prior_operations": []}
+        self.assertEqual(0, self.reply.thread_count(self.root, other, item, "clarify"))
+        (self.root / other / ".held-clarify").touch()
+        self.assertEqual(0, self.reply.thread_count(self.root, other, item, "clarify"))
+        (self.root / other / ".clarify-sent").touch()
+        self.assertEqual(1, self.reply.thread_count(self.root, other, item, "clarify"))
+
+    def test_two_operations_in_one_thread_serialize_on_the_thread_lock(self):
+        order = []
+        first_holds = threading.Event()
+        let_first_release = threading.Event()
+
+        def first():
+            with self.reply.thread_lock(self.root, THREAD):
+                order.append("first-acquired")
+                first_holds.set()
+                let_first_release.wait(timeout=5)
+                order.append("first-released")
+
+        worker = threading.Thread(target=first)
+        worker.start()
+        self.assertTrue(first_holds.wait(timeout=5))
+        let_first_release.set()
+        with self.reply.thread_lock(self.root, THREAD):
+            order.append("second-acquired")
+        worker.join(timeout=5)
+        self.assertEqual(["first-acquired", "first-released", "second-acquired"], order)
+
+    def test_refusal_blocks_once_and_alerts_once_across_scans(self):
+        """A second scan over the same operation and kind must not alert again."""
+        del self.cards[("ralph", "t_final")]
+        other = self.make_operation("spaces/example/messages/two")
+        (self.root / other / ".decline-sent").touch()
+        third = self.make_operation("spaces/example/messages/three", prior=[other])
+        self.cards[("queues", "t_third")] = {
+            "task": {"id": "t_third", "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": f"operation_id: {third}\n",
+                     "workspace_path": f"/workspaces/chat-inbox/{third}"},
+            "metadata": {"decision": "reply", "reply_kind": "decline", "body": "no."}}
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(2, self.handle("queues", "t_third"))
+            self.assertEqual(2, self.handle("queues", "t_third"))
+        self.assertEqual(1, notify.call_count)
+        self.assertEqual(1, len(self.blocks()))
+
+    def test_retryable_failure_blocks_once_and_alerts_once_across_scans(self):
+        """A second scan over the same operation and kind must not alert again."""
+        (self.root / self.op / ".receipt-sent").touch()
+
+        def failing_send(argv):
+            if "send" in argv and "/ralph/bootstrap/chat-route" not in argv:
+                return subprocess.CompletedProcess(argv, 1, "", "boom")
+            return self.command(argv)
+
+        with patch.object(self.reply, "command", side_effect=failing_send), \
+                patch.object(self.reply, "notify") as notify:
+            self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "ralph", "t_final"))
+            self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "ralph", "t_final"))
+        self.assertEqual(1, notify.call_count)
+        self.assertEqual(1, len(self.blocks()))
+
+    def test_notify_with_no_webhook_prints_and_does_not_raise(self):
+        self.reply.notify("a test alert")
 
 
 if __name__ == "__main__":
