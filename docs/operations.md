@@ -52,7 +52,7 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | Chat reply sender | `~/Library/Logs/ralph-chat-reply-<instance>.{log,err.log}` |
 | A card's run | `docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> show <id> --json` |
 | Disk | `colima ssh -- df -h /` and `du -sh compose/workspaces*/sandboxes` |
-| Knowledge index | `bootstrap/knowledge-status <instance>`: collections, counts, models, last refresh (`status.json`) |
+| Knowledge index | `bootstrap/knowledge-status <instance>` (the `RALPH_INSTANCE`, e.g. `ralph-personal`): collections, counts, models, last refresh (`status.json`) |
 
 ## Knowledge index
 
