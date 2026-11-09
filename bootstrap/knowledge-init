@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Prepare this instance's knowledge index (#121, dd-ralph-knowledge D2).
+# Runs inside the knowledge container, from bootstrap/install. Idempotent.
+#
+#   KNOWLEDGE_REPO   owner/name of RALPH_DOCS_REPO (blank: index Ralph docs only)
+#   GH_TOKEN         read token, passed by name; never on a command line
+set -euo pipefail
+
+ROOT=${KNOWLEDGE_ROOT:-/var/lib/ralph-knowledge}
+mkdir -p "$ROOT/repo" "$QMD_CONFIG_DIR" "$(dirname "$INDEX_PATH")"
+
+# The docs repository checkout. gh is not in this image; git reads the token
+# through a credential helper that echoes the environment variable.
+git_auth=(-c credential.helper= -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; }; f')
+if [ -n "${KNOWLEDGE_REPO:-}" ]; then
+    if [ ! -d "$ROOT/repo/.git" ]; then
+        rm -rf "$ROOT/repo" && git "${git_auth[@]}" clone -q "https://github.com/$KNOWLEDGE_REPO.git" "$ROOT/repo"
+    else
+        git "${git_auth[@]}" -C "$ROOT/repo" pull -q --ff-only || echo "knowledge: pull failed, keeping the current checkout" >&2
+    fi
+fi
+
+# index.yml: rewritten every run, so it always matches this script.
+cat > "$QMD_CONFIG_DIR/index.yml" <<YAML
+global_context: "Ralph's knowledge: documents, decisions, run reports and memories for this instance."
+models:
+  embed: "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf"
+  rerank: "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf"
+collections:
+  docs:
+    path: $ROOT/repo
+    pattern: "**/*.md"
+    context:
+      "/": "This instance's docs repository: PRDs, designs, implementation plans, decision records, run reports and memories."
+      "/projects": "One folder per feature: its PRD, design and implementation plan."
+      "/areas": "Ongoing responsibilities."
+      "/resources": "Reference material."
+      "/archives": "Finished work; check status before trusting it."
+      "/memory": "Notes agents wrote as they worked: decisions, root causes, conventions, rejected approaches, run reports."
+  ralph:
+    path: /ralph/docs
+    pattern: "**/*.md"
+    context:
+      "/": "How Ralph itself is built and operated: infrastructure, workflows, operations and decisions."
+YAML
+
+qmd update >/dev/null
+# Embeds only what changed; downloads the embed model on first use. The
+# re-rank model downloads on the first query. Expansion is never used.
+qmd embed >/dev/null
+qmd status | grep -E 'Total:|Vectors:' || true

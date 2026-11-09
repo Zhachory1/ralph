@@ -68,6 +68,10 @@ services:
         condition: service_started
       hermes:
         condition: service_started
+      # Optional: install only indexes when knowledge is running.
+      knowledge:
+        condition: service_started
+        required: false
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
@@ -76,6 +80,8 @@ services:
       RALPH_MAX_IN_PROGRESS: ${RALPH_MAX_IN_PROGRESS:-6}
       RALPH_SANDBOX_MEMORY_MB: ${RALPH_SANDBOX_MEMORY_MB:-3072}
       RALPH_SANDBOX_ROOT: ${RALPH_SANDBOX_ROOT}
+      RALPH_KNOWLEDGE: ${RALPH_KNOWLEDGE:-1}
+      RALPH_KNOWLEDGE_CONTAINER: ${RALPH_INSTANCE:-ralph}-knowledge-1
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
@@ -270,6 +276,30 @@ services:
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
     restart: unless-stopped
 
+  # knowledge: QMD over this instance's docs repository, served to profiles as
+  # an HTTP MCP server (#121, dd-ralph-knowledge D1). One process loads the
+  # models once; nothing is published to the host. Off: RALPH_KNOWLEDGE=0
+  # (install then skips it and adds no MCP server).
+  knowledge:
+    image: ghcr.io/zhachory1/ralph-knowledge:${RALPH_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.knowledge
+    environment:
+      # Hermes reaches it as http://knowledge:8181/mcp on the compose network.
+      QMD_ALLOWED_HOSTS: knowledge
+      # One embedding/re-rank context: on CPU each extra context costs memory
+      # and buys no speed (the cores are shared).
+      QMD_EMBED_PARALLELISM: "1"
+    volumes:
+      # Checkout, index and models: survives restarts and upgrades, and is
+      # separate per instance so personal and work never mix.
+      - knowledge:/var/lib/ralph-knowledge
+      - ../docs:/ralph/docs:ro
+      - ../bootstrap:/ralph/bootstrap:ro
+    mem_limit: 4g
+    restart: unless-stopped
+
   # hermes-webui: a chat space for talking with the agents, alongside the
   # dashboard above rather than in place of it. Shares hermes-home with the
   # hermes service so it sees the same profiles, board, and sessions; the
@@ -358,3 +388,5 @@ volumes:
   hermes-agent-src:
   # hermes-webui's own sessions, workspaces and uploads.
   hermes-webui-state:
+  # The knowledge service's docs checkout, QMD index and models (#121).
+  knowledge:
