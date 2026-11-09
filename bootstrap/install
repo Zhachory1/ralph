@@ -89,6 +89,12 @@ hermes config set kanban.auto_decompose false >/dev/null
 # resolves the path on the host, so both sides see one directory (#97). A
 # per-instance root also keeps personal and work sandboxes apart (#77).
 : "${RALPH_SANDBOX_ROOT:?set RALPH_SANDBOX_ROOT to an absolute host path}"
+# Where hermes-webui stores chat uploads (HERMES_WEBUI_ATTACHMENT_DIR, #128).
+# Created through the hermes container, which mounts the sandbox root (init
+# does not), so the bind source exists before a sandbox mounts it.
+ATTACH_DIR="$RALPH_SANDBOX_ROOT/.webui-attachments"
+[ -z "${RALPH_HERMES_CONTAINER:-}" ] \
+    || docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p "$ATTACH_DIR" || true
 sandbox_config() {
     hermes $1 config set terminal.sandbox_dir "$RALPH_SANDBOX_ROOT/$2" >/dev/null
     # Ralph's image adds git and gh to the stock sandbox and nothing else;
@@ -102,10 +108,12 @@ sandbox_config() {
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
     # The default profile (the WebUI chat) browses the repo cache read-only,
-    # like the researcher (owner decision 2026-11-05).
-    if [ -n "$REPO_CACHE_SRC" ]; then
-        hermes $1 config set terminal.docker_volumes "[\"$REPO_CACHE_SRC:/repo-cache:ro\"]" >/dev/null
-    fi
+    # like the researcher (owner decision 2026-11-05), and reads chat uploads
+    # read-only at the path hermes-webui hands it (#128). Uploads are the
+    # default profile's alone: no other profile's sandbox mounts them.
+    local vols="\"$ATTACH_DIR:$ATTACH_DIR:ro\""
+    [ -z "$REPO_CACHE_SRC" ] || vols="\"$REPO_CACHE_SRC:/repo-cache:ro\",$vols"
+    hermes $1 config set terminal.docker_volumes "[$vols]" >/dev/null
 }
 # Profiles that see /repo-cache: the three that clone through it, and the
 # researcher, which browses it read-only (owner decision 2026-11-05; the
@@ -320,6 +328,14 @@ for dir in "$PROFILES_DIR"/*/; do
           knowledge_profile "$base" && knowledge_block; } > "$SRC_TMP"
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
+# The default profile's SOUL (the WebUI chat) is the global one, built like
+# every profile's: PRINCIPLES + STANDARDS + its own text (#128). Its own text
+# lives beside PRINCIPLES, not in profiles/<name>/, which would create a
+# separate ralph-default profile.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$PROFILES_DIR/STANDARDS.md"; printf '\n'; cat "$PROFILES_DIR/DEFAULT_SOUL.md"; } |
+        docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "${HERMES_HOME:-$HOME/.hermes}/SOUL.md"
+fi
 # The default profile (the WebUI chat) searches too. Its config is the global
 # one, which may hold servers the owner added: add or remove only the
 # `knowledge` entry, leaving every other server as it is (#123 review).

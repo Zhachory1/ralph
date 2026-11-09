@@ -76,12 +76,13 @@ flowchart LR
 | `/repo-cache` (the instance's clone cache) | author, builder, maintainer, researcher, default |
 | `/workspaces/review-work` (staged review evidence) | the four lenses, review-synthesis |
 | `/workspaces/chat-inbox` (staged chat evidence) | chat-maintainer |
+| `$RALPH_SANDBOX_ROOT/.webui-attachments` (WebUI chat uploads, at the path the chat names) | default only. It copies what a task needs into the card; no other profile reads uploads (#128). |
 
 The sandbox cannot see the host, the Docker socket, the board or another profile's files; `evals/test_sandbox_isolation.py` checks this against a live sandbox.
 
 ## Profiles
 
-Every profile's SOUL starts with `profiles/PRINCIPLES.md` and `profiles/STANDARDS.md`, then its own `SOUL.md`. The table in the [README](../README.md#profiles-exist-at-permission-boundaries) lists what each may change. Tools differ by role:
+Every profile's SOUL starts with `profiles/PRINCIPLES.md` and `profiles/STANDARDS.md`, then its own `SOUL.md`. The WebUI `default` profile's own text is `profiles/DEFAULT_SOUL.md`, written to the global `SOUL.md`. The table in the [README](../README.md#profiles-exist-at-permission-boundaries) lists what each may change. Tools differ by role:
 
 - **Kanban tools:** every general profile and the WebUI `default` profile. The lenses, review-synthesis, chat-maintainer, chat-summarizer and inbox-drafter do not have them, by design.
 - **Knowledge (`mcp_servers.knowledge`: query, get, multi_get, status):** the general profiles and `default`, when the knowledge service runs. Not the lenses, review-synthesis, chat-maintainer, chat-summarizer or inbox-drafter.
