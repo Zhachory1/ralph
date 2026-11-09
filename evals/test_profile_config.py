@@ -194,6 +194,57 @@ class DeclarationTests(unittest.TestCase):
             self.assertNotIn(needle, text.replace("HERMES_KANBAN", ""), needle)
 
 
+class ChatTokenDietTests(unittest.TestCase):
+    """The WebUI chat (the default profile) resends its whole prompt on every
+    model call, so what it never uses is paid for on each one: tool schemas
+    and a skills index of everything Hermes bundles."""
+
+    INSTALL = (ROOT / "bootstrap" / "install").read_text()
+    DISABLED = ROOT / "profiles" / "default-disabled-skills.txt"
+
+    def names(self) -> list[str]:
+        return [line.strip() for line in self.DISABLED.read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith("#")]
+
+    def test_install_disables_the_toolsets_the_chat_cannot_use(self):
+        """browser needs a docker daemon the chat does not have; tts and
+        vision are not used from chat. Disabled on the cli platform, which
+        is the one hermes-webui reads."""
+        self.assertIn("hermes tools disable browser tts vision", self.INSTALL)
+
+    def test_install_keeps_the_board_after_disabling_toolsets(self):
+        """The cut must not take the board with it: #105."""
+        self.assertIn("hermes tools enable kanban", self.INSTALL)
+        self.assertNotRegex(self.INSTALL, r"hermes tools disable[^\n]*kanban")
+
+    def test_install_applies_the_disabled_skill_list_to_the_default_profile(self):
+        self.assertIn("default-disabled-skills.txt", self.INSTALL)
+        self.assertIn("config set skills.disabled", self.INSTALL)
+
+    def test_the_google_workspace_wrappers_are_disabled_but_the_hub_stays(self):
+        names = self.names()
+        gws = [n for n in names if n.startswith("gws-")]
+        self.assertGreaterEqual(len(gws), 15)
+        self.assertNotIn("google-workspace", names)
+
+    def test_the_skills_the_chat_works_with_are_not_disabled(self):
+        names = self.names()
+        for kept in ("github", "ralph-contributing", "sdlc-review", "docx", "pdf",
+                     "xlsx", "systematic-debugging", "requesting-code-review",
+                     "test-driven-development", "grounded-citations"):
+            self.assertNotIn(kept, names, kept)
+
+    def test_the_disabled_skill_list_has_no_duplicates(self):
+        names = self.names()
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_skill_names_are_safe_to_embed_in_json(self):
+        """install builds the JSON list in shell; a quote or backslash in a
+        name would corrupt it silently."""
+        for name in self.names():
+            self.assertRegex(name, r"^[a-z0-9][a-z0-9._-]*$", name)
+
+
 class VoiceTests(unittest.TestCase):
     """Every profile is Ralph, mounts the voice lane, and writes for its
     reader: lenses talk to agents (caveman), everything else may reach a

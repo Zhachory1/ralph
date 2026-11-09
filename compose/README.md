@@ -154,6 +154,16 @@ intended, not a gap. Bigger, autonomous work — anything that ends in a pull re
 card to the builder, so it runs in the builder's sandbox. The chat's profile switcher can select any
 profile, including the builder, and a profile picked there runs outside its sandbox.
 
+**The chat's prompt is kept small on purpose.** The chat resends its whole prompt on every model
+call, so a tool schema or skills-index entry it never uses is paid for on each one. `bootstrap/install`
+therefore runs `hermes tools disable browser tts vision` for the default profile (the `cli` platform,
+which hermes-webui reads; kanban stays on) and writes `profiles/default-disabled-skills.txt` to
+`skills.disabled`, hiding about 58 bundled skills (the `gws-*` wrappers, creative, media and the like).
+Nothing is deleted: edit the file and re-run install to bring a skill back, or
+`hermes tools enable <name>` for a toolset. Both take effect in a new chat, not mid-conversation,
+because changing tools or skills mid-chat breaks Anthropic's prompt cache. Vision is off, so a chat
+cannot look at an image attachment; enable it again if that matters more than its schema.
+
 ## Upgrading
 
 Bump `HERMES_VERSION` or `RALPH_VERSION` in `.env`, then:

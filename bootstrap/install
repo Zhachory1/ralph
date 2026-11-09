@@ -203,6 +203,20 @@ sandbox_config "" default
 # The default profile is the WebUI chat. It plans and hands off work like the
 # orchestrator, so it gets the board (#105); Hermes ships it disabled.
 hermes tools enable kanban >/dev/null
+# The chat resends its whole prompt on every model call, so what it never uses
+# is paid for each time. browser needs a docker daemon the chat does not have,
+# and tts and vision are not used from chat. hermes-webui reads the `cli`
+# platform, which `hermes tools` edits by default. Not kanban: the line above
+# is the board, and the chat plans work through it.
+hermes tools disable browser tts vision >/dev/null
+# The same for the skills index, which lists every bundled skill. The list is a
+# file beside PRINCIPLES (not under profiles/<name>/, which would create a
+# ralph-default profile). Names are checked to be JSON-safe by the evals.
+# `|| true`: a list with every line removed is a valid choice (nothing hidden),
+# and grep exits 1 on no match, which pipefail would turn into a failed install.
+DISABLED_SKILLS=$({ grep -vE '^[[:space:]]*(#|$)' "$PROFILES_DIR/default-disabled-skills.txt" || true; } \
+    | sed 's/.*/"&"/' | paste -sd, -)
+hermes config set skills.disabled "[$DISABLED_SKILLS]" >/dev/null
 # hermes-webui runs profiles in-process and its image has no docker client;
 # give it the hermes image's own, in the shared volume (HERMES_DOCKER_BINARY).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
