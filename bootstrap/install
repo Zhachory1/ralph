@@ -318,11 +318,11 @@ for dir in "$PROFILES_DIR"/*/; do
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
 # The default profile (the WebUI chat) searches too. Its config is the global
-# one, written the same way: only the mcp_servers block, folded in.
-if [ -n "$KNOWLEDGE_ON" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    knowledge_block > "$SRC_TMP"
-    docker cp "$SRC_TMP" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
-    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+# one, which may hold servers the owner added: add or remove only the
+# `knowledge` entry, leaving every other server as it is (#123 review).
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --knowledge "${KNOWLEDGE_ON:+on}" \
+        "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
 fi
 rm -f "$SRC_TMP"
 

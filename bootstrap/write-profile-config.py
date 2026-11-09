@@ -38,6 +38,11 @@ def block_re(name: str) -> re.Pattern[str]:
 def apply_block(name: str, src: str, dst: str) -> str:
     found = block_re(name).search(src)
     if not found:
+        # mcp_servers is wholly Ralph's in a profile config: absent from the
+        # source means none, so a stale entry (knowledge after the feature is
+        # turned off) is removed. Other blocks keep Hermes' own value.
+        if name == "mcp_servers":
+            return block_re(name).sub("", dst, count=1)
         return dst
     if block_re(name).search(dst):
         return block_re(name).sub(lambda _: found.group(0), dst, count=1)
@@ -73,5 +78,38 @@ def main(src_path: str, dst_path: str) -> int:
     return 0
 
 
+KNOWLEDGE_ENTRY = (
+    "  knowledge:\n"
+    '    url: "http://knowledge:8181/mcp"\n'
+    "    enabled: true\n"
+    "    tools:\n"
+    "      include: [query, get, multi_get, status]\n"
+)
+
+
+def set_knowledge(path: str, on: bool) -> int:
+    """Add or remove only the `knowledge` server in a config's mcp_servers,
+    leaving every other server untouched (the global config can hold servers
+    the owner added by hand). Idempotent."""
+    target = pathlib.Path(path)
+    text = target.read_text() if target.exists() else ""
+    block = block_re("mcp_servers").search(text)
+    entries = block.group(0).split("\n", 1)[1] if block else ""
+    # Drop any existing knowledge entry: its header line and its deeper lines.
+    entry_re = re.compile(r"^  knowledge:\n(?:    .*\n|\s*\n)*", re.M)
+    entries = entry_re.sub("", entries)
+    if on:
+        entries += KNOWLEDGE_ENTRY
+    new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
+    if block:
+        text = text[:block.start()] + new_block + text[block.end():]
+    else:
+        text = text + new_block
+    target.write_text(text)
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1] == "--knowledge":
+        raise SystemExit(set_knowledge(sys.argv[3], sys.argv[2] == "on"))
     raise SystemExit(main(sys.argv[1], sys.argv[2]))
