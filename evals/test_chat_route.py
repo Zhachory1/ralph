@@ -171,6 +171,41 @@ class ChatRouteTests(unittest.TestCase):
         self.assertEqual(2, self.run_route())
         self.assertFalse(any("create" in c for c in self.calls))
 
+    def test_route_accepts_reply_kind_and_kind_but_still_refuses_a_sixth_key(self):
+        self.metadata["kind"] = "question"
+        self.metadata["reply_kind"] = "clarify"
+        self.assertEqual(0, self.run_route())
+        self.calls.clear()
+        self.metadata["extra"] = "nope"
+        self.assertEqual(2, self.run_route())
+        self.assertFalse(any("create" in c for c in self.calls))
+
+    def test_invalid_reply_kind_or_kind_is_refused(self):
+        self.metadata["reply_kind"] = "nonsense"
+        self.assertEqual(2, self.run_route())
+        del self.metadata["reply_kind"]
+        self.metadata["kind"] = "nonsense"
+        self.assertEqual(2, self.run_route())
+        self.assertFalse(any("create" in c for c in self.calls))
+
+    def test_update_kind_leaves_no_final_card_to_send(self):
+        """E10: an update is acknowledged and nothing more, so the brief asks for no final card."""
+        self.metadata["kind"] = "update"
+        self.assertEqual(0, self.run_route())
+        create = next(c for c in self.calls if "create" in c)
+        body = create[create.index("--body") + 1]
+        self.assertNotIn("Finish with one ralph-chat-maintainer card", body)
+
+    def test_other_actionable_kinds_still_ask_for_a_final_card(self):
+        for kind in ("question", "feature_request", "bug_investigation"):
+            with self.subTest(kind=kind):
+                self.calls.clear()
+                self.metadata["kind"] = kind
+                self.assertEqual(0, self.run_route())
+                create = next(c for c in self.calls if "create" in c)
+                body = create[create.index("--body") + 1]
+                self.assertIn("Finish with one ralph-chat-maintainer card", body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
