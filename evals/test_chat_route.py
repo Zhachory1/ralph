@@ -206,6 +206,18 @@ class ChatRouteTests(unittest.TestCase):
                 body = create[create.index("--body") + 1]
                 self.assertIn("Finish with one ralph-chat-maintainer card", body)
 
+    def test_a_route_with_no_kind_keeps_asking_for_a_final_card(self):
+        """`kind` is optional on a route (plan-chat.md PR 2). The chat-maintainer
+        on a live instance sends none until its profile is reinstalled with
+        this PR's SOUL.md, so an absent `kind` must behave as it did before:
+        ask for the final card. Only an explicit `update` suppresses it. A
+        missing kind never means update."""
+        self.metadata.pop("kind", None)
+        self.assertEqual(0, self.run_route())
+        create = next(c for c in self.calls if "create" in c)
+        body = create[create.index("--body") + 1]
+        self.assertIn("Finish with one ralph-chat-maintainer card", body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

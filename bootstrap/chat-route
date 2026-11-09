@@ -64,6 +64,9 @@ def route(task_id, work_root, source_board="queues", target_board="ralph"):
         if not isinstance(brief, str) or not brief.strip() or len(brief) > 4000:
             raise ValueError("invalid Chat route content")
         # An `update` is acknowledged and nothing more (R6, E10): no final card to send.
+        # Only an explicit `update` does this. A route with no `kind` keeps the
+        # pre-PR behaviour (ask for the final card), because a deployed
+        # chat-maintainer sends no `kind` until its profile is reinstalled.
         finish_line = "" if metadata.get("kind") == "update" else FINISH_LINE
     except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
         print(f"refused Chat route: {error}", file=sys.stderr)
