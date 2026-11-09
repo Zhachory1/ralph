@@ -251,6 +251,61 @@ class VoiceTests(unittest.TestCase):
                         install.index("# CI logs for the profiles"))
         self.assertIn('[ -f "$f" ] || { : > "$f"; chmod 600 "$f"; }', block)
 
+    def test_knowledge_goes_only_to_searching_profiles(self):
+        """#121: general profiles search the knowledge index; lenses, synthesis
+        and the chat/inbox profiles never do."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        block = install[install.index("knowledge_profile() {"):]
+        block = block[:block.index("}")]
+        for name in ("orchestrator", "author", "builder", "maintainer", "researcher",
+                     "reviewer", "analyst", "experimenter", "auditor", "watcher"):
+            self.assertIn(name, block)
+        for name in ("lens-", "review-synthesis", "chat-maintainer", "chat-summarizer", "inbox-drafter"):
+            self.assertNotIn(name, block)
+        self.assertIn("include: [query, get, multi_get, status]", install)
+
+    def test_mcp_blocks_merge_without_losing_lens_tools(self):
+        src = ("mcp_servers:\n  lens-tools:\n    command: x\n"
+               "model:\n  default: m\n"
+               "mcp_servers:\n  knowledge:\n    url: http://knowledge:8181/mcp\n")
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text(src)
+            d_path.write_text("mcp_servers:\n  old:\n    command: y\nother: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            wpc.main(str(s_path), str(d_path))
+            import yaml
+            out = yaml.safe_load(d_path.read_text())
+        self.assertEqual(["lens-tools", "knowledge"], list(out["mcp_servers"]))
+        self.assertEqual(1, out["other"])
+
+    def test_a_profile_loses_knowledge_when_the_source_has_no_mcp_servers(self):
+        """#123 review: turning the feature off removes it from profiles too."""
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text("model:\n  default: m\n")
+            d_path.write_text("mcp_servers:\n  knowledge:\n    url: x\nother: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            text = d_path.read_text()
+        self.assertNotIn("knowledge", text)
+        self.assertIn("other: 1", text)
+
+    def test_global_knowledge_toggle_keeps_other_servers(self):
+        """#123 review: the global config's own servers survive; turning the
+        feature off removes only knowledge."""
+        import yaml
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d, "config.yaml")
+            path.write_text("model:\n  default: m\nmcp_servers:\n  mine:\n    url: http://x\nother: 1\n")
+            wpc.set_knowledge(str(path), True)
+            wpc.set_knowledge(str(path), True)
+            on = yaml.safe_load(path.read_text())
+            wpc.set_knowledge(str(path), False)
+            off = yaml.safe_load(path.read_text())
+        self.assertEqual(["mine", "knowledge"], list(on["mcp_servers"]))
+        self.assertEqual(["mine"], list(off["mcp_servers"]))
+        self.assertEqual(1, off["other"])
+
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
             with self.subTest(profile=p.name):

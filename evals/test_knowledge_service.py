@@ -86,7 +86,8 @@ class KnowledgeServiceTests(unittest.TestCase):
     def test_install_runs_knowledge_init_only_when_the_service_exists(self):
         """One switch (#122 review): COMPOSE_PROFILES; install follows the container."""
         text = (ROOT / "bootstrap" / "install").read_text()
-        self.assertIn('docker inspect "$RALPH_KNOWLEDGE_CONTAINER"', text)
+        self.assertIn("docker inspect -f '{{.State.Running}}' \"$RALPH_KNOWLEDGE_CONTAINER\"", text)
+        self.assertIn('if [ -n "$KNOWLEDGE_ON" ]; then', text)
         self.assertNotIn("RALPH_KNOWLEDGE:-", text)
         self.assertIn("/ralph/bootstrap/knowledge-init", text)
         self.assertIn("-e GH_TOKEN ", text)
