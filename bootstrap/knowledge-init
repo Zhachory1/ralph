@@ -44,8 +44,7 @@ collections:
       "/": "How Ralph itself is built and operated: infrastructure, workflows, operations and decisions."
 YAML
 
-qmd update >/dev/null
-# Embeds only what changed; downloads the embed model on first use. The
-# re-rank model downloads on the first query. Expansion is never used.
-qmd embed >/dev/null
+# Index, embed (downloads the embed model on first use; the re-rank model on
+# the first query; expansion is never used) and record status.json.
+"$(dirname "$0")/refresh-knowledge" || echo "knowledge: refresh failed; see $ROOT/status.json" >&2
 qmd status | grep -E 'Total:|Vectors:' || true

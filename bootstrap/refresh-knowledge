@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Bring this instance's knowledge index up to date (#121, dd-ralph-knowledge D3):
+# fast-forward the docs checkout, re-index, embed what changed, record the
+# outcome in status.json. Runs inside the knowledge container: hourly from the
+# review loop, and at the end of knowledge-init. A failure keeps the previous
+# checkout and index (search keeps answering) and records the error, leaving
+# last_success as it was.
+#
+#   GH_TOKEN   read token, passed by name; never on a command line
+set -uo pipefail
+
+ROOT=${KNOWLEDGE_ROOT:-/var/lib/ralph-knowledge}
+STATUS="$ROOT/status.json"
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+last_success=$(sed -n 's/.*"last_success": *"\([^"]*\)".*/\1/p' "$STATUS" 2>/dev/null)
+
+record() {  # record <error or empty>
+    local ok=true err=${1:-} head
+    [ -z "$err" ] || ok=false
+    [ "$ok" = false ] || last_success=$now
+    head=$(git -C "$ROOT/repo" rev-parse --short HEAD 2>/dev/null || true)
+    printf '{"last_attempt": "%s", "last_success": "%s", "ok": %s, "head": "%s", "error": "%s"}\n' \
+        "$now" "$last_success" "$ok" "$head" "${err//\"/\'}" > "$STATUS.tmp" && mv "$STATUS.tmp" "$STATUS"
+    [ "$ok" = true ]
+}
+
+git_auth=(-c credential.helper= -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; }; f')
+if [ -d "$ROOT/repo/.git" ]; then
+    git "${git_auth[@]}" -C "$ROOT/repo" pull -q --ff-only 2>/dev/null \
+        || { record "fetch failed; kept the previous checkout and index"; exit 1; }
+fi
+qmd update >/dev/null 2>&1 || { record "qmd update failed; kept the previous index"; exit 1; }
+qmd embed >/dev/null 2>&1 || { record "qmd embed failed; new text is keyword-searchable only"; exit 1; }
+record ""

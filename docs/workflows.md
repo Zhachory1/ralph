@@ -35,6 +35,7 @@ sequenceDiagram
 - The plan lists each PR: goal, design section, `<planned_files>`, dependencies, size under 400 lines, test plan, and the build order. Decompose copies it onto build cards without re-splitting.
 - `Approve PRD:`, `Approve design:` and `Approve plan:` cards have no assignee. They open only when the owner **merges** the document PR; an agent review or an open approval does not.
 - `dd-changes` on a document PR returns it to the same author with the feedback; the label is removed once acted on.
+- Before planning or writing, agents search the knowledge index for prior PRDs, designs, decisions and memories, and cite what they used (see [Knowledge](#knowledge-search-and-memories)).
 
 **Failure modes:**
 - *A gate card is parked in Hermes `triage`* after a repeated block: the notifier releases it (only cards parked for that reason).
@@ -119,3 +120,16 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 - Deletes other workspace folders idle a day, only when the profile has no card in flight.
 - Clears package caches when a profile's sandbox home passes 5 GB.
 - If any board cannot be read, it deletes nothing.
+
+## Knowledge: search and memories
+
+**Entry:** any card or WebUI chat on a profile with the knowledge tools. **Exit:** an answer that cites documents, and maybe one memory note. **Owners:** the knowledge service, `refresh-knowledge`, every searching profile.
+
+- **Search:** `query` with typed searches (`lex` keywords, `vec` meaning) over `docs` and `ralph`; `get` / `multi_get` read a hit in full. No query expansion runs.
+- **Write:** at completion, a lasting finding becomes one file, `memory/<kind>/<date>-<slug>-<card>.md`, written with a single `gh api -X PUT contents` on the docs repo's default branch. With `RALPH_DOCS_PUBLIC=1`, a note that would name people, employers, spaces, private repositories, message content or secrets is not written; the completion says why.
+- **Refresh:** review-loop runs `refresh-knowledge` at most hourly. It fast-forwards the checkout, runs `qmd update` and `qmd embed`, and writes `status.json`. A new memory is searchable within the hour.
+
+**Failure modes:**
+- *Fetch, update or embed fails:* the previous index keeps answering; `status.json` records the error, and the next hour retries.
+- *The docs repo requires PRs on its default branch:* the memory write gets 409 and the card blocks with the reason.
+- *Service off or down:* profiles fall back to reading the docs repo through `gh`.

@@ -19,7 +19,9 @@ digraph tools {
     docs   [label="docs/\ndecisions, infrastructure,\nworkflows, operations"];
     cache  [label="repo cache (read-only)\n/repo-cache", shape=cylinder];
     evid   [label="staged evidence (read-only)\nreview-work, chat-inbox", shape=cylinder];
-    docrepo[label="docs repo\nPRD + design PRs", shape=cylinder];
+    docrepo[label="docs repo\nPRD + design + plan PRs\nmemory/ notes", shape=cylinder];
+    kn     [label="knowledge MCP (QMD)\nquery, get, multi_get, status\nindex: docs repo + docs/", shape=cylinder];
+    docrepo -> kn [style=dotted, label="hourly refresh"]; docs -> kn [style=dotted];
     docs -> soul [style=dotted, label="pointed to by"];
   }
 
@@ -34,10 +36,7 @@ digraph tools {
   subgraph cluster_planned { label="Planned / not wired"; style="rounded,dashed"; color="#999999"; fontcolor="#777777";
     node [style="rounded,dashed", fontcolor="#777777"];
     redmine [label="Redmine (work)\nprivate issue tracking"];
-    memory  [label="Agent memory\n(off on every profile)"];
-    mcps    [label="Shared MCP set\n(install skips mcp_servers)"];
     hub     [label="Rokt Hub / Docshare\npublishing"];
-    rag     [label="Document RAG\nbeyond the repo cache"];
   }
 
   subgraph cluster_profiles { label="Who gets what"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
@@ -53,7 +52,8 @@ digraph tools {
   p_all -> gh; p_all -> soul;
   p_general -> skills [style=dotted]; p_general -> kanban;
   p_clone -> cache; p_ci -> bk; p_lens -> evid; p_lens -> lt; p_chat -> evid; p_chat -> lt;
-  p_general -> docrepo [label="author"];
+  p_general -> docrepo [label="docs PRs, memory notes"];
+  p_general -> kn [label="search, cite"];
   p_general -> sandbox [label="every command", style=dotted];
   gws -> p_chat [style=dotted, label="via host chat-reply", dir=back];
 }

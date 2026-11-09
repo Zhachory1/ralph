@@ -52,6 +52,18 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | Chat reply sender | `~/Library/Logs/ralph-chat-reply-<instance>.{log,err.log}` |
 | A card's run | `docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> show <id> --json` |
 | Disk | `colima ssh -- df -h /` and `du -sh compose/workspaces*/sandboxes` |
+| Knowledge index | `bootstrap/knowledge-status <instance>`: collections, counts, models, last refresh (`status.json`) |
+
+## Knowledge index
+
+| Situation | Action |
+|---|---|
+| `status.json` says `ok: false` | Read `error`. The previous index still answers. A fetch failure is usually the token or the network; the next hourly refresh retries. Force one: `docker exec -e GH_TOKEN <instance>-knowledge-1 /ralph/bootstrap/refresh-knowledge`. |
+| New text is found by keywords but not by meaning | Embedding failed or is pending: `docker exec <instance>-knowledge-1 qmd embed`. |
+| Index corrupt or models changed | Rebuild from the checkout: `docker exec <instance>-knowledge-1 sh -c 'rm -f "$INDEX_PATH"'`, then re-run `init`. |
+| Container restarting | `docker inspect <instance>-knowledge-1 -f '{{.State.OOMKilled}}'`; a re-ranked query needs more than 2 GB. |
+| A memory write is rejected (409) | The docs repo's default branch requires pull requests; memories are written directly by design. Allow the write or turn the rule off. |
+| Turn it off | Remove `knowledge` from `COMPOSE_PROFILES`, stop the container, re-run `init`: the MCP block and index step go away. |
 
 ## Glossary
 
@@ -65,4 +77,6 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | **operation_id** | The stable id tying a review, maintenance round or chat request to its cards. |
 | **Overlay** | The private checkout holding work-specific skills and jobs. |
 | **Sandbox** | The per-profile Docker container every agent command runs in. |
+| **Knowledge** | The per-instance QMD index over the docs repo and Ralph's `docs/`, searched through MCP. |
+| **Memory** | A note an agent wrote under `memory/` in the docs repo: a decision, root cause, convention, rejected approach or report. |
 | **Repo cache** | Full clones under `/workspaces/repo-cache`, refreshed by review discovery and borrowed by checkouts. |

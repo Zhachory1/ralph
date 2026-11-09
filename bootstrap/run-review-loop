@@ -108,6 +108,17 @@ while true; do
             && touch "$stamp" || echo "review loop: cleanup returned $?" >&2
     fi
 
+    # Knowledge index refresh (#121), at most hourly, when the service runs.
+    # A failed refresh keeps the old index; the next hour retries.
+    kstamp="$WORK/.knowledge-stamp"
+    kc="${RALPH_HERMES_CONTAINER%-hermes-1}-knowledge-1"
+    if [ -z "$(find "$kstamp" -mmin -60 2>/dev/null)" ] \
+            && [ "$(docker inspect -f '{{.State.Running}}' "$kc" 2>/dev/null)" = true ]; then
+        touch "$kstamp"
+        docker exec -e GH_TOKEN "$kc" /ralph/bootstrap/refresh-knowledge \
+            || echo "review loop: knowledge refresh returned $?" >&2
+    fi
+
     # --once: one pass now instead of waiting up to INTERVAL for the next,
     # e.g. `docker compose exec review-loop /ralph/bootstrap/run-review-loop --once`.
     [ "${1:-}" = "--once" ] && break

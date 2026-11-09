@@ -45,7 +45,10 @@ flowchart LR
         notifier[notifier<br/>gates, approvals, digest]
         loop[review-loop<br/>reviews, maintenance, cleanup]
         proxy[socket-proxy]
+        knowledge[knowledge<br/>QMD search, HTTP MCP]
     end
+    hermes -->|MCP http://knowledge:8181| knowledge
+    loop -->|hourly refresh| knowledge
     sandbox[(agent sandboxes<br/>one per profile)]
     hermes -->|create/exec via proxy| proxy
     webui -->|create/exec via proxy| proxy
@@ -62,7 +65,8 @@ flowchart LR
 | `hermes` | Gateway, Kanban dispatcher, cron scheduler | The board database, every profile's home, the Docker API through the proxy. |
 | `hermes-webui` | Chat UI on `127.0.0.1:$RALPH_WEBUI_PORT` | Same hermes home; runs profiles in-process, with commands in the sandbox. |
 | `notifier` | `bootstrap/run-notifier`: approvals, gate alerts, morning digest | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, the Chat webhook. |
-| `review-loop` | `bootstrap/run-review-loop`: review discovery and publishing, maintenance, sandbox cleanup | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, `/workspaces`. |
+| `review-loop` | `bootstrap/run-review-loop`: review discovery and publishing, maintenance, sandbox cleanup, knowledge refresh | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, `/workspaces`. |
+| `knowledge` | `qmd mcp --http` on `knowledge:8181`, not published to the host. On when `COMPOSE_PROFILES` includes `knowledge`. | Its own volume (`/var/lib/ralph-knowledge`: docs checkout, index, local models) and Ralph's `docs/`, read-only. CPU only, `mem_limit` 4g. |
 
 **Agent sandboxes** are Docker containers that Hermes creates per profile (`terminal.backend: docker`, image `ghcr.io/zhachory1/ralph-sandbox`). Every agent command runs in one. A sandbox sees its own `/workspace` and home, plus only these extras:
 
@@ -79,6 +83,7 @@ The sandbox cannot see the host, the Docker socket, the board or another profile
 Every profile's SOUL starts with `profiles/PRINCIPLES.md` and `profiles/STANDARDS.md`, then its own `SOUL.md`. The table in the [README](../README.md#profiles-exist-at-permission-boundaries) lists what each may change. Tools differ by role:
 
 - **Kanban tools:** every general profile and the WebUI `default` profile. The lenses, review-synthesis, chat-maintainer, chat-summarizer and inbox-drafter do not have them, by design.
+- **Knowledge (`mcp_servers.knowledge`: query, get, multi_get, status):** the general profiles and `default`, when the knowledge service runs. Not the lenses, review-synthesis, chat-maintainer, chat-summarizer or inbox-drafter.
 - **Terminal:** every profile, so `gh` works ([0001](decisions/0001-every-profile-gets-repository-access.md)). `git` and `gh` run only in the terminal, never `execute_code` ([0003](decisions/0003-repository-credentials-only-in-the-terminal.md)).
 
 ## Credentials
@@ -104,10 +109,15 @@ A profile token lives in that profile's own `.env` (mode 600) and is forwarded i
 | Morning digest | notifier | once a day after `RALPH_DIGEST_HOUR` |
 | Review discovery, publish, maintenance | review-loop | `RALPH_REVIEW_POLL_SECONDS` (900); `run-review-loop --once` on demand |
 | Sandbox cleanup | review-loop, `bootstrap/cleanup-sandboxes` | at most hourly |
+| Knowledge refresh | review-loop, `bootstrap/refresh-knowledge` in the knowledge container | at most hourly |
 | Overlay jobs (chat inbox, chat digest) | Hermes cron on `ralph-inbox-drafter` | per job (`hermes -p ralph-inbox-drafter cron list`) |
 | Chat reply sender | host LaunchAgent `dev.ralph.chat-reply.<instance>` | every 60 s |
 
 Cron jobs can also be created from the WebUI's Crons panel; pick the Ralph profile the job runs as. `hermes pause` stops cron and Kanban dispatch together.
+
+## Knowledge
+
+One QMD index per instance over two collections: `docs` (a checkout of `RALPH_DOCS_REPO`) and `ralph` (this repo's `docs/`). Agents search it through the MCP tools and cite what they used. They write memories as single files under `memory/` in the docs repo, directly on its default branch (PRINCIPLES, "Write down what lasts"). Install writes `RALPH_DOCS_REPO` and `RALPH_DOCS_PUBLIC` into every profile; a public docs repo (or one whose visibility cannot be read) gets the public-safety rule. Models (embeddinggemma-300M, qwen3-reranker-0.6b) run locally; there is no query-expansion model and no cloud call. A re-ranked query takes ~30–45 s on CPU; `rerank: false` takes under a second.
 
 ## Private overlay
 
