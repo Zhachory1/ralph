@@ -349,7 +349,8 @@ fi
 # The knowledge index (#121): clone RALPH_DOCS_REPO into the knowledge volume,
 # write QMD's config, index and embed. The read token goes in by name only.
 # Tolerant: a stack without network still starts, and search catches up.
-if [ "${RALPH_KNOWLEDGE:-1}" != "0" ] && [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] \
+# The service's presence is the switch (COMPOSE_PROFILES): no container, no index.
+if [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] \
         && docker inspect "$RALPH_KNOWLEDGE_CONTAINER" >/dev/null 2>&1; then
     export GH_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
     docker exec -e GH_TOKEN -e "KNOWLEDGE_REPO=${RALPH_DOCS_REPO:-}" "$RALPH_KNOWLEDGE_CONTAINER" \

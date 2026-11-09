@@ -80,7 +80,6 @@ services:
       RALPH_MAX_IN_PROGRESS: ${RALPH_MAX_IN_PROGRESS:-6}
       RALPH_SANDBOX_MEMORY_MB: ${RALPH_SANDBOX_MEMORY_MB:-3072}
       RALPH_SANDBOX_ROOT: ${RALPH_SANDBOX_ROOT}
-      RALPH_KNOWLEDGE: ${RALPH_KNOWLEDGE:-1}
       RALPH_KNOWLEDGE_CONTAINER: ${RALPH_INSTANCE:-ralph}-knowledge-1
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -278,12 +277,12 @@ services:
 
   # knowledge: QMD over this instance's docs repository, served to profiles as
   # an HTTP MCP server (#121, dd-ralph-knowledge D1). One process loads the
-  # models once; nothing is published to the host. Off: RALPH_KNOWLEDGE=0 and
-  # drop "knowledge" from COMPOSE_PROFILES; the service then never starts and
-  # install skips it.
+  # models once; nothing is published to the host. Off: drop "knowledge" from
+  # COMPOSE_PROFILES. That one setting is the switch: the service never starts,
+  # and install, finding no container, skips the index and the MCP block.
   knowledge:
-    # In the default compose profile only when RALPH_KNOWLEDGE is not 0:
-    # COMPOSE_PROFILES in the env file selects it (see .env.example).
+    # Started only when "knowledge" is in COMPOSE_PROFILES, the single switch
+    # (see .env.example).
     profiles: ["knowledge"]
     image: ghcr.io/zhachory1/ralph-knowledge:${RALPH_VERSION:-dev}
     build:

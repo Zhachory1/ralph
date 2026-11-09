@@ -73,7 +73,7 @@ class KnowledgeServiceTests(unittest.TestCase):
         self.assertIn("knowledge", COMPOSE["volumes"])
 
     def test_service_does_not_start_unless_selected(self):
-        """#122 review: RALPH_KNOWLEDGE=0 must actually leave it out."""
+        """#122 review: without the profile, the service never starts."""
         self.assertEqual(["knowledge"], COMPOSE["services"]["knowledge"]["profiles"])
         example = (ROOT / "compose" / ".env.example").read_text()
         self.assertIn("COMPOSE_PROFILES=knowledge", example)
@@ -83,9 +83,11 @@ class KnowledgeServiceTests(unittest.TestCase):
         self.assertIn("ARG QMD_VERSION=2.8.3", text)
         self.assertIn("QMD_FORCE_CPU=1", text)
 
-    def test_install_runs_knowledge_init_unless_disabled(self):
+    def test_install_runs_knowledge_init_only_when_the_service_exists(self):
+        """One switch (#122 review): COMPOSE_PROFILES; install follows the container."""
         text = (ROOT / "bootstrap" / "install").read_text()
-        self.assertIn('[ "${RALPH_KNOWLEDGE:-1}" != "0" ]', text)
+        self.assertIn('docker inspect "$RALPH_KNOWLEDGE_CONTAINER"', text)
+        self.assertNotIn("RALPH_KNOWLEDGE:-", text)
         self.assertIn("/ralph/bootstrap/knowledge-init", text)
         self.assertIn("-e GH_TOKEN ", text)
 
