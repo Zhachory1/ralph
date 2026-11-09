@@ -1,0 +1,43 @@
+# Fail a pull request that breaks the chat sender, router or shared evidence
+# reader, or removes a ceiling or refusal their evals cover.
+#
+# Before this workflow, nothing in CI ran test_chat_reply.py, test_chat_route.py
+# or test_gchat_send.py (dd-chat.md:556-562): a build could add a second send
+# path or drop a check and still go green. This closes that gap, and ships
+# with PR 1 rather than with the sender's later code, so every pull request
+# after this one runs its new evals in CI too.
+
+name: chat
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap/chat-*"
+      - "bootstrap/chat_*"
+      - "skills/ops/google-chat/**"
+      - "evals/test_chat_*"
+
+jobs:
+  chat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shared staged-evidence reader
+        run: python3 evals/test_chat_evidence.py
+
+      - name: Sender
+        run: python3 evals/test_chat_reply.py
+
+      - name: Router
+        run: python3 evals/test_chat_route.py
+
+      # test_gchat_send.py imports skills/ops/google-chat/gchat.py directly,
+      # outside its usual `uv run` isolation, so it needs gchat.py's own
+      # PEP 723 dependencies (skills/ops/google-chat/gchat.py:3-7) installed
+      # in the runner's ambient Python first.
+      - name: Google Chat send dependencies
+        run: pip install "google-api-python-client>=2.100" "google-auth-oauthlib>=1.2" "google-auth>=2.30" "cryptography>=42"
+
+      - name: Google Chat send
+        run: python3 evals/test_gchat_send.py
