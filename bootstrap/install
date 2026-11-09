@@ -143,7 +143,10 @@ mcp_servers:
 YAML
 }
 KNOWLEDGE_ON=""
-if [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] && docker inspect "$RALPH_KNOWLEDGE_CONTAINER" >/dev/null 2>&1; then
+# Running, not merely present: a stopped leftover after the profile is
+# dropped must not count (#123 review).
+if [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] \
+        && [ "$(docker inspect -f '{{.State.Running}}' "$RALPH_KNOWLEDGE_CONTAINER" 2>/dev/null)" = true ]; then
     KNOWLEDGE_ON=1
 fi
 # The same settings as sandbox_config, as the profile's whole terminal block,
@@ -385,9 +388,8 @@ fi
 # The knowledge index (#121): clone RALPH_DOCS_REPO into the knowledge volume,
 # write QMD's config, index and embed. The read token goes in by name only.
 # Tolerant: a stack without network still starts, and search catches up.
-# The service's presence is the switch (COMPOSE_PROFILES): no container, no index.
-if [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] \
-        && docker inspect "$RALPH_KNOWLEDGE_CONTAINER" >/dev/null 2>&1; then
+# The running service is the switch (COMPOSE_PROFILES): none, no index.
+if [ -n "$KNOWLEDGE_ON" ]; then
     export GH_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
     docker exec -e GH_TOKEN -e "KNOWLEDGE_REPO=${RALPH_DOCS_REPO:-}" "$RALPH_KNOWLEDGE_CONTAINER" \
         /ralph/bootstrap/knowledge-init || echo "  knowledge: index not ready; search catches up on refresh" >&2
