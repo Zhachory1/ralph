@@ -93,6 +93,17 @@ class LoadTests(unittest.TestCase):
                     "thread_field": 7}, mode=0o644)
         self.assertIsNone(tracker.load(self.path))
 
+    def test_wrong_typed_values_return_none_instead_of_raising(self):
+        good = {"url": "https://tracker.example", "key": "secret", "project": "ralph",
+                "thread_field": 7}
+        for field, bad in (("url", 5), ("url", ""), ("key", None), ("key", ["x"]),
+                           ("project", {}), ("project", True), ("thread_field", 1.5),
+                           ("thread_field", None), ("statuses", {"a": 1}),
+                           ("statuses", ["a"])):
+            with self.subTest(field=field, value=bad):
+                self.write(dict(good, **{field: bad}))
+                self.assertIsNone(tracker.load(self.path))
+
     def test_well_formed_file_returns_a_configuration(self):
         self.write({"url": "https://tracker.example/", "key": "secret", "project": "ralph",
                     "thread_field": 7, "statuses": {"Waiting on requester": "Feedback"}})
@@ -222,6 +233,19 @@ class FailureTests(unittest.TestCase):
         client = tracker.Tracker(make_config(), opener=opener)
         self.assertEqual(client.find("spaces/example/threads/one"), (None, []))
         self.assertEqual(len(opener.calls), 2)
+
+    def test_a_write_is_never_retried_after_a_dropped_connection(self):
+        """A create whose response was lost may have landed; sending it again
+        would duplicate the item. One attempt, then the error goes up."""
+        for call in (lambda c: c.create({"subject": "x", "thread": "t"}),
+                     lambda c: c.update(5, {"subject": "y"}),
+                     lambda c: c.note(5, "hello"),
+                     lambda c: c.relate(5, 6)):
+            opener = FakeOpener([urllib.error.URLError("reset")] * tracker.RETRIES)
+            client = tracker.Tracker(make_config(), opener=opener)
+            with self.assertRaises(tracker.TrackerError):
+                call(client)
+            self.assertEqual(len(opener.calls), 1)
 
     def test_no_test_opens_a_socket(self):
         """The fake opener is the only transport any test uses."""

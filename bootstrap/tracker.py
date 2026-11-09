@@ -19,9 +19,14 @@ import urllib.request
 REQUIRED = ("url", "key", "project", "thread_field")
 TIMEOUT = 10
 # A connection failure (no response at all) is retried this many times before
-# giving up. A definite non-2xx response is never retried: the server already
-# answered, and retrying it would not change the answer.
+# giving up, for a READ only. A definite non-2xx response is never retried: the
+# server already answered, and retrying it would not change the answer. A WRITE
+# is never retried here: a connection that drops after the request left may
+# have been applied, and sending a create, a journal note or a relation again
+# would duplicate it. The caller's own bounded retry runs the whole step again
+# from `find`, which sees what landed.
 RETRIES = 3
+SAFE_METHODS = frozenset({"GET"})
 
 
 class TrackerError(Exception):
@@ -66,8 +71,19 @@ def load(path):
     if not isinstance(data, dict) or any(key not in data for key in REQUIRED):
         return None
     statuses = data.get("statuses", {})
-    if not isinstance(statuses, dict):
+    if not isinstance(statuses, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in statuses.items()):
         return None
+    # A value of the wrong type is "not configured", never an exception: the
+    # callers treat None as a no-op, and a raise here would break a send path.
+    for name in ("url", "key"):
+        if not isinstance(data[name], str) or not data[name].strip():
+            return None
+    for name in ("project", "thread_field"):
+        value = data[name]
+        if isinstance(value, bool) or not isinstance(value, (str, int)) \
+                or (isinstance(value, str) and not value.strip()):
+            return None
     return Config(data["url"], data["key"], data["project"], data["thread_field"], statuses)
 
 
@@ -172,6 +188,10 @@ class Tracker:
                 raise TrackerError("tracker returned %d: %s" % (error.code, body),
                                     code=error.code) from None
             except urllib.error.URLError:
+                if method not in SAFE_METHODS:
+                    raise TrackerError(
+                        "tracker unreachable on a write; not retried here "
+                        "(it may have been applied)") from None
                 if attempt >= RETRIES:
                     raise TrackerError(
                         "tracker unreachable after %d attempts" % RETRIES) from None
