@@ -17,13 +17,15 @@ import json
 import os
 import pathlib
 import re
-import stat
 import subprocess
 import sys
 
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import chat_evidence
+
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
-THREAD = re.compile(r"spaces/[A-Za-z0-9_-]+/threads/[A-Za-z0-9_.-]+\Z")
 MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "final": ".final-sent"}
 MAX_TEXT = 4000
 # A long reply is split into at most this many messages, in order.
@@ -63,25 +65,11 @@ def operation_of(task):
 
 def destination(root, op_id, allowed_spaces):
     """The original space and thread, read only from staged intake evidence."""
-    workspace = root / op_id
-    evidence = workspace / "evidence"
-    path = evidence / "item.json"
-    if workspace.is_symlink() or evidence.is_symlink() or path.is_symlink():
-        raise Refused("unsafe Chat evidence")
-    info = path.stat()
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65_536 \
-            or info.st_mode & 0o077:
-        raise Refused("unsafe Chat evidence")
-    item = json.loads(path.read_text())
-    space, thread = item["space"], item["thread"]
-    message = item["messages"][-1]["name"]
-    if item["kind"] != "inbound" or item["sender_trusted"] is not True \
-            or space not in allowed_spaces or not isinstance(thread, str) \
-            or not THREAD.fullmatch(thread) or not thread.startswith(space + "/threads/") \
-            or not isinstance(message, str) or not message.startswith(space + "/messages/") \
-            or op_id != "chat-" + hashlib.sha256(message.encode()).hexdigest():
+    item = chat_evidence.read_item(root, op_id)
+    space = item["space"]
+    if space not in allowed_spaces:
         raise Refused("Chat destination or sender is not authorized")
-    return space, thread
+    return space, item["thread"]
 
 
 def decision_of(detail):
@@ -186,7 +174,8 @@ def handle(container, root, allowed_spaces, board, task_id):
             return 0
         space, thread = destination(root, op_id, allowed_spaces)
     except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
-        reason = str(error) if isinstance(error, Refused) else "invalid bound decision or destination"
+        reason = str(error) if isinstance(error, (Refused, chat_evidence.Invalid)) \
+            else "invalid bound decision or destination"
         print(f"refused Chat {task_id}: {reason}", file=sys.stderr)
         return 2
 
