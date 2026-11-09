@@ -35,8 +35,12 @@ BLOCKS = ("model", "platform_toolsets", "approvals", "skills", "terminal", "mcp_
 def write_atomic(target: pathlib.Path, text: str) -> None:
     """Replace a live config whole or not at all: an interrupted write leaves
     the old file, never an empty or partial one (#134 review)."""
-    tmp = target.with_name(f".{target.name}.tmp")
-    tmp.write_text(text)
+    import tempfile
+    # Unique per call: two writers never share a temp file (#134 review).
+    fd, name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    tmp = pathlib.Path(name)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
     if target.exists():
         # Keep the old file's owner and mode: install runs this as root through
         # docker exec, and a root-owned global config (mode 640) locks Hermes
@@ -87,7 +91,17 @@ def merge_mcp_servers(src: str) -> str:
     blocks = list(block_re("mcp_servers").finditer(src))
     if len(blocks) < 2:
         return src
-    entries = "".join(m.group(0).split("\n", 1)[1] for m in blocks)
+    # One entry per name: the first block wins, so a profile's own server is
+    # never shadowed by a later block of the same name (#134 review).
+    seen, kept = set(), []
+    for m in blocks:
+        body = m.group(0).split("\n", 1)[1]
+        for entry in re.findall(r"^  [^ \n][^\n]*\n(?:(?:    |\s*\n).*\n?)*", body, re.M):
+            key = entry.split(":", 1)[0].strip()
+            if key not in seen:
+                seen.add(key)
+                kept.append(entry if entry.endswith("\n") else entry + "\n")
+    entries = "".join(kept)
     for m in reversed(blocks):
         src = src[:m.start()] + src[m.end():]
     return src + "mcp_servers:\n" + entries

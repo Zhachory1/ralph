@@ -479,6 +479,36 @@ class VoiceTests(unittest.TestCase):
         self.assertLess(check, install.index("for dir in \"$PROFILES_DIR\"/*/"))
         self.assertLess(check, install.index('printf \'%s\' "$all"'))
 
+    def test_merged_mcp_blocks_never_repeat_a_server_name(self):
+        """#134 review: a name in two blocks lands once, the first block's."""
+        import yaml
+        src = ("mcp_servers:\n  shared:\n    url: http://own\n  a:\n    url: http://a\n"
+               "model:\n  default: m\n"
+               "mcp_servers:\n  shared:\n    url: http://overlay\n  b:\n    url: http://b\n")
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text(src)
+            d_path.write_text("other: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            text = d_path.read_text()
+        self.assertEqual(1, text.count("  shared:"))
+        out = yaml.safe_load(text)
+        self.assertEqual(["shared", "a", "b"], list(out["mcp_servers"]))
+        self.assertEqual("http://own", out["mcp_servers"]["shared"]["url"])
+
+    def test_atomic_writes_use_a_unique_temp_file(self):
+        """#134 review: concurrent writers must not share a temp path."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("a: 1\n")
+            with mock.patch.object(wpc.os, "replace", wraps=wpc.os.replace) as rep:
+                wpc.write_atomic(cfg, "a: 2\n")
+                wpc.write_atomic(cfg, "a: 3\n")
+            first, second = rep.call_args_list[0].args[0], rep.call_args_list[1].args[0]
+            self.assertNotEqual(first, second)
+            self.assertEqual([], [p for p in pathlib.Path(d).iterdir() if p.name != "config.yaml"])
+
     def test_install_writes_the_overlay_record_atomically(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
