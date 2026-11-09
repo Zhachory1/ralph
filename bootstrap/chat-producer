@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Read the last five minutes of Chat messages in approved spaces and decide
+which are eligible. The read half only (PR 6 of the chat intake design,
+projects/ralph-redmine/plan-chat.md): no staging, no card creation, no send
+path.
+
+Imports the credential helpers from skills/ops/google-chat/gchat.py (`_key`,
+`_load_creds`), resolved the way `chat-reply:128` resolves the same module,
+and builds its own read-only Chat client. It never shells out to `gchat.py
+messages`, which discards the two fields eligibility runs on
+(`sender.type`, `clientAssignedMessageId`).
+
+    bootstrap/chat-producer --instance-env /path/to/instance.env --dry-run
+
+--dry-run is the only mode this pull request has: one line per message, its
+computed operation id, and its eligibility verdict. Nothing is staged.
+"""
+import argparse
+import datetime
+import hashlib
+import importlib.machinery
+import importlib.util
+import pathlib
+import re
+import sys
+
+INSTANCE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
+SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
+GCHAT = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
+WINDOW_SECONDS = 300
+MAX_SPACES = 8
+
+
+def load_gchat():
+    loader = importlib.machinery.SourceFileLoader("gchat", str(GCHAT))
+    spec = importlib.util.spec_from_loader("gchat", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def read_spaces(path):
+    """The approved space list, read from the same instance file and the
+    same validation `chat-reply:41-53` applies: an invalid instance name, an
+    empty list, a malformed space, or more than eight spaces is refused."""
+    values = {}
+    for line in path.read_text().splitlines():
+        if line.startswith(("RALPH_INSTANCE=", "CHAT_ROUTE_SPACES=")):
+            key, value = line.split("=", 1)
+            values[key] = value.strip().strip("'\"")
+    instance = values["RALPH_INSTANCE"]
+    spaces = set(values["CHAT_ROUTE_SPACES"].split())
+    if not INSTANCE.fullmatch(instance) or not spaces or len(spaces) > MAX_SPACES \
+            or any(not SPACE.fullmatch(space) for space in spaces):
+        raise ValueError("invalid Chat pilot configuration")
+    return spaces
+
+
+def operation_id(message_name):
+    """chat-reply:82 and chat-route:68 check this same identity."""
+    return "chat-" + hashlib.sha256(message_name.encode()).hexdigest()
+
+
+def _parsed_time(value):
+    return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def eligible(message, space, allowed_spaces, cutoff):
+    """Sec 3.2's four conditions, and no fifth: the space is listed; the
+    message is inside the window; the sender is a human, not BOT; the
+    client-assigned id is not one of Ralph's own replies."""
+    if space not in allowed_spaces:
+        return False
+    created = message.get("createTime")
+    if not created or _parsed_time(created) <= cutoff:
+        return False
+    sender = message.get("sender") or {}
+    if sender.get("type") == "BOT":
+        return False
+    client_id = message.get("clientAssignedMessageId") or ""
+    if client_id.startswith("client-ralph-"):
+        return False
+    return True
+
+
+def list_recent(svc, space, cutoff):
+    """One list call per space, newest first, inside the five-minute window.
+    Sec 3.3's fallback, when the API rejects a create_time filter (the design's
+    assumption 1): page newest-first and stop at the first message older than
+    the window."""
+    cutoff_text = cutoff.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    try:
+        resp = svc.spaces().messages().list(
+            parent=space, orderBy="createTime desc",
+            filter=f'create_time > "{cutoff_text}"').execute()
+        return resp.get("messages", [])
+    except Exception:
+        pass
+    out, token = [], None
+    while True:
+        resp = svc.spaces().messages().list(
+            parent=space, orderBy="createTime desc", pageToken=token).execute()
+        stop = False
+        for message in resp.get("messages", []):
+            created = message.get("createTime")
+            if not created or _parsed_time(created) <= cutoff:
+                stop = True
+                break
+            out.append(message)
+        token = resp.get("nextPageToken")
+        if stop or not token:
+            break
+    return out
+
+
+def scan(svc, allowed_spaces, now=None):
+    """Yields (message, verdict) for every message in the window, across
+    every approved space, newest first within each space."""
+    cutoff = (now or datetime.datetime.now(datetime.timezone.utc)) \
+        - datetime.timedelta(seconds=WINDOW_SECONDS)
+    for space in sorted(allowed_spaces):
+        for message in list_recent(svc, space, cutoff):
+            yield message, eligible(message, space, allowed_spaces, cutoff)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--instance-env", required=True, type=pathlib.Path)
+    parser.add_argument("--dry-run", action="store_true", required=True)
+    args = parser.parse_args()
+    try:
+        allowed_spaces = read_spaces(args.instance_env)
+    except (OSError, ValueError, KeyError):
+        print("invalid Chat pilot configuration", file=sys.stderr)
+        return 1
+    gchat = load_gchat()
+    creds = gchat._load_creds()
+    if not creds:
+        print("Not authenticated for Chat. Run: uv run gchat.py auth", file=sys.stderr)
+        return 1
+    from googleapiclient.discovery import build
+    svc = build("chat", "v1", credentials=creds, cache_discovery=False)
+    for message, verdict in scan(svc, allowed_spaces):
+        op_id = operation_id(message.get("name", ""))
+        print(f"{op_id} {'eligible' if verdict else 'ignored'} {message.get('name')}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

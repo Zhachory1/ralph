@@ -13,6 +13,7 @@ on:
   pull_request:
     paths:
       - "bootstrap/chat-*"
+      - "bootstrap/chat_*"
       - "skills/ops/google-chat/**"
       - "evals/test_chat_*"
 
