@@ -51,6 +51,13 @@ def write_atomic(target: pathlib.Path, text: str) -> None:
     os.replace(tmp, target)
 
 
+def read_yaml_text(path: pathlib.Path) -> str:
+    """A config's text, always ending in a newline: block_re matches whole
+    lines, so a last line without one is missed (#134 review)."""
+    text = path.read_text() if path.exists() else ""
+    return text if not text or text.endswith("\n") else text + "\n"
+
+
 def block_re(name: str) -> re.Pattern[str]:
     return re.compile(rf"^{name}:\n(?:[ \t]+.*\n)+", re.M)
 
@@ -87,9 +94,9 @@ def merge_mcp_servers(src: str) -> str:
 
 
 def main(src_path: str, dst_path: str) -> int:
-    src = merge_mcp_servers(pathlib.Path(src_path).read_text())
+    src = merge_mcp_servers(read_yaml_text(pathlib.Path(src_path)))
     target = pathlib.Path(dst_path)
-    dst = target.read_text() if target.exists() else ""
+    dst = read_yaml_text(target)
 
     for name in BLOCKS:
         dst = apply_block(name, src, dst)
@@ -112,7 +119,7 @@ def set_knowledge(path: str, on: bool) -> int:
     leaving every other server untouched (the global config can hold servers
     the owner added by hand). Idempotent."""
     target = pathlib.Path(path)
-    text = target.read_text() if target.exists() else ""
+    text = read_yaml_text(target)
     block = block_re("mcp_servers").search(text)
     entries = block.group(0).split("\n", 1)[1] if block else ""
     # Drop any existing knowledge entry: its header line and its deeper lines.
@@ -124,7 +131,7 @@ def set_knowledge(path: str, on: bool) -> int:
     if block:
         text = text[:block.start()] + new_block + text[block.end():]
     else:
-        text = (text if not text or text.endswith("\n") else text + "\n") + new_block
+        text = text + new_block
     write_atomic(target, text)
     return 0
 
@@ -174,7 +181,7 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
     owner added by hand: drop the overlay servers it had before (`previous`,
     comma separated), then add the ones mcp.json grants `default`."""
     target = pathlib.Path(path)
-    text = target.read_text() if target.exists() else ""
+    text = read_yaml_text(target)
     block = block_re("mcp_servers").search(text)
     entries = block.group(0).split("\n", 1)[1] if block else ""
     add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
@@ -186,8 +193,6 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
         entries = re.sub(rf"^  {re.escape(name)}:\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
     entries += add.split("\n", 1)[1] if add else ""
     new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
-    if not block and text and not text.endswith("\n"):
-        text += "\n"  # a file without a final newline (#134 review)
     text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block
     write_atomic(target, text)
     return 0
@@ -196,6 +201,16 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
 if __name__ == "__main__":
     if sys.argv[1] == "--knowledge":
         raise SystemExit(set_knowledge(sys.argv[3], sys.argv[2] == "on"))
+    if sys.argv[1] == "--overlay-check":
+        # Validate every entry before install records any name as owned.
+        servers = __import__("json").loads(pathlib.Path(sys.argv[2]).read_text())
+        for prof in {p for spec in servers.values() if isinstance(spec, dict)
+                     for p in (spec.get("profiles") if isinstance(spec.get("profiles"), list) else [])} | {"default"}:
+            overlay_mcp_block(sys.argv[2], prof)
+        for name, spec in servers.items():
+            if not isinstance(spec, dict) or not isinstance(spec.get("profiles"), list):
+                raise SystemExit(f"mcp.json: {name}: profiles must be a list of names")
+        raise SystemExit(0)
     if sys.argv[1] == "--overlay-block":
         sys.stdout.write(overlay_mcp_block(sys.argv[2], sys.argv[3]))
         raise SystemExit(0)

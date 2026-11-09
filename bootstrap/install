@@ -154,7 +154,11 @@ YAML
 # block that write-profile-config folds in beside the others. Profile configs
 # are rewritten whole, so a server removed from mcp.json goes on the next run.
 OVERLAY_MCP=""
-[ -f /ralph/private-mcp/mcp.json ] && OVERLAY_MCP=/ralph/private-mcp/mcp.json
+if [ -f /ralph/private-mcp/mcp.json ]; then
+    OVERLAY_MCP=/ralph/private-mcp/mcp.json
+    # Fail before any profile or record is touched (#134 review).
+    python3 "$(dirname "$0")/write-profile-config.py" --overlay-check "$OVERLAY_MCP"
+fi
 overlay_mcp_block() {
     [ -n "$OVERLAY_MCP" ] || return 0
     python3 "$(dirname "$0")/write-profile-config.py" --overlay-block "$OVERLAY_MCP" "$1"

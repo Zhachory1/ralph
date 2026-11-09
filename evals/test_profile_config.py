@@ -460,6 +460,25 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(1, out["other"])
         self.assertIn("knowledge", out["mcp_servers"])
 
+    def test_existing_mcp_block_without_a_final_newline_merges_cleanly(self):
+        """#134 review: a last line with no newline fell outside the block."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "u"}, "tools": ["recall"]}}))
+            cfg.write_text("other: 1\nmcp_servers:\n  mine:\n    url: http://x")
+            wpc.set_overlay_global(str(cfg), str(mcp), "")
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual(["mine", "team-memory"], list(out["mcp_servers"]))
+        self.assertEqual("http://x", out["mcp_servers"]["mine"]["url"])
+
+    def test_install_validates_the_overlay_before_recording_anything(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        check = install.index("--overlay-check")
+        self.assertLess(check, install.index("for dir in \"$PROFILES_DIR\"/*/"))
+        self.assertLess(check, install.index('printf \'%s\' "$all"'))
+
     def test_install_writes_the_overlay_record_atomically(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
