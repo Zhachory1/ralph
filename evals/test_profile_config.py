@@ -231,7 +231,8 @@ class ChatTokenDietTests(unittest.TestCase):
         names = self.names()
         for kept in ("github", "ralph-contributing", "sdlc-review", "docx", "pdf",
                      "xlsx", "systematic-debugging", "requesting-code-review",
-                     "test-driven-development", "grounded-citations"):
+                     "test-driven-development", "grounded-citations",
+                     "caveman", "humanizer", "architecture-diagram"):
             self.assertNotIn(kept, names, kept)
 
     def test_the_disabled_skill_list_has_no_duplicates(self):

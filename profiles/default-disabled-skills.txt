@@ -9,6 +9,7 @@
 #
 # Kept on purpose (not listed): hermes-agent, claude-code, github,
 # ralph-contributing, sdlc-review, requesting-code-review, systematic-debugging,
+# caveman, humanizer, architecture-diagram,
 # test-driven-development, grounded-citations, blocked-page-recovery,
 # google-workspace, docx, pdf, xlsx.
 
@@ -18,12 +19,10 @@ computer-use
 opencode
 
 # creative
-architecture-diagram
 ascii-video
 baoyu-infographic
 claude-design
 design-md
-humanizer
 manim-video
 p5js
 popular-web-designs
@@ -59,7 +58,6 @@ gws-shared
 airtable
 box
 cavecrew
-caveman
 document-to-action-items
 maps
 meeting-action-items

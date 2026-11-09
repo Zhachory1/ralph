@@ -158,7 +158,7 @@ profile, including the builder, and a profile picked there runs outside its sand
 call, so a tool schema or skills-index entry it never uses is paid for on each one. `bootstrap/install`
 therefore runs `hermes tools disable browser tts vision` for the default profile (the `cli` platform,
 which hermes-webui reads; kanban stays on) and writes `profiles/default-disabled-skills.txt` to
-`skills.disabled`, hiding about 58 bundled skills (the `gws-*` wrappers, creative, media and the like).
+`skills.disabled`, hiding about 55 bundled skills (the `gws-*` wrappers, creative, media and the like).
 Nothing is deleted: edit the file and re-run install to bring a skill back, or
 `hermes tools enable <name>` for a toolset. Both take effect in a new chat, not mid-conversation,
 because changing tools or skills mid-chat breaks Anthropic's prompt cache. Vision is off, so a chat
