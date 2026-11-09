@@ -416,6 +416,23 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 wpc.overlay_mcp_block(str(mcp), "researcher")
 
+    def test_overlay_mcp_server_names_are_plain(self):
+        """#134 review: a comma or space would break install's name record."""
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({"a,b": {"profiles": ["researcher"],
+                                       "config": {"url": "u"}, "tools": ["recall"]}}))
+            with self.assertRaises(SystemExit):
+                wpc.overlay_mcp_block(str(mcp), "researcher")
+
+    def test_install_merges_overlay_names_without_a_failing_pipeline(self):
+        """#134 review: with no grant, grep -v on empty input exits 1 and
+        pipefail aborted install. The union is computed in Python."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        line = next(l for l in install.splitlines() if l.strip().startswith("all=$("))
+        self.assertNotIn("grep", line)
+
     def test_global_overlay_replaces_a_hand_added_server_of_the_same_name(self):
         """#134 review: one key, never two."""
         import json, yaml

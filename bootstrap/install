@@ -216,7 +216,7 @@ hermes tools enable kanban >/dev/null
 # give it the hermes image's own, in the shared volume (HERMES_DOCKER_BINARY).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     docker exec -u hermes "$RALPH_HERMES_CONTAINER" sh -c \
-        'mkdir -p "$HERMES_HOME/bin" && cp /usr/bin/docker "$HERMES_HOME/bin/docker"'
+        'mkdir -p "$HERMES_HOME/bin" && cp /usr/bin/docker "$HERMES_HOME/bin/docker.new" && mv -f "$HERMES_HOME/bin/docker.new" "$HERMES_HOME/bin/docker"'
 fi
 
 # The review lenses (PR 2 of the fleet-into-ralph design) run on an OpenAI
@@ -367,7 +367,7 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     fi
     # Record the union first: if the config write below is interrupted, the
     # next run still knows every name it may have written (#134 review).
-    all=$(printf '%s,%s' "$prev" "$now" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)
+    all=$(python3 -c 'import sys; print(",".join(sorted({n for n in sys.argv[1].split(",") if n})))' "$prev,$now")
     printf '%s' "$all" | docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$state"
     docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
         "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$all" "$gcfg"

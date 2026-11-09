@@ -125,6 +125,9 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     for name, spec in servers.items():
         if name in RESERVED_MCP:
             raise SystemExit(f"mcp.json: {name} is a built-in server name")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            # The name is a YAML key and an entry in install's comma list.
+            raise SystemExit(f"mcp.json: server name {name!r} may use only letters, digits, . _ -")
         if profile not in spec.get("profiles", []):
             continue
         if not spec.get("tools"):
