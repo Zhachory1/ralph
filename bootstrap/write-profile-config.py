@@ -109,6 +109,10 @@ def set_knowledge(path: str, on: bool) -> int:
     return 0
 
 
+# Servers Ralph itself writes; an overlay may not shadow them (#134 review).
+RESERVED_MCP = {"knowledge", "lens-tools"}
+
+
 def overlay_mcp_block(path: str, profile: str) -> str:
     """The `mcp_servers:` block a private overlay's mcp.json grants `profile`
     (#133), or "" for none. The file maps a server name to `profiles` (names
@@ -119,6 +123,8 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     servers = json.loads(pathlib.Path(path).read_text())
     out = []
     for name, spec in servers.items():
+        if name in RESERVED_MCP:
+            raise SystemExit(f"mcp.json: {name} is a built-in server name")
         if profile not in spec.get("profiles", []):
             continue
         if not spec.get("tools"):
@@ -140,10 +146,13 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
     text = target.read_text() if target.exists() else ""
     block = block_re("mcp_servers").search(text)
     entries = block.group(0).split("\n", 1)[1] if block else ""
-    names = [n for n in previous.split(",") if n]
+    add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
+    # Drop what the overlay wrote last time, and any entry the new grant
+    # replaces (a hand-added server of the same name), so no key repeats.
+    names = {n for n in previous.split(",") if n}
+    names |= set(re.findall(r"^  ([A-Za-z0-9_.-]+):", add, re.M))
     for name in names:
         entries = re.sub(rf"^  {re.escape(name)}:\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
-    add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
     entries += add.split("\n", 1)[1] if add else ""
     new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
     text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block

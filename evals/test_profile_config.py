@@ -406,6 +406,36 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(["mine"], list(off["mcp_servers"]))
         self.assertEqual(1, off["other"])
 
+    def test_overlay_mcp_cannot_shadow_built_in_servers(self):
+        """#134 review: knowledge and lens-tools are Ralph's names."""
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({"knowledge": {"profiles": ["researcher"],
+                                       "config": {"url": "u"}, "tools": ["query"]}}))
+            with self.assertRaises(SystemExit):
+                wpc.overlay_mcp_block(str(mcp), "researcher")
+
+    def test_global_overlay_replaces_a_hand_added_server_of_the_same_name(self):
+        """#134 review: one key, never two."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  team-memory:\n    url: http://old\n  mine:\n    url: http://x\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp), "")
+            text = cfg.read_text()
+        self.assertEqual(1, text.count("  team-memory:"))
+        self.assertEqual("http://new", yaml.safe_load(text)["mcp_servers"]["team-memory"]["url"])
+        self.assertIn("mine", yaml.safe_load(text)["mcp_servers"])
+
+    def test_install_records_overlay_names_before_writing_the_global_config(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        record = install.index('printf \'%s\' "$all"')
+        write = install.index('--overlay-global')
+        self.assertLess(record, write)
+
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
             with self.subTest(profile=p.name):
