@@ -9,17 +9,6 @@ set -euo pipefail
 ROOT=${KNOWLEDGE_ROOT:-/var/lib/ralph-knowledge}
 mkdir -p "$ROOT/repo" "$QMD_CONFIG_DIR" "$(dirname "$INDEX_PATH")"
 
-# The docs repository checkout. gh is not in this image; git reads the token
-# through a credential helper that echoes the environment variable.
-git_auth=(-c credential.helper= -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; }; f')
-if [ -n "${KNOWLEDGE_REPO:-}" ]; then
-    if [ ! -d "$ROOT/repo/.git" ]; then
-        rm -rf "$ROOT/repo" && git "${git_auth[@]}" clone -q "https://github.com/$KNOWLEDGE_REPO.git" "$ROOT/repo"
-    else
-        git "${git_auth[@]}" -C "$ROOT/repo" pull -q --ff-only || echo "knowledge: pull failed, keeping the current checkout" >&2
-    fi
-fi
-
 # index.yml: rewritten every run, so it always matches this script.
 cat > "$QMD_CONFIG_DIR/index.yml" <<YAML
 global_context: "Ralph's knowledge: documents, decisions, run reports and memories for this instance."

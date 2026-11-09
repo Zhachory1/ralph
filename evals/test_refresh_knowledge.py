@@ -80,6 +80,24 @@ class RefreshTests(unittest.TestCase):
         self.assertIn("fetch failed", s["error"])
         self.assertEqual(first, s["last_success"])
 
+    def test_a_failed_first_clone_is_retried(self):
+        """#125 review: no checkout yet, so refresh clones; a failure retries next time."""
+        import shutil as sh
+        sh.rmtree(self.root / "repo")
+        # Hermetic: the GitHub URL resolves to the local origin, never the network.
+        (self.d / ".gitconfig").write_text(
+            f'[url "file://{self.origin}"]\n\tinsteadOf = https://github.com/o/docs.git\n')
+        hidden = self.d / "hidden.git"
+        self.origin.rename(hidden)
+        r = self.refresh(KNOWLEDGE_REPO="o/docs")
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("clone", self.status()["error"])
+        hidden.rename(self.origin)
+        r = self.refresh(KNOWLEDGE_REPO="o/docs")
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertTrue((self.root / "repo" / "a.md").exists())
+        self.assertTrue(self.status()["ok"])
+
     def test_embed_failure_is_recorded(self):
         r = self.refresh(QMD_FAIL="embed")
         self.assertNotEqual(0, r.returncode)

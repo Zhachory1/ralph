@@ -8,7 +8,8 @@
 # update or embed leaves the checkout ahead of the index, and the next refresh
 # indexes it (qmd update compares files, not commits).
 #
-#   GH_TOKEN   read token, passed by name; never on a command line
+#   GH_TOKEN         read token, passed by name; never on a command line
+#   KNOWLEDGE_REPO   owner/name to clone when there is no checkout yet
 set -uo pipefail
 
 ROOT=${KNOWLEDGE_ROOT:-/var/lib/ralph-knowledge}
@@ -35,6 +36,10 @@ git_auth=(-c credential.helper= -c 'credential.helper=!f(){ echo username=x-acce
 if [ -d "$ROOT/repo/.git" ]; then
     git "${git_auth[@]}" -C "$ROOT/repo" pull -q --ff-only 2>/dev/null \
         || { record "fetch failed; kept the previous checkout and index"; exit 1; }
+elif [ -n "${KNOWLEDGE_REPO:-}" ]; then
+    # First clone, or a retry after one failed (#125 review).
+    rm -rf "$ROOT/repo" && git "${git_auth[@]}" clone -q "https://github.com/$KNOWLEDGE_REPO.git" "$ROOT/repo" 2>/dev/null \
+        || { mkdir -p "$ROOT/repo"; record "clone of the docs repository failed; retrying next refresh"; exit 1; }
 fi
 qmd update >/dev/null 2>&1 || { record "qmd update failed; the previous index still answers"; exit 1; }
 qmd embed >/dev/null 2>&1 || { record "qmd embed failed; new text is keyword-searchable only"; exit 1; }

@@ -115,7 +115,7 @@ while true; do
     if [ -z "$(find "$kstamp" -mmin -60 2>/dev/null)" ] \
             && [ "$(docker inspect -f '{{.State.Running}}' "$kc" 2>/dev/null)" = true ]; then
         touch "$kstamp"
-        docker exec -e GH_TOKEN "$kc" /ralph/bootstrap/refresh-knowledge \
+        docker exec -e GH_TOKEN -e "KNOWLEDGE_REPO=${RALPH_DOCS_REPO:-}" "$kc" /ralph/bootstrap/refresh-knowledge \
             || echo "review loop: knowledge refresh returned $?" >&2
     fi
 
