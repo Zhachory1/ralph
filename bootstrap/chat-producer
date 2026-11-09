@@ -85,14 +85,14 @@ def eligible(message, space, allowed_spaces, cutoff):
 
 def list_recent(svc, space, cutoff):
     """One list call per space, newest first, inside the five-minute window.
-    Sec 3.3's fallback, when the API rejects a createTime filter (the design's
+    Sec 3.3's fallback, when the API rejects a create_time filter (the design's
     assumption 1): page newest-first and stop at the first message older than
     the window."""
-    cutoff_text = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff_text = cutoff.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     try:
         resp = svc.spaces().messages().list(
             parent=space, orderBy="createTime desc",
-            filter=f'createTime > "{cutoff_text}"').execute()
+            filter=f'create_time > "{cutoff_text}"').execute()
         return resp.get("messages", [])
     except Exception:
         pass

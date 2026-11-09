@@ -111,7 +111,7 @@ class FakeMessages:
     def list(self, **kwargs):
         self.calls.append(kwargs)
         if self.reject_filter and "filter" in kwargs:
-            raise ValueError("createTime filter not supported")
+            raise ValueError("create_time filter not supported")
         page = self.pages.pop(0)
         return FakeExec(page)
 
@@ -157,10 +157,28 @@ class ListRecentFallbackTests(unittest.TestCase):
         result = producer.list_recent(svc, "spaces/example", CUTOFF)
         self.assertEqual([in_window["name"], at_edge["name"]],
                          [m["name"] for m in result])
-        # One call attempts the createTime filter and is rejected; the
+        # One call attempts the create_time filter and is rejected; the
         # fallback's first page then stops at the first old message, so the
         # second page is never read.
         self.assertEqual(2, len(fake.calls))
+
+    def test_filtered_request_uses_the_documented_field_and_succeeds(self):
+        """The routine path: the API accepts the filter, so one call returns
+        the window and the unfiltered fallback never runs. The filter must
+        name `create_time`, the field the Chat v1 discovery document
+        documents; `createTime` is rejected as INVALID_ARGUMENT."""
+        producer = load_script()
+        in_window = message(name="spaces/example/messages/fresh",
+                            created=CUTOFF + datetime.timedelta(seconds=30))
+        fake = FakeMessages([{"messages": [in_window]}], reject_filter=False)
+        svc = FakeService(fake)
+        result = producer.list_recent(svc, "spaces/example", CUTOFF)
+        self.assertEqual([in_window["name"]], [m["name"] for m in result])
+        self.assertEqual(1, len(fake.calls))
+        sent = fake.calls[0]["filter"]
+        self.assertTrue(sent.startswith('create_time > "'), sent)
+        self.assertNotIn("createTime", sent)
+        self.assertTrue(sent.endswith('+00:00"'), sent)
 
 
 if __name__ == "__main__":
