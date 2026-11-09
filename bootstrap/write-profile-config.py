@@ -124,7 +124,7 @@ def set_knowledge(path: str, on: bool) -> int:
     if block:
         text = text[:block.start()] + new_block + text[block.end():]
     else:
-        text = text + new_block
+        text = (text if not text or text.endswith("\n") else text + "\n") + new_block
     write_atomic(target, text)
     return 0
 
@@ -178,6 +178,8 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
         entries = re.sub(rf"^  {re.escape(name)}:\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
     entries += add.split("\n", 1)[1] if add else ""
     new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
+    if not block and text and not text.endswith("\n"):
+        text += "\n"  # a file without a final newline (#134 review)
     text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block
     write_atomic(target, text)
     return 0

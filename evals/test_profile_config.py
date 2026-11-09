@@ -444,6 +444,26 @@ class VoiceTests(unittest.TestCase):
             self.assertEqual(0o640, cfg.stat().st_mode & 0o777)
             self.assertEqual("a: 2\n", cfg.read_text())
 
+    def test_global_writers_handle_a_file_without_a_final_newline(self):
+        """#134 review: appending to `other: 1` with no newline made one bad line."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "u"}, "tools": ["recall"]}}))
+            cfg.write_text("other: 1")
+            wpc.set_overlay_global(str(cfg), str(mcp), "")
+            self.assertEqual(1, yaml.safe_load(cfg.read_text())["other"])
+            cfg.write_text("other: 1")
+            wpc.set_knowledge(str(cfg), True)
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual(1, out["other"])
+        self.assertIn("knowledge", out["mcp_servers"])
+
+    def test_install_writes_the_overlay_record_atomically(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
+
     def test_overlay_mcp_server_names_are_plain(self):
         """#134 review: a comma or space would break install's name record."""
         import json
