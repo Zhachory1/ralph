@@ -306,6 +306,26 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(["mine"], list(off["mcp_servers"]))
         self.assertEqual(1, off["other"])
 
+    def test_principles_search_first_and_write_down_what_lasts(self):
+        """#121 (dd-ralph-knowledge D6/D7). install prepends PRINCIPLES to every
+        SOUL, so these reach every profile."""
+        text = (ROOT / "profiles" / "PRINCIPLES.md").read_text()
+        self.assertIn("**Search before you plan or write; cite what you used.**", text)
+        self.assertIn("**Write down what lasts.**", text)
+        for part in ("memory/<decisions|root-causes|conventions>/", "memory/reports/",
+                     "kind:", "source:", "profile:", "date:",
+                     "gh api -X PUT repos/$RALPH_DOCS_REPO/contents/", "RALPH_DOCS_PUBLIC=1"):
+            self.assertIn(part, text)
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertIn('cat "$PROFILES_DIR/PRINCIPLES.md"', install)
+
+    def test_profiles_learn_the_docs_repo_and_its_visibility(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertIn("RALPH_DOCS_REPO, RALPH_DOCS_PUBLIC]", install)
+        self.assertIn('gh repo view "$RALPH_DOCS_REPO" --json visibility', install)
+        # Unknown visibility counts as public: the safe side.
+        self.assertIn('DOCS_PUBLIC=1; [ "$vis" = PRIVATE ] || [ "$vis" = INTERNAL ] && DOCS_PUBLIC=0', install)
+
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
             with self.subTest(profile=p.name):
