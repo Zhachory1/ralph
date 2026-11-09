@@ -209,14 +209,21 @@ hermes tools enable kanban >/dev/null
 # platform, which `hermes tools` edits by default. Not kanban: the line above
 # is the board, and the chat plans work through it.
 hermes tools disable browser tts vision >/dev/null
-# The same for the skills index, which lists every bundled skill. The list is a
-# file beside PRINCIPLES (not under profiles/<name>/, which would create a
-# ralph-default profile). Names are checked to be JSON-safe by the evals.
-# `|| true`: a list with every line removed is a valid choice (nothing hidden),
-# and grep exits 1 on no match, which pipefail would turn into a failed install.
-DISABLED_SKILLS=$({ grep -vE '^[[:space:]]*(#|$)' "$PROFILES_DIR/default-disabled-skills.txt" || true; } \
-    | sed 's/.*/"&"/' | paste -sd, -)
-hermes config set skills.disabled "[$DISABLED_SKILLS]" >/dev/null
+# The same for the skills index, which lists every bundled skill. The names are
+# a file beside PRINCIPLES (not under profiles/<name>/, which would create a
+# ralph-default profile). They are merged into skills.disabled, not set over it,
+# so a skill the owner disabled by hand stays disabled (PR #132 review).
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    # Copied here as well as in the profile loop below: this runs first, and a
+    # fresh container has no /tmp/wmc.py yet.
+    docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
+    docker cp "$PROFILES_DIR/default-disabled-skills.txt" "$RALPH_HERMES_CONTAINER:/tmp/default-disabled-skills.txt"
+    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --disable-skills \
+        /tmp/default-disabled-skills.txt "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+else
+    python3 /ralph/bootstrap/write-profile-config.py --disable-skills \
+        "$PROFILES_DIR/default-disabled-skills.txt" "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+fi
 # hermes-webui runs profiles in-process and its image has no docker client;
 # give it the hermes image's own, in the shared volume (HERMES_DOCKER_BINARY).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then

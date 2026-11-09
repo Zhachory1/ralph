@@ -1,11 +1,12 @@
 # Skills Hermes bundles that the WebUI chat (the default profile) hides from
-# its prompt. One declared skill name per line; bootstrap/install writes the
-# list to skills.disabled in the global config.
+# its prompt. One declared skill name per line; bootstrap/install merges the
+# list into skills.disabled in the global config, keeping any skill you
+# disabled yourself.
 #
 # Why: the skills index is part of the system prompt, so every model call in a
 # chat pays for every entry, used or not. Disabling hides a skill from the
-# index and from skill_view; it deletes nothing, and removing a line here
-# brings it back on the next install.
+# index and from skill_view; it deletes nothing. To bring one back, remove it
+# here AND from skills.disabled (install only adds, it never removes).
 #
 # Kept on purpose (not listed): hermes-agent, claude-code, github,
 # ralph-contributing, sdlc-review, requesting-code-review, systematic-debugging,

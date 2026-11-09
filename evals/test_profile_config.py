@@ -219,7 +219,17 @@ class ChatTokenDietTests(unittest.TestCase):
 
     def test_install_applies_the_disabled_skill_list_to_the_default_profile(self):
         self.assertIn("default-disabled-skills.txt", self.INSTALL)
-        self.assertIn("config set skills.disabled", self.INSTALL)
+        self.assertIn("write-profile-config.py --disable-skills", self.INSTALL)
+
+    def test_install_merges_into_skills_disabled_instead_of_replacing_it(self):
+        """PR #132 review: `config set skills.disabled` overwrote the owner's own list."""
+        self.assertNotIn("config set skills.disabled", self.INSTALL)
+
+    def test_install_ships_the_script_to_the_container_before_using_it(self):
+        """The profile loop copies wmc.py late; the skills merge runs first."""
+        used = self.INSTALL.index("/tmp/wmc.py --disable-skills")
+        first_copy = self.INSTALL.index("/tmp/wmc.py")
+        self.assertLess(first_copy, used)
 
     def test_the_google_workspace_wrappers_are_disabled_but_the_hub_stays(self):
         names = self.names()
@@ -244,6 +254,46 @@ class ChatTokenDietTests(unittest.TestCase):
         name would corrupt it silently."""
         for name in self.names():
             self.assertRegex(name, r"^[a-z0-9][a-z0-9._-]*$", name)
+
+
+class DisableSkillsTests(unittest.TestCase):
+    """`--disable-skills` adds Ralph's names to skills.disabled and keeps the rest."""
+
+    def merged(self, existing: str, managed: str = "codex\nspike\n") -> dict:
+        import yaml
+        with tempfile.TemporaryDirectory() as d:
+            names, cfg = pathlib.Path(d, "names.txt"), pathlib.Path(d, "config.yaml")
+            names.write_text(managed)
+            cfg.write_text(existing)
+            wpc.disable_skills(str(names), str(cfg))
+            return yaml.safe_load(cfg.read_text())
+
+    def test_a_skill_the_owner_disabled_survives(self):
+        out = self.merged("skills:\n  disabled:\n  - mine\n")
+        self.assertEqual(["mine", "codex", "spike"], out["skills"]["disabled"])
+
+    def test_inline_and_indented_lists_are_read_too(self):
+        for existing in ("skills:\n  disabled: [mine]\n", "skills:\n  disabled:\n    - mine\n"):
+            with self.subTest(existing=existing):
+                self.assertEqual(["mine", "codex", "spike"], self.merged(existing)["skills"]["disabled"])
+
+    def test_a_config_without_skills_gets_the_names(self):
+        self.assertEqual(["codex", "spike"], self.merged("model:\n  default: m\n")["skills"]["disabled"])
+
+    def test_other_skills_settings_and_other_blocks_are_untouched(self):
+        out = self.merged("skills:\n  disabled:\n  - mine\n  external_dirs:\n  - /x\nother: 1\n")
+        self.assertEqual(["/x"], out["skills"]["external_dirs"])
+        self.assertEqual(1, out["other"])
+
+    def test_running_it_twice_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            names, cfg = pathlib.Path(d, "n"), pathlib.Path(d, "c")
+            names.write_text("codex\n")
+            cfg.write_text("skills:\n  disabled:\n  - mine\n")
+            wpc.disable_skills(str(names), str(cfg))
+            once = cfg.read_text()
+            wpc.disable_skills(str(names), str(cfg))
+            self.assertEqual(once, cfg.read_text())
 
 
 class VoiceTests(unittest.TestCase):

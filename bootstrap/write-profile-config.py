@@ -109,7 +109,49 @@ def set_knowledge(path: str, on: bool) -> int:
     return 0
 
 
+def _existing_disabled(skills_body: str) -> tuple[list[str], re.Match | None]:
+    """The names already under `skills.disabled`, in either list style, and
+    the match covering the key plus its items."""
+    found = re.search(r"^([ \t]+)disabled:[ \t]*(.*)\n((?:\1[ \t]*-[ \t]+.*\n)*)", skills_body, re.M)
+    if not found:
+        return [], None
+    inline, items = found.group(2).strip(), found.group(3)
+    raw = inline.strip("[]").split(",") if inline.startswith("[") else []
+    raw += [line.strip()[1:] for line in items.splitlines()]
+    names = [n.strip().strip("\"'") for n in raw]
+    return [n for n in names if n], found
+
+
+def disable_skills(names_path: str, config_path: str) -> int:
+    """Add Ralph's managed names to `skills.disabled`, keeping any the owner
+    disabled by hand. Replacing the list would silently re-enable them on every
+    install. Names Ralph stops managing stay disabled until removed here too:
+    the file cannot tell its own past entries from the owner's. Idempotent."""
+    managed = [line.strip() for line in pathlib.Path(names_path).read_text().splitlines()
+               if line.strip() and not line.lstrip().startswith("#")]
+    target = pathlib.Path(config_path)
+    text = target.read_text() if target.exists() else ""
+    block = block_re("skills").search(text)
+    body = block.group(0).split("\n", 1)[1] if block else ""
+    existing, found = _existing_disabled(body)
+    merged = existing + [n for n in managed if n not in existing]
+    entry = "  disabled: [" + ", ".join(merged) + "]\n"
+    if found:
+        body = body[:found.start()] + entry + body[found.end():]
+    else:
+        body += entry
+    new_block = "skills:\n" + body
+    if block:
+        text = text[:block.start()] + new_block + text[block.end():]
+    else:
+        text = text + ("" if not text or text.endswith("\n") else "\n") + new_block
+    target.write_text(text)
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1] == "--disable-skills":
+        raise SystemExit(disable_skills(sys.argv[2], sys.argv[3]))
     if sys.argv[1] == "--knowledge":
         raise SystemExit(set_knowledge(sys.argv[3], sys.argv[2] == "on"))
     raise SystemExit(main(sys.argv[1], sys.argv[2]))
