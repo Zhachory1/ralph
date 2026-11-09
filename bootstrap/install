@@ -97,7 +97,7 @@ sandbox_config() {
     hermes $1 config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
     # Credentials the sandbox needs for repository work. Nothing else is
     # forwarded: the model key and the chat webhook stay outside it.
-    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN"]' >/dev/null
+    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN","RALPH_DOCS_REPO","RALPH_DOCS_PUBLIC"]' >/dev/null
     # One sandbox's ceiling. A maintenance build of a large repository peaks at
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null
@@ -155,7 +155,7 @@ terminal_block() {
     echo "terminal:"
     echo "  backend: docker"
     echo "  docker_image: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}"
-    echo "  docker_forward_env: [GH_TOKEN, GITHUB_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, BUF_TOKEN, BUILDKITE_API_TOKEN]"
+    echo "  docker_forward_env: [GH_TOKEN, GITHUB_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL, BUF_TOKEN, BUILDKITE_API_TOKEN, RALPH_DOCS_REPO, RALPH_DOCS_PUBLIC]"
     echo "  container_memory: ${RALPH_SANDBOX_MEMORY_MB:-3072}"
     echo "  sandbox_dir: $RALPH_SANDBOX_ROOT/ralph-$2"
     # The instance's repository cache, so a card borrows its objects (git
@@ -383,6 +383,29 @@ if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
             chmod 600 "$tmp" && mv "$tmp" "$f"
         done'
     echo "  every other profile reads with RALPH_PROFILE_READ_TOKEN"
+fi
+
+# Where agents write memories (#121, dd-ralph-knowledge D6): every profile and
+# the default get the docs repository and whether it is public, which the
+# public-safety rule in PRINCIPLES keys on. Neither is a secret. Visibility comes
+# from GitHub; if it cannot be read, the instance counts as public (the safe
+# side). Rewritten every install; unset RALPH_DOCS_REPO removes both.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    DOCS_PUBLIC=""
+    if [ -n "${RALPH_DOCS_REPO:-}" ]; then
+        vis=$(GH_TOKEN=$READ_TOKEN gh repo view "$RALPH_DOCS_REPO" --json visibility -q .visibility 2>/dev/null || true)
+        DOCS_PUBLIC=1; [ "$vis" = PRIVATE ] || [ "$vis" = INTERNAL ] && DOCS_PUBLIC=0
+        echo "  docs repository: ${vis:-visibility unknown}, RALPH_DOCS_PUBLIC=$DOCS_PUBLIC"
+    fi
+    docker exec -i -u hermes -e "DOCS_REPO=${RALPH_DOCS_REPO:-}" -e "DOCS_PUBLIC=$DOCS_PUBLIC" "$RALPH_HERMES_CONTAINER" sh -eu -c '
+        for f in "${HERMES_HOME:-$HOME/.hermes}"/.env "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
+            [ -f "$f" ] || continue
+            tmp=$(mktemp "$f.XXXXXX")
+            rc=0; grep -vE "^RALPH_DOCS_(REPO|PUBLIC)=" "$f" > "$tmp" || rc=$?
+            [ "$rc" -le 1 ] || { rm -f "$tmp"; echo "  warning: could not read $f" >&2; continue; }
+            [ -z "$DOCS_REPO" ] || printf "RALPH_DOCS_REPO=%s\nRALPH_DOCS_PUBLIC=%s\n" "$DOCS_REPO" "$DOCS_PUBLIC" >> "$tmp"
+            chmod 600 "$tmp" && mv "$tmp" "$f"
+        done'
 fi
 
 # The knowledge index (#121): clone RALPH_DOCS_REPO into the knowledge volume,
