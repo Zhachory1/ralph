@@ -54,6 +54,8 @@ docker compose exec hermes hermes auth list
 | `init` | Creates the board and profiles from `profiles/`, sets board settings | Runs once, exits |
 | `notifier` | Posts gates to chat, turns GitHub decisions into card moves | Long-running loop |
 | `hermes-webui` | Chat space for talking with the agents, alongside the dashboard | Long-running |
+| `review-loop` | Review discovery and publishing, PR maintenance, sandbox cleanup, hourly knowledge refresh | Long-running loop |
+| `knowledge` | Local search (QMD) over the docs repo and Ralph's `docs/`, an MCP server for agents. Only when `COMPOSE_PROFILES` includes `knowledge` | Long-running |
 
 `init` and `notifier` share one small image. They drive the Hermes CLI through the `hermes` container rather than carrying it: the Hermes image is about 4.5GB, and shipping two copies of it to run a handful of commands doubled the stack's disk for nothing.
 
@@ -339,6 +341,11 @@ python3 evals/test_killswitch.py     # from the repo root
 ```
 
 Checks the kill-switch drill is safe to run and rehearses every destructive step. See [`evals/README.md`](../evals/README.md).
+
+```bash
+python3 evals/test_knowledge_service.py   # install and compose wiring
+python3 evals/test_refresh_knowledge.py   # refresh: fast-forward, failures, lock (run in the knowledge image for flock)
+```
 
 ## Troubleshooting
 

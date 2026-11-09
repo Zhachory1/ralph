@@ -23,7 +23,7 @@ digraph io {
   subgraph cluster_out { label="Out"; style="rounded,filled"; fillcolor="#E8F1FB"; color="#4A78B5";
     gchat_out [label="Google Chat, same thread\nack, reply, final result\n(split over 4,000 chars)"];
     notify    [label="Chat webhook\ngate alerts (once per reason),\nmorning digest, daily work digest"];
-    gh_out    [label="GitHub\nPRs (code + docs), reviews,\nthread replies, resolved threads"];
+    gh_out    [label="GitHub\nPRs (code + docs), reviews,\nthread replies, resolved threads,\nmemory notes in the docs repo"];
   }
 
   owner -> webui [label="asks, plans"]; owner -> dash [label="watches board"];
