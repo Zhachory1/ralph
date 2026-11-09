@@ -363,7 +363,7 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     now=""
     if [ -n "$OVERLAY_MCP" ]; then
         docker cp "$OVERLAY_MCP" "$RALPH_HERMES_CONTAINER:/tmp/overlay-mcp.json"
-        now=$(python3 -c 'import json,sys; print(",".join(n for n,s in json.load(open(sys.argv[1])).items() if "default" in s.get("profiles",[])))' "$OVERLAY_MCP")
+        now=$(python3 -c 'import json,sys; print(",".join(n for n,s in json.load(open(sys.argv[1])).items() if isinstance(s.get("profiles"),list) and "default" in s["profiles"]))' "$OVERLAY_MCP")
     fi
     # Record the union first: if the config write below is interrupted, the
     # next run still knows every name it may have written (#134 review).

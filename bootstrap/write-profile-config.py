@@ -131,6 +131,7 @@ def set_knowledge(path: str, on: bool) -> int:
 
 # Servers Ralph itself writes; an overlay may not shadow them (#134 review).
 RESERVED_MCP = {"knowledge", "lens-tools"}
+YAML_WORDS = {"true", "false", "yes", "no", "on", "off", "y", "n", "null"}
 
 
 def overlay_mcp_block(path: str, profile: str) -> str:
@@ -145,13 +146,20 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     for name, spec in servers.items():
         if name in RESERVED_MCP:
             raise SystemExit(f"mcp.json: {name} is a built-in server name")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
-            # The name is a YAML key and an entry in install's comma list.
-            raise SystemExit(f"mcp.json: server name {name!r} may use only letters, digits, . _ -")
-        if profile not in spec.get("profiles", []):
+        # A name is a YAML key and an entry in install's comma list. YAML reads
+        # bare true, null, on, 1 ... as non-strings (#134 review); Hermes then
+        # sees a server named True. Plain names only, and never those words.
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", name) or name in YAML_WORDS:
+            raise SystemExit(f"mcp.json: server name {name!r}: lowercase letter first, then a-z 0-9 _ -, not a YAML keyword")
+        profiles = spec.get("profiles")
+        # A string here would match by substring ("researcher" in "researchers").
+        if not isinstance(profiles, list) or not all(isinstance(x, str) for x in profiles):
+            raise SystemExit(f"mcp.json: {name}: profiles must be a list of names")
+        if profile not in profiles:
             continue
-        if not spec.get("tools"):
-            raise SystemExit(f"mcp.json: {name} has no tools allowlist")
+        tools = spec.get("tools")
+        if not isinstance(tools, list) or not tools or not all(isinstance(x, str) for x in tools):
+            raise SystemExit(f"mcp.json: {name} needs a tools allowlist (a non-empty list of names)")
         out.append(f"  {name}:")
         for key, value in spec.get("config", {}).items():
             out.append(f"    {key}: {json.dumps(value)}")

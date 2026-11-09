@@ -464,6 +464,25 @@ class VoiceTests(unittest.TestCase):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
 
+    def test_overlay_mcp_rejects_malformed_profiles_tools_and_yaml_names(self):
+        """#134 review: a string `profiles` matched by substring; names like
+        `true` or `1` became non-string YAML keys."""
+        import json
+        bad = [
+            {"team": {"profiles": "researchers", "config": {"url": "u"}, "tools": ["recall"]}},
+            {"team": {"profiles": ["researcher"], "config": {"url": "u"}, "tools": "recall"}},
+            {"true": {"profiles": ["researcher"], "config": {"url": "u"}, "tools": ["recall"]}},
+            {"1": {"profiles": ["researcher"], "config": {"url": "u"}, "tools": ["recall"]}},
+            {"null": {"profiles": ["researcher"], "config": {"url": "u"}, "tools": ["recall"]}},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            for case in bad:
+                with self.subTest(case=list(case)[0]):
+                    mcp.write_text(json.dumps(case))
+                    with self.assertRaises(SystemExit):
+                        wpc.overlay_mcp_block(str(mcp), "researcher")
+
     def test_overlay_mcp_server_names_are_plain(self):
         """#134 review: a comma or space would break install's name record."""
         import json
