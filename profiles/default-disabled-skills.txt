@@ -1,0 +1,84 @@
+# Skills Hermes bundles that the WebUI chat (the default profile) hides from
+# its prompt. One declared skill name per line; bootstrap/install merges the
+# list into skills.disabled in the global config, keeping any skill you
+# disabled yourself.
+#
+# Why: the skills index is part of the system prompt, so every model call in a
+# chat pays for every entry, used or not. Disabling hides a skill from the
+# index and from skill_view; it deletes nothing. To bring one back, remove it
+# here AND from skills.disabled (install only adds, it never removes).
+#
+# Kept on purpose (not listed): hermes-agent, claude-code, github,
+# ralph-contributing, sdlc-review, requesting-code-review, systematic-debugging,
+# caveman, humanizer, architecture-diagram,
+# test-driven-development, grounded-citations, blocked-page-recovery,
+# google-workspace, docx, pdf, xlsx.
+
+# autonomous-ai-agents
+codex
+computer-use
+opencode
+
+# creative
+ascii-video
+baoyu-infographic
+claude-design
+design-md
+manim-video
+p5js
+popular-web-designs
+songwriting-and-ai-music
+
+# email, media, note-taking
+email-inbox-triage
+himalaya
+gif-search
+songsee
+youtube-content
+obsidian
+
+# productivity: google-workspace is the hub; the gws-* entries are per-command wrappers of it
+gws-calendar
+gws-calendar-agenda
+gws-calendar-insert
+gws-chat
+gws-chat-send
+gws-docs
+gws-docs-write
+gws-gmail
+gws-gmail-forward
+gws-gmail-read
+gws-gmail-reply
+gws-gmail-reply-all
+gws-gmail-send
+gws-gmail-triage
+gws-gmail-watch
+gws-shared
+
+# productivity: the rest
+airtable
+box
+cavecrew
+document-to-action-items
+maps
+meeting-action-items
+notion
+powerpoint
+product-price-monitor
+weekly-review-planning
+
+# research, social-media
+arxiv
+competitor-news-monitor
+llm-wiki
+xurl
+
+# software-development
+codebase-inspection
+dogfood
+hermes-agent-skill-authoring
+inspecting-hermes-desktop-dom
+node-inspect-debugger
+python-debugpy
+simplify-code
+spike
