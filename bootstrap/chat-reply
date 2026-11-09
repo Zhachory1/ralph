@@ -26,6 +26,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -33,6 +35,25 @@ import chat_evidence
 
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
+URL = re.compile(r"https?://[^\s<>\"')\]]+")
+GITHUB_PULL = re.compile(r"\Ahttps://github\.com/([\w.-]+)/([\w.-]+)/pull/\d+/?\Z")
+GITHUB_REPO = re.compile(r"\Ahttps://github\.com/([\w.-]+)/([\w.-]+)/?\Z")
+TRACKER_ISSUE_PATH = re.compile(r"/issues/\d+\b")
+BARE_TRACKER_ISSUE = re.compile(r"(?<![\w#])#\d+\b")
+# Known provider token shapes, plus a generic "key/token/password/secret: value"
+# assignment -- the content bound is a refusal rule, not a scanner that proves
+# a string is a real credential (SOUL.md:29, dd-chat.md:488-492).
+CREDENTIAL = re.compile(
+    r"\bgh[oprsu]_[A-Za-z0-9]{20,}\b"
+    r"|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
+    r"|\bsk-[A-Za-z0-9]{20,}\b"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\bxox[baprs]-[A-Za-z0-9-]{10,}\b"
+    r"|\bAIza[0-9A-Za-z_-]{35}\b"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,}",
+    re.IGNORECASE,
+)
 MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "clarify": ".clarify-sent",
            "decline": ".decline-sent", "final": ".final-sent"}
 # `reply_kind` picks one of these three reply markers; an unrecognized or absent
@@ -58,7 +79,8 @@ def command(argv):
 def instance_config(path):
     values = {}
     for line in path.read_text().splitlines():
-        if line.startswith(("RALPH_INSTANCE=", "RALPH_WORKSPACES=", "CHAT_ROUTE_SPACES=")):
+        if line.startswith(("RALPH_INSTANCE=", "RALPH_WORKSPACES=", "CHAT_ROUTE_SPACES=",
+                             "RALPH_TRACKER_HOST=")):
             key, value = line.split("=", 1)
             values[key] = value.strip().strip("'\"")
     instance = values["RALPH_INSTANCE"]
@@ -67,7 +89,7 @@ def instance_config(path):
             or len(spaces) > 8 or any(not SPACE.fullmatch(space) for space in spaces):
         raise ValueError("invalid Chat pilot configuration")
     root = (path.parent / values["RALPH_WORKSPACES"] / "chat-inbox").resolve()
-    return instance + "-hermes-1", root, spaces
+    return instance + "-hermes-1", root, spaces, values.get("RALPH_TRACKER_HOST") or None
 
 
 def operation_of(task):
@@ -121,6 +143,67 @@ def parts(body):
         body = body[cut + sep:]
     chunks.append(body)
     return [c for c in chunks if c.strip()]
+
+
+def has_tracker_reference(body, tracker_host):
+    """A work-tracker reference (R1, prd.md:594-595): the instance's tracker
+    host when RALPH_TRACKER_HOST is set, an `/issues/<n>` path, or a bare
+    `#<n>`. The path and bare-issue patterns are host-agnostic by design: the
+    bound is a refusal rule, not a scanner that proves a string names this
+    request's own tracker item."""
+    if tracker_host and tracker_host in body:
+        return True
+    return bool(TRACKER_ISSUE_PATH.search(body) or BARE_TRACKER_ISSUE.search(body))
+
+
+def has_credential(body):
+    return bool(CREDENTIAL.search(body))
+
+
+def github_repo_is_public(owner, repo):
+    """One unauthenticated read: GET https://api.github.com/repos/<owner>/<repo>.
+    No token is sent, so the sender gains no repository credential; a non-200
+    (including an HTTPError for a private or missing repository) means "not
+    reachable", which refuses (R19, prd.md:597-598)."""
+    url = "https://api.github.com/repos/%s/%s" % (owner, repo)
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ralph-chat-reply"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                return False
+            data = json.loads(response.read())
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("private") is False
+
+
+def reachable(url):
+    """A URL qualifies only if provably public: a GitHub pull request or
+    repository URL, checked live against the unauthenticated API above.
+    Everything else never qualifies (R19, prd.md:597-598)."""
+    match = GITHUB_PULL.match(url) or GITHUB_REPO.match(url)
+    if not match:
+        return False
+    return github_repo_is_public(match.group(1), match.group(2))
+
+
+def refuse_unsendable(body, tracker_host):
+    """Run before any send of agent text -- `ack`, every `reply_kind`,
+    `final` (§4.5, dd-chat.md:475-511). A reply can quote a private
+    repository the requester cannot open, so this is a refusal in the
+    sender, not a trim. **The honest limit:** prose cannot be proven to come
+    from this request -- this catches references and links, not a sentence
+    that paraphrases a private document; that residual risk is accepted, not
+    designed away (D2)."""
+    if has_tracker_reference(body, tracker_host):
+        raise Refused("reply text names the work tracker")
+    if has_credential(body):
+        raise Refused("reply text looks like it carries a credential")
+    for url in URL.findall(body):
+        if not reachable(url):
+            raise Refused("reply text links to something the requester cannot already open")
+    return body
 
 
 def post(space, thread, body, kind, op_id):
@@ -219,7 +302,7 @@ def block_and_alert(container, board, task_id, root, op_id, kind, reason):
     notify(f"Ralph chat {kind} for {task_id} ({op_id}): {reason}")
 
 
-def handle(container, root, allowed_spaces, board, task_id):
+def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
     """0 done or nothing to send, 1 retryable failure, 2 refused."""
     op_id = kind = None
     try:
@@ -241,17 +324,17 @@ def handle(container, root, allowed_spaces, board, task_id):
                 raise Refused("Chat workspace differs from operation")
             if choice == "route":
                 kind = "ack"
-                body = text(metadata.get("ack"))
+                body = refuse_unsendable(text(metadata.get("ack")), tracker_host)
             elif choice == "reply":
                 kind = REPLY_MARKERS.get(metadata.get("reply_kind"), "reply")
-                body = text(metadata["body"])
+                body = refuse_unsendable(text(metadata["body"]), tracker_host)
             else:
                 return 0
         else:
             if choice != "send":
                 return 0
             kind = "final"
-            body = text(metadata["body"])
+            body = refuse_unsendable(text(metadata["body"]), tracker_host)
             if not sent(root, op_id, "ack"):
                 raise Refused("final response before the request was acknowledged")
         item = destination(root, op_id, allowed_spaces)
@@ -308,7 +391,7 @@ def handle(container, root, allowed_spaces, board, task_id):
 
 def scan(instance_env):
     try:
-        container, root, allowed_spaces = instance_config(instance_env)
+        container, root, allowed_spaces, tracker_host = instance_config(instance_env)
     except (OSError, ValueError, KeyError):
         print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
@@ -336,7 +419,7 @@ def scan(instance_env):
             if board == "queues" and (sent(root, op_id, "ack") or sent(root, op_id, "reply")
                                        or sent(root, op_id, "clarify") or sent(root, op_id, "decline")):
                 continue
-            if handle(container, root, allowed_spaces, board, task["id"]) == 1:
+            if handle(container, root, allowed_spaces, board, task["id"], tracker_host) == 1:
                 status = 1
     return status
 
@@ -353,8 +436,8 @@ def main():
         parser.error("choose exactly one of --task or --scan")
     if args.scan:
         return scan(args.instance_env)
-    container, root, allowed_spaces = instance_config(args.instance_env)
-    return handle(container, root, allowed_spaces, args.board, args.task)
+    container, root, allowed_spaces, tracker_host = instance_config(args.instance_env)
+    return handle(container, root, allowed_spaces, args.board, args.task, tracker_host)
 
 
 if __name__ == "__main__":
