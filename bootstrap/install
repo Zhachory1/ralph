@@ -368,10 +368,10 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     # Record the union first: if the config write below is interrupted, the
     # next run still knows every name it may have written (#134 review).
     all=$(python3 -c 'import sys; print(",".join(sorted({n for n in sys.argv[1].split(",") if n})))' "$prev,$now")
-    printf '%s' "$all" | docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$state"
+    printf '%s' "$all" | docker exec -i -u hermes "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$state"
     docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
         "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$all" "$gcfg"
-    printf '%s' "$now" | docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$state"
+    printf '%s' "$now" | docker exec -i -u hermes "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$state"
     [ -z "$now$prev" ] || echo "  overlay MCP servers for default: ${now:-none}"
 fi
 rm -f "$SRC_TMP"
