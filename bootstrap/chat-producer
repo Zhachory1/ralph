@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Read the last five minutes of Chat messages in approved spaces and decide
-which are eligible. The read half only (PR 6 of the chat intake design,
-projects/ralph-redmine/plan-chat.md): no staging, no card creation, no send
-path.
+"""Read the last five minutes of Chat messages in approved spaces, stage an
+eligible one as evidence/item.json and create its intake card.
+
+PR 6 of the chat intake design (projects/ralph-redmine/plan-chat.md) shipped
+the read and eligibility half only, with --dry-run as its one mode. This
+pull request, PR 7, adds --once.
 
 Imports the credential helpers from skills/ops/google-chat/gchat.py (`_key`,
 `_load_creds`), resolved the way `chat-reply:128` resolves the same module,
@@ -11,24 +13,40 @@ messages`, which discards the two fields eligibility runs on
 (`sender.type`, `clientAssignedMessageId`).
 
     bootstrap/chat-producer --instance-env /path/to/instance.env --dry-run
+    bootstrap/chat-producer --instance-env /path/to/instance.env --once
 
---dry-run is the only mode this pull request has: one line per message, its
-computed operation id, and its eligibility verdict. Nothing is staged.
+--dry-run prints one line per message, its computed operation id, and its
+eligibility verdict; nothing is staged. --once stages an eligible message's
+whole thread (dd-chat.md Sec 3.1) and creates one intake card through
+`docker exec ... hermes kanban create`, the shape bootstrap/inbox-producer
+already uses (:148-154); a message already staged makes no second directory
+and no second card.
+
+The cutover guard: if any message in the thread carries from_ralph: true and
+prior_operations came out empty, Ralph has replied through markers this
+producer cannot see, so it stages nothing, creates no card, prints one line
+naming the operation id and the thread, and exits 0.
+--allow-unseen-history turns the guard off.
 """
 import argparse
 import datetime
 import hashlib
 import importlib.machinery
 import importlib.util
+import json
+import os
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 
 INSTANCE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
 GCHAT = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
 WINDOW_SECONDS = 300
 MAX_SPACES = 8
+MAX_PRIOR_OPERATIONS = 20
 
 
 def load_gchat():
@@ -56,6 +74,21 @@ def read_spaces(path):
     return spaces
 
 
+def instance_config(path):
+    """The exec container and the chat-inbox root, read from the same
+    instance file; the container name follows `chat-reply:59`'s own rule."""
+    values = {}
+    for line in path.read_text().splitlines():
+        if line.startswith(("RALPH_INSTANCE=", "RALPH_WORKSPACES=")):
+            key, value = line.split("=", 1)
+            values[key] = value.strip().strip("'\"")
+    instance = values["RALPH_INSTANCE"]
+    if not INSTANCE.fullmatch(instance):
+        raise ValueError("invalid Chat pilot configuration")
+    root = (path.parent / values["RALPH_WORKSPACES"] / "chat-inbox").resolve()
+    return instance + "-hermes-1", root
+
+
 def operation_id(message_name):
     """chat-reply:82 and chat-route:68 check this same identity."""
     return "chat-" + hashlib.sha256(message_name.encode()).hexdigest()
@@ -77,10 +110,16 @@ def eligible(message, space, allowed_spaces, cutoff):
     sender = message.get("sender") or {}
     if sender.get("type") == "BOT":
         return False
-    client_id = message.get("clientAssignedMessageId") or ""
-    if client_id.startswith("client-ralph-"):
+    if is_ralph_reply(message):
         return False
     return True
+
+
+def is_ralph_reply(message):
+    """R10's client-assigned-id rule, applied thread-wide: from_ralph marks
+    exactly what chat-reply posted."""
+    client_id = message.get("clientAssignedMessageId") or ""
+    return client_id.startswith("client-ralph-")
 
 
 def list_recent(svc, space, cutoff):
@@ -113,27 +152,148 @@ def list_recent(svc, space, cutoff):
     return out
 
 
+def list_thread(svc, space, thread):
+    """Every message in the thread, oldest first, via the documented
+    `thread.name` filter; no paging fallback, since none is in this pull
+    request's test plan."""
+    resp = svc.spaces().messages().list(
+        parent=space, orderBy="createTime asc",
+        filter=f'thread.name = "{thread}"').execute()
+    return resp.get("messages", [])
+
+
+def prior_operations(messages, op_id, root):
+    """Each earlier message's operation id, newest first, kept only when its
+    directory already exists under root; capped at 20; never containing this
+    operation (`chat-route:71-74`)."""
+    ids = []
+    for message in reversed(messages):
+        candidate = operation_id(message.get("name", ""))
+        if candidate == op_id:
+            continue
+        if (root / candidate).is_dir():
+            ids.append(candidate)
+    return ids[:MAX_PRIOR_OPERATIONS]
+
+
+def stage_once(path, text, mode):
+    """Write path atomically, only if absent -- `inbox-producer:59-75`'s
+    shape, so a rerun over an already-staged message writes no second file."""
+    if path.exists():
+        return
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(tmp)
+
+
+def command(argv):
+    return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+
+
+def create_card(container, op_id):
+    """One intake card: queues, ralph-chat-maintainer, one operation_id:
+    line, idempotency key the operation id, the container workspace path
+    `chat-reply:171-172` requires (`inbox-producer:148-154`'s shape)."""
+    return command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
+                    "--board", "queues", "create", "Chat message received",
+                    "--body", f"operation_id: {op_id}\n",
+                    "--assignee", "ralph-chat-maintainer",
+                    "--idempotency-key", op_id,
+                    "--workspace", f"dir:/workspaces/chat-inbox/{op_id}", "--json"])
+
+
+def stage(svc, root, space, message, allow_unseen_history):
+    """Stage one eligible message under the cutover guard. Returns
+    (op_id, staged); staged is False if already on disk or guarded."""
+    op_id = operation_id(message.get("name", ""))
+    workspace = root / op_id
+    if workspace.is_dir():
+        return op_id, False
+    thread = (message.get("thread") or {}).get("name", "")
+    history = list_thread(svc, space, thread)
+    records = [{"name": m.get("name"), "text": (m.get("text") or "").splitlines(),
+               "from_ralph": is_ralph_reply(m)} for m in history]
+    prior = prior_operations(history, op_id, root)
+    if not prior and any(record["from_ralph"] for record in records) \
+            and not allow_unseen_history:
+        print(f"guarded {op_id} {thread}: Ralph has replied in this thread with no "
+              f"prior operation directory visible; staging nothing")
+        return op_id, False
+    item = {
+        "kind": "inbound",
+        "sender_trusted": True,
+        "space": space,
+        "thread": thread,
+        "messages": records,
+        "sender": message.get("sender") or {},
+        "prior_operations": prior,
+    }
+    evidence = workspace / "evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+    os.chmod(workspace, 0o700)
+    os.chmod(evidence, 0o700)
+    stage_once(evidence / "item.json", json.dumps(item), 0o600)
+    return op_id, True
+
+
 def scan(svc, allowed_spaces, now=None):
-    """Yields (message, verdict) for every message in the window, across
-    every approved space, newest first within each space."""
+    """Yields (space, message, verdict) for every message in the window,
+    across every approved space, newest first within each space."""
     cutoff = (now or datetime.datetime.now(datetime.timezone.utc)) \
         - datetime.timedelta(seconds=WINDOW_SECONDS)
     for space in sorted(allowed_spaces):
         for message in list_recent(svc, space, cutoff):
-            yield message, eligible(message, space, allowed_spaces, cutoff)
+            yield space, message, eligible(message, space, allowed_spaces, cutoff)
+
+
+def once(svc, allowed_spaces, container, root, allow_unseen_history, now=None):
+    status = 0
+    for space, message, verdict in scan(svc, allowed_spaces, now=now):
+        if not verdict:
+            continue
+        op_id, staged = stage(svc, root, space, message, allow_unseen_history)
+        if not staged:
+            continue
+        created = create_card(container, op_id)
+        if created.returncode:
+            print(f"could not create Chat card for {op_id}", file=sys.stderr)
+            status = 1
+            continue
+        print(f"{op_id} staged, card created")
+    return status
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--instance-env", required=True, type=pathlib.Path)
-    parser.add_argument("--dry-run", action="store_true", required=True)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--allow-unseen-history", action="store_true",
+                        help="stage a thread the cutover guard would otherwise refuse")
     args = parser.parse_args()
+    if bool(args.dry_run) == bool(args.once):
+        parser.error("choose exactly one of --dry-run or --once")
     try:
         allowed_spaces = read_spaces(args.instance_env)
     except (OSError, ValueError, KeyError):
         print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
+    container = root = None
+    if args.once:
+        try:
+            container, root = instance_config(args.instance_env)
+        except (OSError, ValueError, KeyError):
+            print("invalid Chat pilot configuration", file=sys.stderr)
+            return 1
     gchat = load_gchat()
     creds = gchat._load_creds()
     if not creds:
@@ -141,10 +301,13 @@ def main():
         return 1
     from googleapiclient.discovery import build
     svc = build("chat", "v1", credentials=creds, cache_discovery=False)
-    for message, verdict in scan(svc, allowed_spaces):
-        op_id = operation_id(message.get("name", ""))
-        print(f"{op_id} {'eligible' if verdict else 'ignored'} {message.get('name')}")
-    return 0
+    if args.dry_run:
+        for space, message, verdict in scan(svc, allowed_spaces):
+            op_id = operation_id(message.get("name", ""))
+            print(f"{op_id} {'eligible' if verdict else 'ignored'} {message.get('name')}")
+        return 0
+    root.mkdir(parents=True, exist_ok=True)
+    return once(svc, allowed_spaces, container, root, args.allow_unseen_history)
 
 
 if __name__ == "__main__":
