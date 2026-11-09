@@ -346,6 +346,18 @@ if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     echo "  every other profile reads with RALPH_PROFILE_READ_TOKEN"
 fi
 
+# The knowledge index (#121): clone RALPH_DOCS_REPO into the knowledge volume,
+# write QMD's config, index and embed. The read token goes in by name only.
+# Tolerant: a stack without network still starts, and search catches up.
+# The service's presence is the switch (COMPOSE_PROFILES): no container, no index.
+if [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] \
+        && docker inspect "$RALPH_KNOWLEDGE_CONTAINER" >/dev/null 2>&1; then
+    export GH_TOKEN=${RALPH_PROFILE_READ_TOKEN:-${RALPH_GITHUB_TOKEN:-}}
+    docker exec -e GH_TOKEN -e "KNOWLEDGE_REPO=${RALPH_DOCS_REPO:-}" "$RALPH_KNOWLEDGE_CONTAINER" \
+        /ralph/bootstrap/knowledge-init || echo "  knowledge: index not ready; search catches up on refresh" >&2
+    unset GH_TOKEN
+fi
+
 # The three skills the manifest references rather than the repository holding.
 # Tolerant of a failure here: a stack that cannot reach GitHub should start
 # with the skills it has and a warning, not refuse to start.
