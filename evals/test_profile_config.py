@@ -416,6 +416,18 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 wpc.overlay_mcp_block(str(mcp), "researcher")
 
+    def test_config_writes_are_atomic(self):
+        """#134 review: a failure mid-write must leave the old config."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("mcp_servers:\n  mine:\n    url: http://x\nother: 1\n")
+            with mock.patch.object(wpc.os, "replace", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    wpc.set_overlay_global(str(cfg), "", "mine")
+            self.assertIn("other: 1", cfg.read_text())
+            self.assertIn("mine:", cfg.read_text())
+
     def test_overlay_mcp_server_names_are_plain(self):
         """#134 review: a comma or space would break install's name record."""
         import json

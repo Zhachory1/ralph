@@ -20,6 +20,7 @@ and says nothing about doing nothing.
 A freshly created profile has no config.yaml at all until something writes one.
 """
 
+import os
 import pathlib
 import re
 import sys
@@ -29,6 +30,16 @@ import sys
 # forwarded credentials, repo-cache mount) and appended to the source, so one
 # write replaces what used to be a hermes config set call per key.
 BLOCKS = ("model", "platform_toolsets", "approvals", "skills", "terminal", "mcp_servers")
+
+
+def write_atomic(target: pathlib.Path, text: str) -> None:
+    """Replace a live config whole or not at all: an interrupted write leaves
+    the old file, never an empty or partial one (#134 review)."""
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(text)
+    if target.exists():
+        os.chmod(tmp, target.stat().st_mode & 0o777)
+    os.replace(tmp, target)
 
 
 def block_re(name: str) -> re.Pattern[str]:
@@ -74,7 +85,7 @@ def main(src_path: str, dst_path: str) -> int:
     for name in BLOCKS:
         dst = apply_block(name, src, dst)
 
-    target.write_text(dst)
+    write_atomic(target, dst)
     return 0
 
 
@@ -105,7 +116,7 @@ def set_knowledge(path: str, on: bool) -> int:
         text = text[:block.start()] + new_block + text[block.end():]
     else:
         text = text + new_block
-    target.write_text(text)
+    write_atomic(target, text)
     return 0
 
 
@@ -159,7 +170,7 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
     entries += add.split("\n", 1)[1] if add else ""
     new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
     text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block
-    target.write_text(text)
+    write_atomic(target, text)
     return 0
 
 
