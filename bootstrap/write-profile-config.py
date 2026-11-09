@@ -28,7 +28,7 @@ import sys
 # terminal is generated per profile by bootstrap/install (sandbox root, image,
 # forwarded credentials, repo-cache mount) and appended to the source, so one
 # write replaces what used to be a hermes config set call per key.
-BLOCKS = ("model", "platform_toolsets", "approvals", "skills", "terminal")
+BLOCKS = ("model", "platform_toolsets", "approvals", "skills", "terminal", "mcp_servers")
 
 
 def block_re(name: str) -> re.Pattern[str]:
@@ -44,8 +44,25 @@ def apply_block(name: str, src: str, dst: str) -> str:
     return found.group(0) + dst
 
 
+def merge_mcp_servers(src: str) -> str:
+    """Fold every top-level `mcp_servers:` block in the source into one.
+
+    install appends the knowledge server (#121) as its own `mcp_servers:` block
+    after the profile's config; a profile with lens-tools then has two, and
+    the copy below takes only the first. Server entries are the indented lines
+    under each block, so joining them under one header keeps both servers.
+    """
+    blocks = list(block_re("mcp_servers").finditer(src))
+    if len(blocks) < 2:
+        return src
+    entries = "".join(m.group(0).split("\n", 1)[1] for m in blocks)
+    for m in reversed(blocks):
+        src = src[:m.start()] + src[m.end():]
+    return src + "mcp_servers:\n" + entries
+
+
 def main(src_path: str, dst_path: str) -> int:
-    src = pathlib.Path(src_path).read_text()
+    src = merge_mcp_servers(pathlib.Path(src_path).read_text())
     target = pathlib.Path(dst_path)
     dst = target.read_text() if target.exists() else ""
 

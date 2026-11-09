@@ -119,6 +119,33 @@ repo_cache_profile() {
         *) return 1 ;;
     esac
 }
+# Profiles that search the knowledge index (#121): the general ones. The lenses,
+# review-synthesis, chat-maintainer, chat-summarizer and inbox-drafter reason
+# only from their staged evidence or have no tools by design, so never get it.
+knowledge_profile() {
+    case "$1" in
+        orchestrator|author|builder|maintainer|researcher|reviewer|analyst|experimenter|auditor|watcher) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+# The knowledge server as an mcp_servers block, appended after a profile's own
+# config; write-profile-config folds it in beside lens-tools. Only when the
+# knowledge service exists (COMPOSE_PROFILES is the switch).
+knowledge_block() {
+    [ -n "$KNOWLEDGE_ON" ] || return 0
+    cat <<'YAML'
+mcp_servers:
+  knowledge:
+    url: "http://knowledge:8181/mcp"
+    enabled: true
+    tools:
+      include: [query, get, multi_get, status]
+YAML
+}
+KNOWLEDGE_ON=""
+if [ -n "${RALPH_KNOWLEDGE_CONTAINER:-}" ] && docker inspect "$RALPH_KNOWLEDGE_CONTAINER" >/dev/null 2>&1; then
+    KNOWLEDGE_ON=1
+fi
 # The same settings as sandbox_config, as the profile's whole terminal block,
 # so write-profile-config writes them with the rest of the profile in one go.
 terminal_block() {
@@ -275,7 +302,8 @@ for dir in "$PROFILES_DIR"/*/; do
             { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$PROFILES_DIR/STANDARDS.md"; printf '\n'; cat "$dir/SOUL.md"; } |
                 docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$target/SOUL.md"
         fi
-        { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"; } > "$SRC_TMP"
+        { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"
+          knowledge_profile "$base" && knowledge_block; } > "$SRC_TMP"
         docker cp "$SRC_TMP" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
         docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         continue
@@ -285,9 +313,17 @@ for dir in "$PROFILES_DIR"/*/; do
     fi
 
     # The model and the toolsets are ours; the rest is Hermes-generated.
-    { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"; } > "$SRC_TMP"
+    { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"
+          knowledge_profile "$base" && knowledge_block; } > "$SRC_TMP"
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
+# The default profile (the WebUI chat) searches too. Its config is the global
+# one, written the same way: only the mcp_servers block, folded in.
+if [ -n "$KNOWLEDGE_ON" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    knowledge_block > "$SRC_TMP"
+    docker cp "$SRC_TMP" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
+    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+fi
 rm -f "$SRC_TMP"
 
 # CI logs for the profiles that fix failing builds. Runs after the profiles
