@@ -20,6 +20,10 @@ Under the root, each profile has `<profile>/docker/default/{workspace,home}`.
    deleted: `.cache`, `.npm`, and Go's module cache `go/pkg/mod` -- never
    `go/bin`, where installed tools live. They rebuild on next use.
 
+3. Chat uploads. `.webui-attachments/<session>` (hermes-webui's upload inbox,
+   #128) is deleted once untouched for ATTACHMENT_AGE_SECONDS. The default
+   profile copies what a task needs into the card, so the upload is spent.
+
 The repository cache is never touched: clones borrow its objects (#79).
 """
 
@@ -40,6 +44,8 @@ HOME_LIMIT_BYTES = 5 * 1024 ** 3
 CACHE_DIRS = (".cache", ".npm", "go/pkg/mod")
 IN_FLIGHT = {"todo", "ready", "running", "blocked"}
 CARD_DIR = re.compile(r"^t_[0-9a-f]+$")
+ATTACHMENTS = ".webui-attachments"
+ATTACHMENT_AGE_SECONDS = 7 * 24 * 3600
 
 
 def hermes(*args):
@@ -118,7 +124,13 @@ def remove(path, dry_run):
 def clean(root, states, busy, now, dry_run):
     """Returns [(path, bytes freed, reason)]."""
     removed = []
-    for profile_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+    uploads = root / ATTACHMENTS
+    if uploads.is_dir() and not uploads.is_symlink():
+        for session in sorted(uploads.iterdir()):
+            if session.is_dir() and not session.is_symlink() \
+                    and now - newest_mtime(session) >= ATTACHMENT_AGE_SECONDS:
+                removed.append((session, remove(session, dry_run), "chat upload, idle a week"))
+    for profile_dir in sorted(p for p in root.iterdir() if p.is_dir() and p.name != ATTACHMENTS):
         base = profile_dir / "docker" / "default"
         workspace = base / "workspace"
         if workspace.is_dir():

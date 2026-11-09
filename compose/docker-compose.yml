@@ -338,6 +338,11 @@ services:
       # uploads sit apart from Hermes' state and its credentials, and can be
       # dropped without touching either.
       HERMES_WEBUI_STATE_DIR: /home/hermeswebui/webui-state
+      # Chat uploads go under the sandbox root (same absolute path in this
+      # container and on the host), so the default profile's sandbox can mount
+      # them read-only at the path the chat hands the agent (#128). Removed by
+      # cleanup-sandboxes after a week idle.
+      HERMES_WEBUI_ATTACHMENT_DIR: ${RALPH_SANDBOX_ROOT}/.webui-attachments
       # Build hermes-webui's venv on the same Python as the agent it runs.
       # Hermes pins every core dependency with `python_version >= '3.14'`, and
       # the image builds its venv on its own 3.12; under 3.12 those markers are

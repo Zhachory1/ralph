@@ -118,6 +118,7 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 `bootstrap/cleanup-sandboxes`, run by review-loop at most hourly:
 - Deletes a card checkout (`workspace/t_<id>`) once its card is done or archived and it has been idle an hour.
 - Deletes other workspace folders idle a day, only when the profile has no card in flight.
+- Deletes WebUI chat uploads (`.webui-attachments/<session>`) idle a week.
 - Clears package caches when a profile's sandbox home passes 5 GB.
 - If any board cannot be read, it deletes nothing.
 

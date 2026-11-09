@@ -94,6 +94,31 @@ class CleanupTests(unittest.TestCase):
         self.run_clean({})
         self.assertFalse(path.exists())
 
+    def upload(self, session, mtime):
+        path = self.root / ".webui-attachments" / session
+        path.mkdir(parents=True)
+        (path / "doc.md").write_text("x")
+        for q in (path / "doc.md", path):
+            os.utime(q, (mtime, mtime))
+        return path
+
+    def test_chat_uploads_idle_a_week_are_deleted_and_recent_ones_kept(self):
+        """#128: uploads are spent once their content is on a card."""
+        old = self.upload("s_old", NOW - 8 * 24 * 3600)
+        new = self.upload("s_new", NOW - 6 * 24 * 3600)
+        removed = self.run_clean({})
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+        self.assertEqual(["chat upload, idle a week"], [r for _, _, r in removed])
+
+    def test_the_upload_inbox_is_not_treated_as_a_profile(self):
+        self.upload("s_new", NOW)
+        (self.root / ".webui-attachments" / "docker" / "default" / "workspace" / "stray").mkdir(parents=True)
+        os.utime(self.root / ".webui-attachments" / "docker" / "default" / "workspace" / "stray",
+                 (NOW - 25 * 3600, NOW - 25 * 3600))
+        removed = self.run_clean({})
+        self.assertNotIn("stray, idle a day", [r for _, _, r in removed])
+
     def test_dry_run_deletes_nothing_but_reports(self):
         path = self.checkout("t_ff")
         removed = self.run_clean({"t_ff": "done"}, dry_run=True)

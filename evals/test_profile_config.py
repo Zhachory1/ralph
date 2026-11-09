@@ -217,7 +217,8 @@ class VoiceTests(unittest.TestCase):
         """Owner instruction 2026-11-04: every profile follows the coding,
         testing, ownership and documentation standards."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertEqual(2, install.count('cat "$PROFILES_DIR/STANDARDS.md"'))
+        # Named profiles (container and local paths) and the default SOUL (#128).
+        self.assertEqual(3, install.count('cat "$PROFILES_DIR/STANDARDS.md"'))
         self.assertIn("Neither is Google Docs", (ROOT / "profiles" / "STANDARDS.md").read_text())
 
     def test_standards_name_no_employer_hosts_or_document_standards(self):
@@ -327,6 +328,31 @@ class VoiceTests(unittest.TestCase):
         self.assertIn('gh repo view "$RALPH_DOCS_REPO" --json visibility', install)
         # Unknown visibility counts as public: the safe side.
         self.assertIn('DOCS_PUBLIC=1; [ "$vis" = PRIVATE ] || [ "$vis" = INTERNAL ] && DOCS_PUBLIC=0', install)
+
+    def test_default_soul_is_built_like_the_others_and_hands_off_attachments(self):
+        """#128: install writes PRINCIPLES + STANDARDS + DEFAULT_SOUL to the
+        global SOUL; the text says to copy cleaned content into the card and
+        never pass the path on."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertIn('cat "$PROFILES_DIR/DEFAULT_SOUL.md"; } |', install)
+        self.assertIn('"${HERMES_HOME:-$HOME/.hermes}/SOUL.md"', install)
+        soul = (ROOT / "profiles" / "DEFAULT_SOUL.md").read_text()
+        self.assertIn("You are Hermes Agent", soul)
+        for part in ("## Attachments", "--body-file", "Never hand on the attachment path",
+                     "secrets", "RALPH_DOCS_PUBLIC=1"):
+            self.assertIn(part, soul)
+        self.assertFalse((ROOT / "profiles" / "default").exists(),
+                         "profiles/default/ would create a ralph-default profile")
+
+    def test_only_the_default_sandbox_mounts_chat_uploads(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertIn('ATTACH_DIR="$RALPH_SANDBOX_ROOT/.webui-attachments"', install)
+        self.assertIn('vols="\\"$ATTACH_DIR:$ATTACH_DIR:ro\\""', install)
+        block = install[install.index("terminal_block() {"):]
+        block = block[:block.index("\n}\n")]
+        self.assertNotIn("ATTACH_DIR", block, "named profiles must never see uploads")
+        compose = (ROOT / "compose" / "docker-compose.yml").read_text()
+        self.assertIn("HERMES_WEBUI_ATTACHMENT_DIR: ${RALPH_SANDBOX_ROOT}/.webui-attachments", compose)
 
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
