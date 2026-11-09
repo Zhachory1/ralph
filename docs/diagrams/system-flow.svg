@@ -268,11 +268,11 @@
 <!-- knowledge -->
 <g id="node18" class="node">
 <title>knowledge</title>
-<path fill="#f3eef9" stroke="black" d="M1888.77,-612.75C1888.77,-615.78 1858.62,-618.25 1821.52,-618.25 1784.41,-618.25 1754.27,-615.78 1754.27,-612.75 1754.27,-612.75 1754.27,-563.25 1754.27,-563.25 1754.27,-560.22 1784.41,-557.75 1821.52,-557.75 1858.62,-557.75 1888.77,-560.22 1888.77,-563.25 1888.77,-563.25 1888.77,-612.75 1888.77,-612.75"/>
-<path fill="none" stroke="black" d="M1888.77,-612.75C1888.77,-609.72 1858.62,-607.25 1821.52,-607.25 1784.41,-607.25 1754.27,-609.72 1754.27,-612.75"/>
+<path fill="#f3eef9" stroke="black" d="M1905.64,-612.75C1905.64,-615.78 1867.94,-618.25 1821.52,-618.25 1775.1,-618.25 1737.39,-615.78 1737.39,-612.75 1737.39,-612.75 1737.39,-563.25 1737.39,-563.25 1737.39,-560.22 1775.1,-557.75 1821.52,-557.75 1867.94,-557.75 1905.64,-560.22 1905.64,-563.25 1905.64,-563.25 1905.64,-612.75 1905.64,-612.75"/>
+<path fill="none" stroke="black" d="M1905.64,-612.75C1905.64,-609.72 1867.94,-607.25 1821.52,-607.25 1775.1,-607.25 1737.39,-609.72 1737.39,-612.75"/>
 <text xml:space="preserve" text-anchor="middle" x="1821.52" y="-595.55" font-family="Helvetica,sans-Serif" font-size="11.00">knowledge (QMD)</text>
 <text xml:space="preserve" text-anchor="middle" x="1821.52" y="-583.55" font-family="Helvetica,sans-Serif" font-size="11.00">search before plan/write;</text>
-<text xml:space="preserve" text-anchor="middle" x="1821.52" y="-571.55" font-family="Helvetica,sans-Serif" font-size="11.00">memories to docs repo</text>
+<text xml:space="preserve" text-anchor="middle" x="1821.52" y="-571.55" font-family="Helvetica,sans-Serif" font-size="11.00">memories to instance docs repo</text>
 </g>
 <!-- orch&#45;&gt;knowledge -->
 <g id="edge34" class="edge">
@@ -380,9 +380,9 @@
 <!-- author&#45;&gt;knowledge -->
 <g id="edge35" class="edge">
 <title>author&#45;&gt;knowledge</title>
-<path fill="none" stroke="#555555" stroke-dasharray="1,5" d="M1553.7,-515.24C1609.65,-530.49 1686.19,-551.37 1742.94,-566.84"/>
+<path fill="none" stroke="#555555" stroke-dasharray="1,5" d="M1553.72,-515.24C1604.23,-529.01 1671.51,-547.36 1725.87,-562.19"/>
 <polygon fill="#555555" stroke="#555555" points="1554.87,-511.93 1544.3,-512.67 1553.03,-518.68 1554.87,-511.93"/>
-<polygon fill="#555555" stroke="#555555" points="1741.99,-570.21 1752.56,-569.47 1743.83,-563.46 1741.99,-570.21"/>
+<polygon fill="#555555" stroke="#555555" points="1724.88,-565.55 1735.45,-564.8 1726.72,-558.79 1724.88,-565.55"/>
 <text xml:space="preserve" text-anchor="middle" x="1673.38" y="-566.21" font-family="Helvetica,sans-Serif" font-size="9.00">search, cite,</text>
 <text xml:space="preserve" text-anchor="middle" x="1673.38" y="-556.46" font-family="Helvetica,sans-Serif" font-size="9.00">write memories</text>
 </g>
@@ -434,9 +434,9 @@
 <!-- maintainer&#45;&gt;knowledge -->
 <g id="edge37" class="edge">
 <title>maintainer&#45;&gt;knowledge</title>
-<path fill="none" stroke="#555555" stroke-dasharray="1,5" d="M1543.27,-615.17C1588.38,-613.49 1650.25,-610.41 1704.5,-605 1716.88,-603.77 1729.95,-602.15 1742.69,-600.41"/>
+<path fill="none" stroke="#555555" stroke-dasharray="1,5" d="M1543.27,-615.17C1588.38,-613.49 1650.25,-610.41 1704.5,-605 1711.41,-604.31 1718.54,-603.5 1725.71,-602.62"/>
 <polygon fill="#555555" stroke="#555555" points="1543.27,-611.66 1533.4,-615.52 1543.52,-618.66 1543.27,-611.66"/>
-<polygon fill="#555555" stroke="#555555" points="1742.86,-603.92 1752.28,-599.06 1741.89,-596.99 1742.86,-603.92"/>
+<polygon fill="#555555" stroke="#555555" points="1726.01,-606.11 1735.48,-601.37 1725.12,-599.17 1726.01,-606.11"/>
 </g>
 <!-- maintainer&#45;&gt;out_gh -->
 <g id="edge45" class="edge">
@@ -447,9 +447,9 @@
 <!-- researcher&#45;&gt;knowledge -->
 <g id="edge36" class="edge">
 <title>researcher&#45;&gt;knowledge</title>
-<path fill="none" stroke="#555555" stroke-dasharray="1,5" d="M1570.63,-566.6C1593.96,-569.17 1619.02,-571.8 1642.25,-574 1675.14,-577.11 1711.5,-580.05 1742.75,-582.43"/>
+<path fill="none" stroke="#555555" stroke-dasharray="1,5" d="M1570.63,-566.6C1593.96,-569.17 1619.02,-571.8 1642.25,-574 1669.29,-576.56 1698.68,-579 1725.64,-581.11"/>
 <polygon fill="#555555" stroke="#555555" points="1571.16,-563.13 1560.83,-565.51 1570.39,-570.09 1571.16,-563.13"/>
-<polygon fill="#555555" stroke="#555555" points="1742.28,-585.91 1752.51,-583.17 1742.8,-578.93 1742.28,-585.91"/>
+<polygon fill="#555555" stroke="#555555" points="1725.28,-584.59 1735.52,-581.88 1725.83,-577.62 1725.28,-584.59"/>
 </g>
 <!-- synth -->
 <g id="node21" class="node">
