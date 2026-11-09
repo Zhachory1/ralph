@@ -285,6 +285,20 @@ class DisableSkillsTests(unittest.TestCase):
         self.assertEqual(["/x"], out["skills"]["external_dirs"])
         self.assertEqual(1, out["other"])
 
+    def test_an_inline_comment_on_an_existing_entry_is_not_part_of_its_name(self):
+        """PR #132 review: `- mine # note` became `mine # note` in a flow list, where
+        the `#` commented out the closing bracket and corrupted the config."""
+        out = self.merged("skills:\n  disabled:\n    - mine # keep this skill disabled\n")
+        self.assertEqual(["mine", "codex", "spike"], out["skills"]["disabled"])
+
+    def test_a_trailing_comment_after_an_inline_list_is_dropped_from_names(self):
+        out = self.merged("skills:\n  disabled: [mine, other] # hand picked\n")
+        self.assertEqual(["mine", "other", "codex", "spike"], out["skills"]["disabled"])
+
+    def test_a_hash_inside_a_quoted_name_is_kept(self):
+        out = self.merged('skills:\n  disabled:\n    - "odd#name"\n')
+        self.assertEqual(["odd#name", "codex", "spike"], out["skills"]["disabled"])
+
     def test_running_it_twice_changes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             names, cfg = pathlib.Path(d, "n"), pathlib.Path(d, "c")

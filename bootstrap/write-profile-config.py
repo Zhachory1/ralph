@@ -20,6 +20,7 @@ and says nothing about doing nothing.
 A freshly created profile has no config.yaml at all until something writes one.
 """
 
+import json
 import pathlib
 import re
 import sys
@@ -109,15 +110,28 @@ def set_knowledge(path: str, on: bool) -> int:
     return 0
 
 
+def _strip_comment(text: str) -> str:
+    """Drop a YAML comment (` #` outside quotes) from the end of a value."""
+    quote = ""
+    for i, ch in enumerate(text):
+        if quote:
+            quote = "" if ch == quote else quote
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or text[i - 1] in " \t"):
+            return text[:i].rstrip()
+    return text.rstrip()
+
+
 def _existing_disabled(skills_body: str) -> tuple[list[str], re.Match | None]:
     """The names already under `skills.disabled`, in either list style, and
     the match covering the key plus its items."""
     found = re.search(r"^([ \t]+)disabled:[ \t]*(.*)\n((?:\1[ \t]*-[ \t]+.*\n)*)", skills_body, re.M)
     if not found:
         return [], None
-    inline, items = found.group(2).strip(), found.group(3)
+    inline, items = _strip_comment(found.group(2).strip()), found.group(3)
     raw = inline.strip("[]").split(",") if inline.startswith("[") else []
-    raw += [line.strip()[1:] for line in items.splitlines()]
+    raw += [_strip_comment(line.strip()[1:].strip()) for line in items.splitlines()]
     names = [n.strip().strip("\"'") for n in raw]
     return [n for n in names if n], found
 
@@ -135,7 +149,8 @@ def disable_skills(names_path: str, config_path: str) -> int:
     body = block.group(0).split("\n", 1)[1] if block else ""
     existing, found = _existing_disabled(body)
     merged = existing + [n for n in managed if n not in existing]
-    entry = "  disabled: [" + ", ".join(merged) + "]\n"
+    # json.dumps quotes every name, so none can be read as a comment or a separator.
+    entry = "  disabled: [" + ", ".join(json.dumps(n) for n in merged) + "]\n"
     if found:
         body = body[:found.start()] + entry + body[found.end():]
     else:
