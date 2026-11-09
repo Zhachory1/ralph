@@ -94,6 +94,9 @@ services:
       # Scheduled jobs from the private overlay. Blank means none; a path that
       # does not exist mounts as an empty directory, which installs nothing.
       - ${RALPH_PRIVATE_JOBS:-./no-private-jobs}:/ralph/private-jobs:ro
+      # MCP servers from the private overlay (#133): its mcp.json names each
+      # server, its tool allowlist and the profiles that get it. Blank: none.
+      - ${RALPH_PRIVATE_MCP:-./no-private-mcp}:/ralph/private-mcp:ro
     restart: "no"
 
   hermes:

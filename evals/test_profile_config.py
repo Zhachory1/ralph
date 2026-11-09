@@ -362,6 +362,50 @@ class VoiceTests(unittest.TestCase):
         compose = (ROOT / "compose" / "docker-compose.yml").read_text()
         self.assertIn("HERMES_WEBUI_ATTACHMENT_DIR: ${RALPH_SANDBOX_ROOT}/.webui-attachments", compose)
 
+    def test_overlay_mcp_goes_only_to_named_profiles_with_an_allowlist(self):
+        """#133: a private mcp.json grants each server to the profiles it names."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({
+                "team-memory": {"profiles": ["researcher", "default"],
+                                "config": {"url": "https://memory.example/mcp/team/"},
+                                "tools": ["recall", "reflect"]}}))
+            block = wpc.overlay_mcp_block(str(mcp), "researcher")
+            self.assertEqual("", wpc.overlay_mcp_block(str(mcp), "lens-mvp"))
+            src, dst = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            src.write_text("mcp_servers:\n  knowledge:\n    url: http://knowledge:8181/mcp\n" + block)
+            dst.write_text("other: 1\n")
+            wpc.main(str(src), str(dst))
+            out = yaml.safe_load(dst.read_text())
+        self.assertEqual(["knowledge", "team-memory"], list(out["mcp_servers"]))
+        self.assertEqual(["recall", "reflect"], out["mcp_servers"]["team-memory"]["tools"]["include"])
+        self.assertEqual("https://memory.example/mcp/team/", out["mcp_servers"]["team-memory"]["url"])
+
+    def test_overlay_mcp_requires_a_tool_allowlist(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({"x": {"profiles": ["researcher"], "config": {"url": "u"}}}))
+            with self.assertRaises(SystemExit):
+                wpc.overlay_mcp_block(str(mcp), "researcher")
+
+    def test_global_overlay_servers_are_replaced_and_hand_added_ones_kept(self):
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  mine:\n    url: http://x\n  old-overlay:\n    url: http://o\nother: 1\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "u"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp), "old-overlay")
+            wpc.set_overlay_global(str(cfg), str(mcp), "team-memory")
+            on = yaml.safe_load(cfg.read_text())
+            wpc.set_overlay_global(str(cfg), "", "team-memory")
+            off = yaml.safe_load(cfg.read_text())
+        self.assertEqual(["mine", "team-memory"], list(on["mcp_servers"]))
+        self.assertEqual(["mine"], list(off["mcp_servers"]))
+        self.assertEqual(1, off["other"])
+
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
             with self.subTest(profile=p.name):

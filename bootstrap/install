@@ -150,6 +150,15 @@ mcp_servers:
       include: [query, get, multi_get, status]
 YAML
 }
+# MCP servers the private overlay grants a profile (#133), as an mcp_servers
+# block that write-profile-config folds in beside the others. Profile configs
+# are rewritten whole, so a server removed from mcp.json goes on the next run.
+OVERLAY_MCP=""
+[ -f /ralph/private-mcp/mcp.json ] && OVERLAY_MCP=/ralph/private-mcp/mcp.json
+overlay_mcp_block() {
+    [ -n "$OVERLAY_MCP" ] || return 0
+    python3 "$(dirname "$0")/write-profile-config.py" --overlay-block "$OVERLAY_MCP" "$1"
+}
 KNOWLEDGE_ON=""
 # Running, not merely present: a stopped leftover after the profile is
 # dropped must not count (#123 review).
@@ -314,7 +323,7 @@ for dir in "$PROFILES_DIR"/*/; do
                 docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$target/SOUL.md"
         fi
         { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"
-          knowledge_profile "$base" && knowledge_block; } > "$SRC_TMP"
+          knowledge_profile "$base" && knowledge_block; overlay_mcp_block "$base"; } > "$SRC_TMP"
         docker cp "$SRC_TMP" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
         docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         continue
@@ -325,7 +334,7 @@ for dir in "$PROFILES_DIR"/*/; do
 
     # The model and the toolsets are ours; the rest is Hermes-generated.
     { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"
-          knowledge_profile "$base" && knowledge_block; } > "$SRC_TMP"
+          knowledge_profile "$base" && knowledge_block; overlay_mcp_block "$base"; } > "$SRC_TMP"
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
 done
 # The default profile's SOUL (the WebUI chat) is the global one, built like
@@ -342,6 +351,24 @@ fi
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --knowledge "${KNOWLEDGE_ON:+on}" \
         "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+fi
+# The default profile's overlay servers. Its config is the global one, which
+# may hold servers the owner added, so only the overlay's own entries change:
+# the ones written last time (recorded beside the config) are dropped, then
+# mcp.json's current grant is added.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    gcfg="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+    state="${HERMES_HOME:-$HOME/.hermes}/.ralph-overlay-mcp"
+    prev=$(docker exec "$RALPH_HERMES_CONTAINER" sh -c 'cat "$1" 2>/dev/null || true' sh "$state")
+    now=""
+    if [ -n "$OVERLAY_MCP" ]; then
+        docker cp "$OVERLAY_MCP" "$RALPH_HERMES_CONTAINER:/tmp/overlay-mcp.json"
+        now=$(python3 -c 'import json,sys; print(",".join(n for n,s in json.load(open(sys.argv[1])).items() if "default" in s.get("profiles",[])))' "$OVERLAY_MCP")
+    fi
+    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
+        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$prev" "$gcfg"
+    printf '%s' "$now" | docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$state"
+    [ -z "$now$prev" ] || echo "  overlay MCP servers for default: ${now:-none}"
 fi
 rm -f "$SRC_TMP"
 

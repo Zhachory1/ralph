@@ -109,7 +109,54 @@ def set_knowledge(path: str, on: bool) -> int:
     return 0
 
 
+def overlay_mcp_block(path: str, profile: str) -> str:
+    """The `mcp_servers:` block a private overlay's mcp.json grants `profile`
+    (#133), or "" for none. The file maps a server name to `profiles` (names
+    without the ralph- prefix; `default` is the WebUI chat), `config` (Hermes'
+    mcp_servers entry, e.g. url) and `tools` (the tool allowlist, required).
+    JSON, not YAML: the init image has no YAML library."""
+    import json
+    servers = json.loads(pathlib.Path(path).read_text())
+    out = []
+    for name, spec in servers.items():
+        if profile not in spec.get("profiles", []):
+            continue
+        if not spec.get("tools"):
+            raise SystemExit(f"mcp.json: {name} has no tools allowlist")
+        out.append(f"  {name}:")
+        for key, value in spec.get("config", {}).items():
+            out.append(f"    {key}: {json.dumps(value)}")
+        out.append("    enabled: true")
+        out.append("    tools:")
+        out.append(f"      include: {json.dumps(spec['tools'])}")
+    return ("mcp_servers:\n" + "\n".join(out) + "\n") if out else ""
+
+
+def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
+    """For the global config (the default profile), which can hold servers the
+    owner added by hand: drop the overlay servers it had before (`previous`,
+    comma separated), then add the ones mcp.json grants `default`."""
+    target = pathlib.Path(path)
+    text = target.read_text() if target.exists() else ""
+    block = block_re("mcp_servers").search(text)
+    entries = block.group(0).split("\n", 1)[1] if block else ""
+    names = [n for n in previous.split(",") if n]
+    for name in names:
+        entries = re.sub(rf"^  {re.escape(name)}:\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
+    add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
+    entries += add.split("\n", 1)[1] if add else ""
+    new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
+    text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block
+    target.write_text(text)
+    return 0
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "--knowledge":
         raise SystemExit(set_knowledge(sys.argv[3], sys.argv[2] == "on"))
+    if sys.argv[1] == "--overlay-block":
+        sys.stdout.write(overlay_mcp_block(sys.argv[2], sys.argv[3]))
+        raise SystemExit(0)
+    if sys.argv[1] == "--overlay-global":
+        raise SystemExit(set_overlay_global(sys.argv[4], sys.argv[2], sys.argv[3]))
     raise SystemExit(main(sys.argv[1], sys.argv[2]))
