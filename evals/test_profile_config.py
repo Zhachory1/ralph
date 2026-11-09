@@ -320,6 +320,14 @@ class VoiceTests(unittest.TestCase):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertIn('cat "$PROFILES_DIR/PRINCIPLES.md"', install)
 
+    def test_principles_say_search_fast(self):
+        """Measured live: typed searches with rerank false return the same top
+        hit in ~1 s that re-ranking returns in 108-239 s; a plain query also
+        pulls the 1.3 GB expansion model (design D4 keeps it off)."""
+        text = (ROOT / "profiles" / "PRINCIPLES.md").read_text()
+        for part in ("typed `searches`", "`rerank: false`", "Never pass a plain-text `query`"):
+            self.assertIn(part, text)
+
     def test_profiles_learn_the_docs_repo_and_its_visibility(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertIn("RALPH_DOCS_REPO, RALPH_DOCS_PUBLIC]", install)
