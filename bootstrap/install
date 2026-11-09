@@ -97,7 +97,7 @@ sandbox_config() {
     hermes $1 config set terminal.docker_image "${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}" >/dev/null
     # Credentials the sandbox needs for repository work. Nothing else is
     # forwarded: the model key and the chat webhook stay outside it.
-    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN"]' >/dev/null
+    hermes $1 config set terminal.docker_forward_env '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN","RALPH_DOCS_REPO","RALPH_DOCS_PUBLIC"]' >/dev/null
     # One sandbox's ceiling. A maintenance build of a large repository peaks at
     # several GB; at Hermes' default of 5 GB, three at once overrun a 12 GB VM.
     hermes $1 config set terminal.container_memory "${RALPH_SANDBOX_MEMORY_MB:-3072}" >/dev/null

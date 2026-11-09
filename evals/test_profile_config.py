@@ -322,6 +322,8 @@ class VoiceTests(unittest.TestCase):
     def test_profiles_learn_the_docs_repo_and_its_visibility(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertIn("RALPH_DOCS_REPO, RALPH_DOCS_PUBLIC]", install)
+        # The default profile's sandbox allowlist is set separately (#124 review).
+        self.assertIn('"RALPH_DOCS_REPO","RALPH_DOCS_PUBLIC"]', install)
         self.assertIn('gh repo view "$RALPH_DOCS_REPO" --json visibility', install)
         # Unknown visibility counts as public: the safe side.
         self.assertIn('DOCS_PUBLIC=1; [ "$vis" = PRIVATE ] || [ "$vis" = INTERNAL ] && DOCS_PUBLIC=0', install)
