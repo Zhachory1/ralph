@@ -216,6 +216,27 @@ sandbox_config "" default
 # The default profile is the WebUI chat. It plans and hands off work like the
 # orchestrator, so it gets the board (#105); Hermes ships it disabled.
 hermes tools enable kanban >/dev/null
+# The chat resends its whole prompt on every model call, so what it never uses
+# is paid for each time. browser needs a docker daemon the chat does not have,
+# and tts and vision are not used from chat. hermes-webui reads the `cli`
+# platform, which `hermes tools` edits by default. Not kanban: the line above
+# is the board, and the chat plans work through it.
+hermes tools disable browser tts vision >/dev/null
+# The same for the skills index, which lists every bundled skill. The names are
+# a file beside PRINCIPLES (not under profiles/<name>/, which would create a
+# ralph-default profile). They are merged into skills.disabled, not set over it,
+# so a skill the owner disabled by hand stays disabled (PR #132 review).
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    # Copied here as well as in the profile loop below: this runs first, and a
+    # fresh container has no /tmp/wmc.py yet.
+    docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
+    docker cp "$PROFILES_DIR/default-disabled-skills.txt" "$RALPH_HERMES_CONTAINER:/tmp/default-disabled-skills.txt"
+    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --disable-skills \
+        /tmp/default-disabled-skills.txt "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+else
+    python3 /ralph/bootstrap/write-profile-config.py --disable-skills \
+        "$PROFILES_DIR/default-disabled-skills.txt" "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+fi
 # hermes-webui runs profiles in-process and its image has no docker client;
 # give it the hermes image's own, in the shared volume (HERMES_DOCKER_BINARY).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then

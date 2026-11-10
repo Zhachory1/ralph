@@ -1,0 +1,33 @@
+# Run the tracker client's own evals on every pull request that touches it.
+#
+# dd-tracker.md Section 9 records that no chat eval ran in CI before this plan;
+# the chat plan fixes that for chat files in its own first pull request, and
+# this is the same fix for the tracker files. It changes no runtime path: the
+# tracker client is inert until D1 (the owner's runbook) is done, and every
+# test here runs against a fake opener, never the network.
+#
+# The glob below only runs the eval files that exist in this checkout, so this
+# workflow is correct from its first pull request (test_tracker.py only) through
+# the ones that add test_tracker_sync.py and beyond, with no edit here.
+
+name: tracker
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap/tracker*"
+      - "evals/test_tracker*"
+
+jobs:
+  tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the tracker evals
+        run: |
+          for f in evals/test_tracker*.py; do
+            echo "::group::$f"
+            python3 "$f"
+            echo "::endgroup::"
+          done

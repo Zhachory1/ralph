@@ -20,10 +20,12 @@ and says nothing about doing nothing.
 A freshly created profile has no config.yaml at all until something writes one.
 """
 
+import json
 import os
 import pathlib
 import re
 import sys
+import tempfile
 
 # A top-level block and the indented lines under it.
 # terminal is generated per profile by bootstrap/install (sandbox root, image,
@@ -35,7 +37,6 @@ BLOCKS = ("model", "platform_toolsets", "approvals", "skills", "terminal", "mcp_
 def write_atomic(target: pathlib.Path, text: str) -> None:
     """Replace a live config whole or not at all: an interrupted write leaves
     the old file, never an empty or partial one (#134 review)."""
-    import tempfile
     # Unique per call: two writers never share a temp file (#134 review).
     fd, name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     tmp = pathlib.Path(name)
@@ -166,7 +167,6 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     without the ralph- prefix; `default` is the WebUI chat), `config` (Hermes'
     mcp_servers entry, e.g. url) and `tools` (the tool allowlist, required).
     JSON, not YAML: the init image has no YAML library."""
-    import json
     servers = json.loads(pathlib.Path(path).read_text())
     out = []
     for name, spec in servers.items():
@@ -226,12 +226,68 @@ def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
     return 0
 
 
+def _strip_comment(text: str) -> str:
+    """Drop a YAML comment (` #` outside quotes) from the end of a value."""
+    quote = ""
+    for i, ch in enumerate(text):
+        if quote:
+            quote = "" if ch == quote else quote
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or text[i - 1] in " \t"):
+            return text[:i].rstrip()
+    return text.rstrip()
+
+
+def _existing_disabled(skills_body: str) -> tuple[list[str], re.Match | None]:
+    """The names already under `skills.disabled`, in either list style, and
+    the match covering the key plus its items."""
+    found = re.search(r"^([ \t]+)disabled:[ \t]*(.*)\n((?:\1[ \t]*-[ \t]+.*\n)*)", skills_body, re.M)
+    if not found:
+        return [], None
+    inline, items = _strip_comment(found.group(2).strip()), found.group(3)
+    raw = inline.strip("[]").split(",") if inline.startswith("[") else []
+    raw += [_strip_comment(line.strip()[1:].strip()) for line in items.splitlines()]
+    names = [n.strip().strip("\"'") for n in raw]
+    return [n for n in names if n], found
+
+
+def disable_skills(names_path: str, config_path: str) -> int:
+    """Add Ralph's managed names to `skills.disabled`, keeping any the owner
+    disabled by hand. Replacing the list would silently re-enable them on every
+    install. Names Ralph stops managing stay disabled until removed here too:
+    the file cannot tell its own past entries from the owner's. Idempotent."""
+    managed = [line.strip() for line in pathlib.Path(names_path).read_text().splitlines()
+               if line.strip() and not line.lstrip().startswith("#")]
+    target = pathlib.Path(config_path)
+    text = target.read_text() if target.exists() else ""
+    block = block_re("skills").search(text)
+    body = block.group(0).split("\n", 1)[1] if block else ""
+    existing, found = _existing_disabled(body)
+    merged = existing + [n for n in managed if n not in existing]
+    # json.dumps quotes every name, so none can be read as a comment or a separator.
+    entry = "  disabled: [" + ", ".join(json.dumps(n) for n in merged) + "]\n"
+    if found:
+        body = body[:found.start()] + entry + body[found.end():]
+    else:
+        body += entry
+    new_block = "skills:\n" + body
+    if block:
+        text = text[:block.start()] + new_block + text[block.end():]
+    else:
+        text = text + ("" if not text or text.endswith("\n") else "\n") + new_block
+    target.write_text(text)
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1] == "--disable-skills":
+        raise SystemExit(disable_skills(sys.argv[2], sys.argv[3]))
     if sys.argv[1] == "--knowledge":
         raise SystemExit(set_knowledge(sys.argv[3], sys.argv[2] == "on"))
     if sys.argv[1] == "--overlay-check":
         # Validate every entry before install records any name as owned.
-        servers = __import__("json").loads(pathlib.Path(sys.argv[2]).read_text())
+        servers = json.loads(pathlib.Path(sys.argv[2]).read_text())
         for prof in {p for spec in servers.values() if isinstance(spec, dict)
                      for p in (spec.get("profiles") if isinstance(spec.get("profiles"), list) else [])} | {"default"}:
             overlay_mcp_block(sys.argv[2], prof)

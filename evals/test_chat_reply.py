@@ -215,6 +215,40 @@ class ChatReplyTests(unittest.TestCase):
         self.cards[("queues", "t_intake")]["metadata"]["diagnosis"] = "why"
         self.assertEqual(0, self.handle("queues", "t_intake"))
 
+    def test_clarify_reply_writes_its_own_marker(self):
+        del self.cards[("ralph", "t_final")]
+        self.cards[("queues", "t_intake")]["metadata"] = {
+            "decision": "reply", "reply_kind": "clarify", "body": "Which announcement do you mean?"}
+        self.assertEqual(0, self.scan())
+        self.assertTrue((self.root / self.op / ".clarify-sent").is_file())
+        self.assertFalse((self.root / self.op / ".reply-sent").is_file())
+
+    def test_decline_reply_writes_its_own_marker(self):
+        del self.cards[("ralph", "t_final")]
+        self.cards[("queues", "t_intake")]["metadata"] = {
+            "decision": "reply", "reply_kind": "decline", "body": "I can't help with payroll questions."}
+        self.assertEqual(0, self.scan())
+        self.assertTrue((self.root / self.op / ".decline-sent").is_file())
+        self.assertFalse((self.root / self.op / ".reply-sent").is_file())
+
+    def test_reply_with_no_reply_kind_still_sends_and_writes_legacy_marker(self):
+        del self.cards[("ralph", "t_final")]
+        self.cards[("queues", "t_intake")]["metadata"] = {
+            "decision": "reply", "body": "I can't help with payroll questions."}
+        self.assertEqual(0, self.scan())
+        self.assertTrue((self.root / self.op / ".reply-sent").is_file())
+
+    def test_legacy_reply_sent_marker_satisfies_every_reply_kind(self):
+        """A thread already answered before markers became per kind must not resend (PR 2 hazard)."""
+        del self.cards[("ralph", "t_final")]
+        (self.root / self.op / ".reply-sent").touch()
+        for reply_kind in ("clarify", "decline", "answer"):
+            with self.subTest(reply_kind=reply_kind):
+                self.cards[("queues", "t_intake")]["metadata"] = {
+                    "decision": "reply", "reply_kind": reply_kind, "body": "some reply text"}
+                self.assertEqual(0, self.scan())
+        self.assertEqual([], self.sends())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
