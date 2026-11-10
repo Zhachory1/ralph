@@ -509,6 +509,17 @@ class VoiceTests(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertEqual([], [p for p in pathlib.Path(d).iterdir() if p.name != "config.yaml"])
 
+    def test_a_new_config_takes_its_folders_owner_and_a_readable_mode(self):
+        """#134 review: fresh install, no old file to copy from."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            folder = pathlib.Path(d).stat()
+            with mock.patch.object(wpc.os, "chown") as chown:
+                wpc.write_atomic(cfg, "a: 1\n")
+            self.assertEqual((folder.st_uid, folder.st_gid), chown.call_args.args[1:])
+            self.assertEqual(0o644, cfg.stat().st_mode & 0o777)
+
     def test_install_writes_the_overlay_record_atomically(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))

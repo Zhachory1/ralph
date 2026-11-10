@@ -41,17 +41,22 @@ def write_atomic(target: pathlib.Path, text: str) -> None:
     tmp = pathlib.Path(name)
     with os.fdopen(fd, "w") as f:
         f.write(text)
+    # Keep the old file's owner and mode: install runs this as root through
+    # docker exec, and a root-owned config locks Hermes and hermes-webui out.
+    # A new file (fresh install) takes its folder's owner and mode 644, never
+    # mkstemp's root-owned 600 (#134 review).
     if target.exists():
-        # Keep the old file's owner and mode: install runs this as root through
-        # docker exec, and a root-owned global config (mode 640) locks Hermes
-        # and hermes-webui out of it.
         st = target.stat()
-        os.chmod(tmp, st.st_mode & 0o777)
-        if hasattr(os, "chown"):
-            try:
-                os.chown(tmp, st.st_uid, st.st_gid)
-            except PermissionError:
-                pass  # not root: the new file is already ours, like the old one
+        mode = st.st_mode & 0o777
+    else:
+        st = target.parent.stat()
+        mode = 0o644
+    os.chmod(tmp, mode)
+    if hasattr(os, "chown"):
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass  # not root: the file is already ours
     os.replace(tmp, target)
 
 
