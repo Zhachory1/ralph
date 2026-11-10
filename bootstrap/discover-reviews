@@ -266,14 +266,9 @@ def reviews_by_me(repo: str, number: int) -> dict[str, float] | None:
 _LOGIN = None
 
 
-def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
-    """Heads (8-char prefixes) this PR already has a review graph for, and
-    whether one is still running. None means the board could not be read,
-    and the PR is skipped this pass, as for unreadable reviews.
-
-    A blocked card is not running: it waits for a human and never finishes on
-    its own, so counting it held back every later head of the PR indefinitely.
-    Its own head still counts as having a graph, so it is not rebuilt."""
+def _synthesis_cards(board: str, repo: str, number: int) -> list[dict] | None:
+    """This PR's synthesis cards, archived ones included. None means the board
+    could not be read."""
     r = subprocess.run(hermes_argv("kanban", "--board", board, "list", "--archived",
                                    "--assignee", "ralph-review-synthesis", "--json"),
                        capture_output=True, text=True)
@@ -285,9 +280,34 @@ def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] |
         return None
     cards = cards if isinstance(cards, list) else cards.get("tasks", [])
     prefix = f"Synthesize review {repo}#{number} @ "
-    mine = [c for c in cards if c.get("title", "").startswith(prefix)]
+    return [c for c in cards if c.get("title", "").startswith(prefix)]
+
+
+def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
+    """Heads (8-char prefixes) this PR already has a review graph for, and
+    whether one is still running. None means the board could not be read,
+    and the PR is skipped this pass, as for unreadable reviews.
+
+    A blocked card is not running: it waits for a human and never finishes on
+    its own, so counting it held back every later head of the PR indefinitely.
+    Its own head still counts as having a graph, so it is not rebuilt."""
+    mine = _synthesis_cards(board, repo, number)
+    if mine is None:
+        return None
+    prefix = f"Synthesize review {repo}#{number} @ "
     return ({c["title"][len(prefix):][:8] for c in mine},
             any(c.get("status") not in ("done", "archived", "blocked") for c in mine))
+
+
+def stale_blocked_synthesis(board: str, repo: str, number: int, head_sha: str) -> list[str]:
+    """Ids of this PR's blocked synthesis cards for heads other than head_sha.
+    A blocked card stays resumable, so unblocking an old one after a newer head
+    was admitted would run a second review for one PR. Empty when the board
+    cannot be read: nothing is archived on a guess."""
+    mine = _synthesis_cards(board, repo, number)
+    prefix = f"Synthesize review {repo}#{number} @ "
+    return [c["id"] for c in mine or []
+            if c.get("status") == "blocked" and c["title"][len(prefix):][:8] != head_sha[:8]]
 
 
 def _login() -> str:
@@ -481,6 +501,20 @@ def main() -> int:
         # A slot is spent only by a graph actually built: a failed checkout
         # or build does not starve later PRs.
         slots += 1
+        # The older heads' blocked cards are superseded now that this head has
+        # its own graph. Archived only after that graph exists, so a failed
+        # build leaves the old card as the human's way back in. A failure here
+        # is reported and not fatal: the worst case is the wasted review that
+        # unblocking the old card would have started, and publish-review
+        # already refuses a verdict for a head that has moved.
+        stale = stale_blocked_synthesis(args.board, repo, number, head_sha)
+        if stale:
+            a = subprocess.run(hermes_argv("kanban", "--board", args.board, "archive", *stale),
+                               capture_output=True, text=True)
+            if a.returncode == 0:
+                print(f"  archived superseded blocked review(s) for {repo}#{number}: {' '.join(stale)}")
+            else:
+                print(f"  could not archive {' '.join(stale)}: {a.stderr.strip()[:200]}", file=sys.stderr)
         if not already_staged:
             admitted += 1
 
