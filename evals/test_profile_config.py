@@ -507,20 +507,58 @@ class VoiceTests(unittest.TestCase):
                 wpc.overlay_mcp_block(str(mcp), "researcher")
 
     def test_global_overlay_servers_are_replaced_and_hand_added_ones_kept(self):
+        """set_overlay_global finds its own tagged lines and replaces only
+        those; a hand-added server (untagged) is never touched (#134: the tag
+        on the line is the only memory needed, no separate state file)."""
         import json, yaml
         with tempfile.TemporaryDirectory() as d:
             cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
-            cfg.write_text("mcp_servers:\n  mine:\n    url: http://x\n  old-overlay:\n    url: http://o\nother: 1\n")
+            cfg.write_text("mcp_servers:\n  mine:\n    url: http://x\nother: 1\n")
             mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
                                        "config": {"url": "u"}, "tools": ["recall"]}}))
-            wpc.set_overlay_global(str(cfg), str(mcp), "old-overlay")
-            wpc.set_overlay_global(str(cfg), str(mcp), "team-memory")
+            wpc.set_overlay_global(str(cfg), str(mcp))
             on = yaml.safe_load(cfg.read_text())
-            wpc.set_overlay_global(str(cfg), "", "team-memory")
+            self.assertIn(wpc.OVERLAY_TAG, cfg.read_text())
+            wpc.set_overlay_global(str(cfg), "")
             off = yaml.safe_load(cfg.read_text())
         self.assertEqual(["mine", "team-memory"], list(on["mcp_servers"]))
         self.assertEqual(["mine"], list(off["mcp_servers"]))
         self.assertEqual(1, off["other"])
+
+    def test_a_hand_added_server_survives_repeated_overlay_runs(self):
+        """The tag, not an external record, is what distinguishes overlay
+        servers from hand-added ones across any number of install runs."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  mine:\n    url: http://x\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "u"}, "tools": ["recall"]}}))
+            for _ in range(3):
+                wpc.set_overlay_global(str(cfg), str(mcp))
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual(["mine", "team-memory"], list(out["mcp_servers"]))
+        self.assertEqual("http://x", out["mcp_servers"]["mine"]["url"])
+
+    def test_a_new_grant_reusing_a_hand_added_name_never_duplicates_the_key(self):
+        """Found live: a hand-added server with the same name as a brand-new
+        overlay grant produced two \"memory-ads-success:\" keys and broke
+        Hermes' config parser. The untagged entry has no overlay memory
+        behind it (it was never granted before), so only a same-name match
+        against the *new* grant -- not the tag -- can catch this."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  owner-added:\n    url: http://x\n"
+                           "  team-memory:\n    url: http://old\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            text = cfg.read_text()
+        self.assertEqual(1, text.count("team-memory:"))
+        out = yaml.safe_load(text)
+        self.assertEqual(["owner-added", "team-memory"], list(out["mcp_servers"]))
+        self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
 
     def test_overlay_mcp_cannot_shadow_built_in_servers(self):
         """#134 review: knowledge and lens-tools are Ralph's names."""
@@ -540,7 +578,7 @@ class VoiceTests(unittest.TestCase):
             cfg.write_text("mcp_servers:\n  mine:\n    url: http://x\nother: 1\n")
             with mock.patch.object(wpc.os, "replace", side_effect=OSError("interrupted")):
                 with self.assertRaises(OSError):
-                    wpc.set_overlay_global(str(cfg), "", "mine")
+                    wpc.set_overlay_global(str(cfg), "")
             self.assertIn("other: 1", cfg.read_text())
             self.assertIn("mine:", cfg.read_text())
 
@@ -568,7 +606,7 @@ class VoiceTests(unittest.TestCase):
             mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
                                        "config": {"url": "u"}, "tools": ["recall"]}}))
             cfg.write_text("other: 1")
-            wpc.set_overlay_global(str(cfg), str(mcp), "")
+            wpc.set_overlay_global(str(cfg), str(mcp))
             self.assertEqual(1, yaml.safe_load(cfg.read_text())["other"])
             cfg.write_text("other: 1")
             wpc.set_knowledge(str(cfg), True)
@@ -584,12 +622,12 @@ class VoiceTests(unittest.TestCase):
             mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
                                        "config": {"url": "u"}, "tools": ["recall"]}}))
             cfg.write_text("other: 1\nmcp_servers:\n  mine:\n    url: http://x")
-            wpc.set_overlay_global(str(cfg), str(mcp), "")
+            wpc.set_overlay_global(str(cfg), str(mcp))
             out = yaml.safe_load(cfg.read_text())
         self.assertEqual(["mine", "team-memory"], list(out["mcp_servers"]))
         self.assertEqual("http://x", out["mcp_servers"]["mine"]["url"])
 
-    def test_install_validates_the_overlay_before_recording_anything(self):
+    def test_install_validates_the_overlay_before_profiles_are_written(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         check = install.index("--overlay-check")
         self.assertLess(check, install.index("for dir in \"$PROFILES_DIR\"/*/"))
@@ -652,14 +690,6 @@ class VoiceTests(unittest.TestCase):
             self.assertEqual((folder.st_uid, folder.st_gid), chown.call_args.args[1:])
             self.assertEqual(0o644, cfg.stat().st_mode & 0o777)
 
-    def test_install_writes_the_overlay_record_atomically(self):
-        """#134: write_atomic handles this now, in the same process as the
-        config write, not a separate shell round-trip (see #134 review)."""
-        install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertNotIn('mv -f "$1.tmp" "$1"\' sh "$state"', install)
-        self.assertIn('--overlay-global', install)
-        self.assertIn('"$state"\n', install)
-
     def test_overlay_mcp_rejects_empty_profiles_and_injected_config_keys(self):
         """#134 review: empty profiles silently grants no one; a newline in a
         config key could smuggle an extra, unallowlisted server entry."""
@@ -721,55 +751,13 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 wpc.overlay_mcp_block(str(mcp), "researcher")
 
-    def test_global_overlay_replaces_a_hand_added_server_of_the_same_name(self):
-        """#134 review: one key, never two."""
-        import json, yaml
-        with tempfile.TemporaryDirectory() as d:
-            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
-            cfg.write_text("mcp_servers:\n  team-memory:\n    url: http://old\n  mine:\n    url: http://x\n")
-            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
-                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
-            wpc.set_overlay_global(str(cfg), str(mcp), "")
-            text = cfg.read_text()
-        self.assertEqual(1, text.count("  team-memory:"))
-        self.assertEqual("http://new", yaml.safe_load(text)["mcp_servers"]["team-memory"]["url"])
-        self.assertIn("mine", yaml.safe_load(text)["mcp_servers"])
-
-    def test_set_overlay_global_records_state_in_the_same_call(self):
-        """#134 review: state recorded in the same Python process as the
-        config write, not a later separate docker exec -- so there is no
-        window between \"config written\" and \"ownership recorded\" wide
-        enough for an interruption (killed container, host reboot) to land
-        in it."""
-        import json
-        with tempfile.TemporaryDirectory() as d:
-            cfg, mcp, state = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json"), pathlib.Path(d, "state")
-            cfg.write_text("other: 1\n")
-            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
-                                       "config": {"url": "u"}, "tools": ["recall"]}}))
-            wpc.set_overlay_global(str(cfg), str(mcp), "", str(state))
-            self.assertEqual("team-memory", state.read_text())
-            # Revoked: mcp.json removed, previous state passed back in.
-            wpc.set_overlay_global(str(cfg), "", state.read_text(), str(state))
-            self.assertEqual("", state.read_text())
-            self.assertNotIn("team-memory", cfg.read_text())
-
-    def test_set_overlay_global_without_a_state_path_skips_the_record(self):
-        """Back-compat: existing callers that pass no state_path still work."""
-        with tempfile.TemporaryDirectory() as d:
-            cfg = pathlib.Path(d, "config.yaml")
-            cfg.write_text("other: 1\n")
-            self.assertEqual(0, wpc.set_overlay_global(str(cfg), "", ""))
-
-    def test_install_writes_config_and_overlay_record_in_one_process(self):
-        """#134 review: two separate docker exec calls (config write, then
-        record write) left a window where an interruption between them could
-        strand a granted server with no record of it, un-revokable later.
-        One process now does both, in sequence, so install passes the state
-        path straight to write-profile-config.py instead of writing it itself."""
+    def test_install_passes_the_overlay_file_straight_through(self):
+        """No prev/now/state plumbing: write-profile-config.py reads mcp.json
+        and the config itself, nothing else (#134)."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertNotIn('"$all"', install)
-        self.assertIn('--overlay-global \\\n        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$prev" "$gcfg" "$state"', install)
+        self.assertIn('--overlay-global \\\n        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$gcfg"', install)
+        for gone in ('"$prev"', '"$now"', '"$all"', '"$state"', ".ralph-overlay-mcp"):
+            self.assertNotIn(gone, install)
 
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():

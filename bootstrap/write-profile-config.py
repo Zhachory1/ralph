@@ -161,6 +161,9 @@ def set_knowledge(path: str, on: bool) -> int:
 # Servers Ralph itself writes; an overlay may not shadow them (#134 review).
 RESERVED_MCP = {"knowledge", "lens-tools"}
 YAML_WORDS = {"true", "false", "yes", "no", "on", "off", "y", "n", "null"}
+# Marks a server line this script wrote to the global config, so a later run
+# can find and replace exactly those lines without a separate state file.
+OVERLAY_TAG = "# ralph-mcp-overlay"
 
 
 def overlay_mcp_block(path: str, profile: str) -> str:
@@ -190,7 +193,7 @@ def overlay_mcp_block(path: str, profile: str) -> str:
         tools = spec.get("tools")
         if not isinstance(tools, list) or not tools or not all(isinstance(x, str) for x in tools):
             raise SystemExit(f"mcp.json: {name} needs a tools allowlist (a non-empty list of names)")
-        out.append(f"  {name}:")
+        out.append(f"  {name}: {OVERLAY_TAG}")
         config = spec.get("config", {})
         if not isinstance(config, dict):
             raise SystemExit(f"mcp.json: {name}: config must be an object")
@@ -206,35 +209,33 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     return ("mcp_servers:\n" + "\n".join(out) + "\n") if out else ""
 
 
-def set_overlay_global(path: str, mcp_json: str, previous: str, state_path: str = "") -> int:
-    """For the global config (the default profile), which can hold servers the
-    owner added by hand: drop the overlay servers it had before (`previous`,
-    comma separated), then add the ones mcp.json grants `default`.
+def _drop_entry(entries: str, name: str) -> str:
+    return re.sub(rf"^  {re.escape(name)}:[^\n]*\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
 
-    When `state_path` is given, also records the names just granted there,
-    in the same process as the config write (#134 review): two separate
-    `docker exec` calls left a window between "config written" and "ownership
-    recorded" where an interruption could leave a granted server with no
-    record of it, un-revokable later. One process, two writes in sequence,
-    closes that window to the time between two local syscalls.
+
+def set_overlay_global(path: str, mcp_json: str) -> int:
+    """For the global config (the default profile), which can hold servers the
+    owner added by hand: drop every server this function wrote last time
+    (tagged `# ralph-mcp-overlay` on its header line), then add what mcp.json
+    currently grants `default`. The tag is the only memory needed -- no
+    separate state file to keep in sync with the config (#134: the overlay
+    is one in-tree thing, not two).
     """
     target = pathlib.Path(path)
     text = read_yaml_text(target)
     block = block_re("mcp_servers").search(text)
     entries = block.group(0).split("\n", 1)[1] if block else ""
+    entries = re.sub(rf"^  [^ \n]+:[^\n]*{re.escape(OVERLAY_TAG)}\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
     add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
-    granted = sorted(set(re.findall(r"^  ([A-Za-z0-9_.-]+):", add, re.M)))
-    # Drop what the overlay wrote last time, and any entry the new grant
-    # replaces (a hand-added server of the same name), so no key repeats.
-    names = {n for n in previous.split(",") if n} | set(granted)
-    for name in names:
-        entries = re.sub(rf"^  {re.escape(name)}:\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
+    # A new grant can reuse a name an untagged (hand-added) entry already has;
+    # the grant wins that name, as it would if it were simply typed in by
+    # hand over the old line. Checked against a live duplicate-key failure.
+    for name in re.findall(r"^  ([A-Za-z0-9_.-]+):", add, re.M):
+        entries = _drop_entry(entries, name)
     entries += add.split("\n", 1)[1] if add else ""
     new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
     text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block
     write_atomic(target, text)
-    if state_path:
-        write_atomic(pathlib.Path(state_path), ",".join(granted))
     return 0
 
 
@@ -311,6 +312,5 @@ if __name__ == "__main__":
         sys.stdout.write(overlay_mcp_block(sys.argv[2], sys.argv[3]))
         raise SystemExit(0)
     if sys.argv[1] == "--overlay-global":
-        state = sys.argv[5] if len(sys.argv) > 5 else ""
-        raise SystemExit(set_overlay_global(sys.argv[4], sys.argv[2], sys.argv[3], state))
+        raise SystemExit(set_overlay_global(sys.argv[3], sys.argv[2]))
     raise SystemExit(main(sys.argv[1], sys.argv[2]))

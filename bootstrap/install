@@ -379,27 +379,13 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
 fi
 # The default profile's overlay servers. Its config is the global one, which
 # may hold servers the owner added, so only the overlay's own entries change:
-# the ones written last time (recorded beside the config) are dropped, then
-# mcp.json's current grant is added.
+# write-profile-config.py finds and replaces its own tagged lines, then adds
+# mcp.json's current grant. No separate record to keep in sync (#134).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     gcfg="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
-    state="${HERMES_HOME:-$HOME/.hermes}/.ralph-overlay-mcp"
-    prev=$(docker exec "$RALPH_HERMES_CONTAINER" sh -c 'cat "$1" 2>/dev/null || true' sh "$state")
-    now=""
-    if [ -n "$OVERLAY_MCP" ]; then
-        docker cp "$OVERLAY_MCP" "$RALPH_HERMES_CONTAINER:/tmp/overlay-mcp.json"
-        now=$(python3 -c 'import json,sys; print(",".join(n for n,s in json.load(open(sys.argv[1])).items() if isinstance(s.get("profiles"),list) and "default" in s["profiles"]))' "$OVERLAY_MCP")
-    fi
-    # One process writes the config and then records what it granted (#134
-    # review): a separate docker exec for each left a window between "config
-    # written" and "ownership recorded" where an interruption could strand a
-    # granted server with no record of it, un-revokable later. write_atomic
-    # makes each individual write all-or-nothing; doing both in one process
-    # closes the gap between them to two local syscalls instead of two
-    # container round-trips.
+    [ -z "$OVERLAY_MCP" ] || docker cp "$OVERLAY_MCP" "$RALPH_HERMES_CONTAINER:/tmp/overlay-mcp.json"
     docker exec -u hermes "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
-        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$prev" "$gcfg" "$state"
-    [ -z "$now$prev" ] || echo "  overlay MCP servers for default: ${now:-none}"
+        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$gcfg"
 fi
 rm -f "$SRC_TMP"
 
