@@ -16,3 +16,24 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /var/lib/ralph
+
+# The Chat sidecar (chat-sender) imports skills/ops/google-chat/gchat.py
+# directly rather than through its own `uv run` isolation (chat-producer:9-13,
+# chat-reply:128), so this image needs the four packages gchat.py's PEP 723
+# header pins (gchat.py:3-8) in its ambient Python -- the same versions
+# .github/workflows/chat.yml already installs for test_gchat_send.py.
+# Extending this image rather than carrying a second one (dd-chat.md:406-407).
+RUN pip install --no-cache-dir \
+      "google-api-python-client>=2.100" \
+      "google-auth-oauthlib>=1.2" \
+      "google-auth>=2.30" \
+      "cryptography>=42"
+
+# A fixed id for every container built from this image: the slim base image
+# ships no /etc/machine-id (no dbus), and gchat.py's token key derives from
+# this file plus the container's own user (gchat.py:106-114). Without a
+# stable value here, a Chat token copied in once (bootstrap/chat-creds-copy,
+# D8) would stop decrypting on the next restart or rebuild. notifier and
+# review-loop share this image but never read a Chat token, so the file is
+# inert for them.
+RUN echo -n "ralph-chat-sender" > /etc/machine-id

@@ -47,6 +47,8 @@ flowchart LR
         loop[review-loop<br/>reviews, maintenance, cleanup]
         proxy[socket-proxy]
         knowledge[knowledge<br/>QMD search, HTTP MCP]
+        chatsender[chat-sender<br/>Chat producer + reply loop]
+        trackersync[tracker-sync<br/>exec'd into, never ticked]
     end
     hermes -->|MCP http://knowledge:8181| knowledge
     loop -->|hourly refresh| knowledge
@@ -57,6 +59,8 @@ flowchart LR
     docker --> sandbox
     notifier -->|docker exec hermes| hermes
     loop -->|docker exec hermes| hermes
+    chatsender -->|docker exec hermes| hermes
+    chatsender -->|docker exec, once PR 3 lands| trackersync
 ```
 
 | Container | Runs | Can touch |
@@ -68,6 +72,8 @@ flowchart LR
 | `notifier` | `bootstrap/run-notifier`: approvals, gate alerts, morning digest | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, the Chat webhook. |
 | `review-loop` | `bootstrap/run-review-loop`: review discovery and publishing, maintenance, sandbox cleanup, knowledge refresh | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, `/workspaces`. |
 | `knowledge` | `qmd mcp --http` on `knowledge:8181`, not published to the host. On when `COMPOSE_PROFILES` includes `knowledge`. | Its own volume (`/var/lib/ralph-knowledge`: docs checkout, index, local models) and Ralph's `docs/`, read-only. CPU only, `mem_limit` 4g. |
+| `chat-sender` | `bootstrap/run-chat-sender`: the public Chat producer, then `chat-reply --scan`, every 60 s. On when `COMPOSE_PROFILES` includes `chat` (dd-chat.md Sec4.1, D5). | Its own `chat-creds` volume (the Chat token, empty until `bootstrap/chat-creds-copy`, D8), `/workspaces` at the hermes service's own path, the board through `docker exec`. Never `hermes-home`. |
+| `tracker-sync` | Idle (`sleep infinity`); exec'd into by `chat-sender`, not ticked. On when `COMPOSE_PROFILES` includes `tracker`. Inert: no pull request calls it yet. | Its own `tracker-creds` volume (the tracker key, empty), `/workspaces`, the board through `docker exec`. Never `hermes-home` or `chat-creds`. |
 
 **Agent sandboxes** are Docker containers that Hermes creates per profile (`terminal.backend: docker`, image `ghcr.io/zhachory1/ralph-sandbox`). Every agent command runs in one. A sandbox sees its own `/workspace` and home, plus only these extras:
 
@@ -97,8 +103,9 @@ Every profile's SOUL starts with `profiles/PRINCIPLES.md` and `profiles/STANDARD
 | `RALPH_MAINTAIN_TOKEN` (PR author) | instance `.env` | `GH_TOKEN` of author, builder, maintainer |
 | `RALPH_BUILDKITE_TOKEN` | instance `.env` | `BUILDKITE_API_TOKEN` of builder and maintainer |
 | Model provider keys | instance `.env` / hermes auth | hermes; never forwarded into a sandbox |
-| Google Chat send token | host `~/.config/gws-cli/` | host LaunchAgent `chat-reply` only |
-| Chat webhook (`RALPH_NOTIFY_URL`) | instance `.env` | notifier, overlay digest job |
+| Google Chat send token | host `~/.config/gws-cli/` (encrypted for the host's own machine and user) | host LaunchAgent `chat-reply`, or a second copy re-encrypted for the `chat-sender` container's pinned identity (`bootstrap/chat-creds-copy`, D8) in its own `chat-creds` volume -- never both at once in normal operation, per the cutover runbook |
+| Work tracker key (future) | instance's own `tracker-creds` volume, path named by `RALPH_TRACKER_CREDS` | `tracker-sync` only; empty until that plan's own D1 runbook step |
+| Chat webhook (`RALPH_NOTIFY_URL`) | instance `.env` | notifier, `chat-sender`, overlay digest job |
 
 A profile token lives in that profile's own `.env` (mode 600) and is forwarded into its sandbox by name (`terminal.docker_forward_env`), never on a command line.
 
@@ -112,8 +119,8 @@ A profile token lives in that profile's own `.env` (mode 600) and is forwarded i
 | Review discovery, publish, maintenance | review-loop | `RALPH_REVIEW_POLL_SECONDS` (900); `run-review-loop --once` on demand |
 | Sandbox cleanup | review-loop, `bootstrap/cleanup-sandboxes` | at most hourly |
 | Knowledge refresh | review-loop, `bootstrap/refresh-knowledge` in the knowledge container | at most hourly |
-| Overlay jobs (chat inbox, chat digest) | Hermes cron on `ralph-inbox-drafter` | per job (`hermes -p ralph-inbox-drafter cron list`) |
-| Chat reply sender | host LaunchAgent `dev.ralph.chat-reply.<instance>` | every 60 s |
+| Overlay jobs (chat digest) | Hermes cron on `ralph-inbox-drafter` | per job (`hermes -p ralph-inbox-drafter cron list`) |
+| Chat intake + reply sender | `chat-sender` sidecar (`COMPOSE_PROFILES=chat`): the public producer, then the reply loop. Before the cutover: the overlay `chat_inbox.py` cron job for intake, the host LaunchAgent `dev.ralph.chat-reply.<instance>` for replies | every 60 s |
 
 Cron jobs can also be created from the WebUI's Crons panel; pick the Ralph profile the job runs as. `hermes pause` stops cron and Kanban dispatch together.
 

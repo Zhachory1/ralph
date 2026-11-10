@@ -49,10 +49,21 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 |---|---|
 | Review discovery, publish, maintenance, cleanup | `docker logs <instance>-review-loop-1` |
 | Approvals, gate alerts, digest | `docker logs <instance>-notifier-1` |
-| Chat reply sender | `~/Library/Logs/ralph-chat-reply-<instance>.{log,err.log}` |
+| Chat sidecar (producer + reply loop) | `docker logs <instance>-chat-sender-1` (before the cutover below: `~/Library/Logs/ralph-chat-reply-<instance>.{log,err.log}`) |
 | A card's run | `docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> show <id> --json` |
 | Disk | `colima ssh -- df -h /` and `du -sh compose/workspaces*/sandboxes` |
 | Knowledge index | `bootstrap/knowledge-status <instance>` (the `RALPH_INSTANCE`, e.g. `ralph-personal`): collections, counts, models, last refresh (`status.json`) |
+
+## Chat sidecar cutover (owner-only)
+
+Not this card's job -- not any build card's job. None of these is a pull request, and nothing schedules them; do them by hand, in order, once chat PR 8 has merged.
+
+1. **Copy today's Chat token into the sidecar's volume (D8).** Not a browser step, not a second OAuth grant: `bootstrap/chat-creds-copy --instance-env .env.<name>` re-encrypts the token you already have (`~/.config/gws-cli/chat_token.json.enc`) for the `chat-sender` container's own pinned identity and writes it into that container's `chat-creds` volume over `docker exec`/`docker cp`. Your host token is untouched; a second copy now exists that can post as you until you revoke the grant in your Google account.
+2. **Cut over.** In this order: stop the overlay `chat_inbox.py` cron job, start the sidecar (`docker compose --profile chat up -d chat-sender`), unload the host `chat-reply` LaunchAgent -- the sidecar runs the same scan. **Rollback:** the reverse, in reverse order.
+3. **Bring skipped threads back, when you want them (no deadline).** `bootstrap/chat-producer`'s cutover guard prints `guarded <op> <thread>` and stages nothing for a thread Ralph already answered under the overlay's own operation ids; `--allow-unseen-history` lifts it at the cost of at most one duplicate acknowledgement per thread.
+4. **Set the send switch.** `CHAT_SEND` (`compose/.env.example`) defaults **on**, so replies keep going out after the cutover. Set it to `0`/`off` as a stop button; see `docs/workflows.md`'s Chat loop.
+5. **Run one threaded reply in a space of your own before the first real send.** The code asks the Chat API for `REPLY_MESSAGE_OR_FAIL`, not for proof that a thread id captured minutes earlier is still the right one; the token holds no delete scope.
+6. **Pick the pilot spaces (`CHAT_ROUTE_SPACES`) knowing Ralph reads every human message in them.** Every one is an operation, an intake card and one model run.
 
 ## Knowledge index
 
