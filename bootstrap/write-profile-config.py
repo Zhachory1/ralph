@@ -86,6 +86,46 @@ def apply_block(name: str, src: str, dst: str) -> str:
     return found.group(0) + dst
 
 
+def _split_top_level_entries(entries: str) -> list[str]:
+    """Split an `mcp_servers` body into whole top-level entries (header line
+    plus everything under it), each kept together as one chunk.
+
+    The outermost indent is whatever the *first* non-blank line uses -- Ralph
+    always writes two spaces, but a hand-added entry may use one, two or
+    three (#134 review). Every other top-level entry in the same block uses
+    that same width (anything narrower would already be invalid YAML: see
+    merge_mcp_servers' own first-line-sets-the-width assumption). A line
+    belongs to the entry above it while it is blank or indented deeper than
+    that outermost width; a line back at the outermost width starts the next
+    entry. This is done once, before any name or tag is considered, so a
+    *nested* property several levels inside one entry's own config (e.g. a
+    hand-added server whose own `url` key happens to share a name with an
+    unrelated overlay grant) is never mistaken for a different entry's header
+    (#134 review: matching `header_re` against every line regardless of depth
+    let a grant named the same as any nested YAML key delete that key wherever
+    it appeared, in any server's body).
+    """
+    lines = entries.splitlines(keepends=True)
+    width = None
+    for line in lines:
+        if line.strip():
+            width = len(line) - len(line.lstrip(" "))
+            break
+    if width is None:
+        return []
+    chunks, current = [], []
+    for line in lines:
+        at_top = line.strip() and (len(line) - len(line.lstrip(" "))) == width
+        if at_top and current:
+            chunks.append("".join(current))
+            current = []
+        current.append(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+
 def merge_mcp_servers(src: str) -> str:
     """Fold every top-level `mcp_servers:` block in the source into one.
 
@@ -102,13 +142,14 @@ def merge_mcp_servers(src: str) -> str:
     seen, kept = set(), []
     for m in blocks:
         body = m.group(0).split("\n", 1)[1]
-        # A continuation line is any line indented deeper than the two-space
-        # header, not specifically four spaces (#134 review: a 3-space entry
-        # had its body dropped entirely, not just orphaned).
-        for entry in re.findall(r"^  [^ \n][^\n]*\n(?:(?:   |\s*\n).*\n?)*", body, re.M):
+        # Whole top-level entries, at whatever indent this block's own
+        # entries use -- not a fixed width (#134 review).
+        for entry in _split_top_level_entries(body):
+            if not entry.strip():
+                continue
             # Strip optional quotes before comparing: YAML treats `knowledge:`
             # and `"knowledge":` as the same key, so dedup must too (#134 review).
-            key = entry.split(":", 1)[0].strip().strip('"').strip("'")
+            key = entry.splitlines()[0].split(":", 1)[0].strip().strip('"').strip("'")
             if key not in seen:
                 seen.add(key)
                 kept.append(entry if entry.endswith("\n") else entry + "\n")
@@ -214,30 +255,17 @@ def overlay_mcp_block(path: str, profile: str) -> str:
 
 def _remove_entries(entries: str, header_re: str) -> str:
     """Remove every top-level `mcp_servers` entry whose header line matches
-    `header_re`, along with every line under it.
-
-    A regex alone cannot express "strictly deeper than this entry's own
-    indent", because that width is a property of each match, not of the
-    pattern (#134 review: an entry hand-written at one or three spaces broke
-    both a fixed two/four-space assumption, and a looser "any indent" one
-    swallowed the next sibling entry at the same shallow width as if it were
-    a continuation). Read line by line instead: a line is part of the entry
-    above it only while it is blank or indented deeper than that entry's own
-    header -- the actual YAML rule for a block mapping's scalar/nested value.
+    `header_re`, along with every line under it. Operates on whole chunks
+    from `_split_top_level_entries`, so a match can only ever be a header
+    line, never a nested property several levels deep (#134 review).
     """
-    lines = entries.splitlines(keepends=True)
-    out, i = [], 0
-    while i < len(lines):
-        line = lines[i]
-        indent = len(line) - len(line.lstrip(" "))
-        if line.strip() and re.match(header_re, line.lstrip(" ")):
-            i += 1
-            while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip(" ")) > indent):
-                i += 1
+    kept = []
+    for chunk in _split_top_level_entries(entries):
+        header = chunk.splitlines()[0] if chunk.strip() else ""
+        if header.strip() and re.match(header_re, header.lstrip(" ")):
             continue
-        out.append(line)
-        i += 1
-    return "".join(out)
+        kept.append(chunk)
+    return "".join(kept)
 
 
 def _drop_entry(entries: str, name: str) -> str:

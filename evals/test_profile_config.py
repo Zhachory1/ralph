@@ -760,6 +760,40 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual({"command": "x", "enabled": True}, out["mcp_servers"]["lens-tools"])
         self.assertEqual("http://k", out["mcp_servers"]["knowledge"]["url"])
 
+    def test_merging_preserves_a_one_space_indented_servers_full_body(self):
+        """#134 review: merge_mcp_servers had its own fixed two/three-space
+        assumption, separate from set_overlay_global's; a one-space entry was
+        dropped entirely (its header never matched a hardcoded two-space
+        prefix at all, so nothing of it survived)."""
+        src = ("mcp_servers:\n lens-tools:\n   command: x\n"
+               "model:\n  default: m\n"
+               "mcp_servers:\n  knowledge:\n    url: http://k\n")
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text(src)
+            d_path.write_text("other: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            text = d_path.read_text()
+        self.assertIn("command: x", text)
+        self.assertIn("knowledge:", text)
+
+    def test_a_grant_sharing_a_name_with_a_nested_property_never_touches_it(self):
+        """#134 review: a server literally named e.g. \"url\" matched -- and
+        deleted -- any line anywhere that happened to start with `url:` after
+        stripping leading whitespace, including a different server's own
+        nested config several levels deep. Matching must only ever consider
+        whole top-level entries, never a line in isolation."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  other:\n    url: http://keep\n")
+            mcp.write_text(json.dumps({"url": {"profiles": ["default"],
+                                       "config": {"endpoint": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual("http://keep", out["mcp_servers"]["other"]["url"])
+        self.assertEqual("http://new", out["mcp_servers"]["url"]["endpoint"])
+
     def test_merged_mcp_blocks_dedup_a_quoted_key_against_its_plain_spelling(self):
         """#134 review: `knowledge:` and `"knowledge":` are the same YAML key."""
         import yaml
