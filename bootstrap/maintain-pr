@@ -59,6 +59,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 MAX_RUNTIME = "3600"
@@ -342,13 +343,27 @@ def main() -> int:
         print(f"error: could not read feedback for {args.repo}#{args.pr}", file=sys.stderr)
         return 1
 
-    pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json", "headRefOid,headRefName")
-    if pr_view.returncode != 0:
-        print(f"error: could not read {args.repo}#{args.pr}'s head", file=sys.stderr)
-        return 1
-    pr_info = json.loads(pr_view.stdout)
+    for attempt in range(2):
+        pr_view = gh("pr", "view", str(args.pr), "-R", args.repo, "--json",
+                     "headRefOid,headRefName,baseRefOid,baseRefName,mergeable")
+        if pr_view.returncode != 0:
+            print(f"error: could not read {args.repo}#{args.pr}'s head", file=sys.stderr)
+            return 1
+        pr_info = json.loads(pr_view.stdout)
+        # GitHub computes mergeability lazily: the first read often says UNKNOWN.
+        if pr_info.get("mergeable") != "UNKNOWN" or attempt:
+            break
+        time.sleep(5)
     head_sha, head_branch = pr_info["headRefOid"], pr_info["headRefName"]
     snapshot["checks"] = [{**c, "head": head_sha} for c in snapshot["checks"]]
+    # A conflict is feedback like a failing check, and new each time the head
+    # or the base moves. Kept out of human_digest, so the breaker holds a
+    # conflict Ralph cannot resolve the same way it holds a build.
+    conflict = ""
+    if pr_info.get("mergeable") == "CONFLICTING":
+        snapshot["checks"].append({"name": "merge-conflict", "head": head_sha,
+                                   "base": pr_info["baseRefOid"]})
+        conflict = f"merge_conflict: {pr_info['baseRefName']} @ {pr_info['baseRefOid']}\n"
 
     digest = feedback_digest(snapshot)
     if digest == "empty":
@@ -372,7 +387,8 @@ def main() -> int:
 
     body = (f"operation_id: {op_id}\nrepo: {args.repo}\nnumber: {args.pr}\n"
            f"head_sha: {head_sha}\nhead_branch: {head_branch}\n"
-           f"feedback_digest: {digest}\nhuman_digest: {human}\nround: {round_label}\n")
+           f"feedback_digest: {digest}\nhuman_digest: {human}\nround: {round_label}\n"
+           f"{conflict}")
 
     r = hermes("kanban", "--board", args.board, "create",
               f"Maintain {args.repo}#{args.pr} round {round_label} @ {head_sha[:8]}",
