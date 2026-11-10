@@ -592,6 +592,21 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual("http://keep", out["mcp_servers"]["other"]["url"])
         self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
 
+    def test_a_hand_added_key_with_a_space_before_the_colon_is_still_replaced(self):
+        """#134 review: YAML tolerates (and ignores) whitespace before the
+        colon; `name :` must match the same as `name:` or it survives as a
+        duplicate key alongside the new grant."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  team-memory :\n    url: http://old\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            text = cfg.read_text()
+        self.assertEqual(1, text.count("team-memory"))
+        self.assertEqual("http://new", yaml.safe_load(text)["mcp_servers"]["team-memory"]["url"])
+
     def test_an_untagged_entry_is_always_the_owners_and_survives_revocation(self):
         """The tag is the only distinction the writer makes: an entry without
         it is never treated as overlay-owned, on any run, including after the

@@ -216,11 +216,14 @@ def _drop_entry(entries: str, name: str) -> str:
     # The owner's key may be quoted (`"name":`); match either spelling, the
     # same way merge_mcp_servers already compares keys (#134 review).
     quoted = rf"[\"']{re.escape(name)}[\"']"
+    # YAML allows (and ignores) whitespace before the colon (#134 review: a
+    # key written `name :` was not matched and survived as a duplicate).
+    gap = r"[ \t]*"
     # A continuation line is any line indented deeper than the two-space
     # header, not specifically four spaces -- YAML allows any consistent
     # indent under a mapping key (#134 review: a 3-space hand-written entry
     # orphaned its own body when only `    ` was matched).
-    return re.sub(rf"^  (?:{re.escape(name)}|{quoted}):[^\n]*\n(?:   .*\n|\s*\n)*", "", entries, flags=re.M)
+    return re.sub(rf"^  (?:{re.escape(name)}|{quoted}){gap}:[^\n]*\n(?:   .*\n|\s*\n)*", "", entries, flags=re.M)
 
 
 def set_overlay_global(path: str, mcp_json: str) -> int:
