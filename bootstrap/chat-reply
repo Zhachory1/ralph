@@ -52,7 +52,15 @@ class Refused(ValueError):
 
 
 def command(argv):
-    return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    """Run one command. A timeout is a failed result (124), never an exception:
+    a hung `gchat.py send` or `docker exec` must fail its own operation and let
+    the scan carry on with the next, not abort the whole pass. A send that timed
+    out after leaving is safe to retry: every part keeps fixed ids, so the Chat
+    API dedupes it."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", "timed out after 60s")
 
 
 def instance_config(path):
@@ -200,23 +208,39 @@ def notify(text):
         print(f"notify failed: {exc}", file=sys.stderr)
 
 
-def block_and_alert(container, board, task_id, root, op_id, kind, reason):
-    """Block the card and post the alert, once per operation and kind,
-    guarded by an `.alerted-<kind>` sentinel written with the same `O_EXCL`
-    open as mark() (dd-chat.md:513-537)."""
+def block_and_alert(container, board, task_id, root, op_id, kind, reason, block=True):
+    """Tell the owner once per operation and kind, guarded by an
+    `.alerted-<kind>` sentinel (dd-chat.md:513-537).
+
+    `block=True` is for a REFUSAL: the card is blocked, so it leaves the
+    sender's `--status done` listing and is not tried again. `block=False` is
+    for a RETRYABLE failure (return 1): the card must stay `done`, because that
+    listing is exactly what the next scan retries from, and blocking it would
+    end the retry the alert is reporting. The design says both fire on a retry;
+    they cannot both hold, so a retry alerts and a refusal blocks and alerts.
+
+    The sentinel is written only after the action it guards has happened. A
+    block that failed leaves no sentinel, so the next scan tries it again;
+    writing the sentinel first would turn one failed `docker exec` into a card
+    that is never blocked and never reported."""
+    sentinel = root / op_id / f".alerted-{kind}"
+    if sentinel.exists():
+        return
+    if block:
+        blocked = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
+                           "--board", board, "block", task_id, reason])
+        if blocked.returncode:
+            print(f"could not block Chat card {task_id}: {blocked.stderr.strip()[:300]}",
+                  file=sys.stderr)
+            return
+    notify(f"Ralph chat {kind} for {task_id} ({op_id}): {reason}")
     try:
-        fd = os.open(root / op_id / f".alerted-{kind}", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(sentinel, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         os.close(fd)
     except FileExistsError:
-        return
+        pass
     except OSError:
         print(f"could not record Chat alert sentinel for {op_id}/{kind}", file=sys.stderr)
-        return
-    blocked = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
-                       "--board", board, "block", task_id, reason])
-    if blocked.returncode:
-        print(f"could not block Chat card {task_id}: {blocked.stderr.strip()[:300]}", file=sys.stderr)
-    notify(f"Ralph chat {kind} for {task_id} ({op_id}): {reason}")
 
 
 def handle(container, root, allowed_spaces, board, task_id):
@@ -273,7 +297,8 @@ def handle(container, root, allowed_spaces, board, task_id):
                 # R6: held for the next scan, not refused -- the request keeps
                 # waiting rather than being told it cannot be acknowledged.
                 print(f"Chat {kind} held for {task_id}: {reason}", file=sys.stderr)
-                block_and_alert(container, board, task_id, root, op_id, kind, reason)
+                block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                                block=False)
                 return 1
             print(f"refused Chat {task_id}: {reason}", file=sys.stderr)
             block_and_alert(container, board, task_id, root, op_id, kind, reason)
@@ -286,12 +311,14 @@ def handle(container, root, allowed_spaces, board, task_id):
             if routed.returncode or not routed.stdout.startswith("routed: t_"):
                 reason = "cannot confirm orchestrator card; acknowledgement not sent"
                 print(reason, file=sys.stderr)
-                block_and_alert(container, board, task_id, root, op_id, kind, reason)
+                block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                                block=False)
                 return 1
         if not post(space, thread, body, kind, op_id):
             reason = f"Chat {kind} failed for {task_id}; retry reuses the same ids"
             print(reason, file=sys.stderr)
-            block_and_alert(container, board, task_id, root, op_id, kind, reason)
+            block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                            block=False)
             return 1
         try:
             mark(root, op_id, kind)
@@ -300,7 +327,8 @@ def handle(container, root, allowed_spaces, board, task_id):
         except OSError:
             reason = f"Chat {kind} sent but not recorded; retry is safe"
             print(reason, file=sys.stderr)
-            block_and_alert(container, board, task_id, root, op_id, kind, reason)
+            block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                            block=False)
             return 1
         print(f"Chat {kind} sent for {task_id}")
         return 0
