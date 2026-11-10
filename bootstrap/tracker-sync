@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Make the work tracker match the state of a chat operation.
+
+This pull request ships the first of two entry points
+(dd-tracker.md Sec3.1); `--settle` is the follow-up, named on the card this
+PR implements.
+
+  --record <op>   called by the sender before it sends the acknowledgement,
+                  in the branch that already holds it until chat-route
+                  confirms an orchestrator card. Finds or creates the item
+                  for the thread and sets `In progress`.
+
+With no credential file (`RALPH_TRACKER_CREDS`), `--record` prints "tracker
+not configured", writes nothing and exits 0: the gate is satisfied and the
+sender's shipped path runs unchanged (dd-tracker.md Sec3.2).
+
+Every tracker write is routed through `bootstrap/tracker.py`; no business
+logic here builds its own HTTP client. Reading a kanban card is routed
+through `hermes`, local or `docker exec`'d into `RALPH_HERMES_CONTAINER`, the
+shape `bootstrap/inbox-producer` already uses -- this sidecar holds the
+tracker key, not the repository token, so it cannot run `hermes` itself.
+"""
+
+import argparse
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import chat_evidence
+import tracker as tracker_client
+
+TRACKER_CREDS_ENV = "RALPH_TRACKER_CREDS"
+RECORDED = ".tracker-recorded"
+# The subset of KINDS (chat-route.py) this half turns into a tracker item
+# kind value. Anything else (the deployed sender's pre-PR behaviour, with no
+# `kind` at all) is recorded with no kind rather than refused.
+KINDS = frozenset({"question", "update", "feature_request", "bug_investigation", "other"})
+
+
+def hermes(*args):
+    """`hermes kanban ...`, local or through `docker exec` into
+    `RALPH_HERMES_CONTAINER` -- the shape `bootstrap/inbox-producer:29-33`
+    already uses, because this service holds the tracker key, not the
+    repository token, and so cannot run `hermes` on its own host."""
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    command = (["docker", "exec", container, "hermes", *args] if container
+               else ["hermes", *args])
+    return subprocess.run(command, capture_output=True, text=True)
+
+
+def operation_of(task):
+    ops = [line.partition(": ")[2] for line in (task.get("body") or "").splitlines()
+           if line.startswith("operation_id: ")]
+    return ops[0] if len(ops) == 1 and chat_evidence.OP_ID.fullmatch(ops[0]) else None
+
+
+def find_card(board, op_id):
+    """The done card whose `operation_id:` line matches `op_id`, with its
+    last run's metadata -- the same listing the sender's `scan()` makes
+    (`chat-reply:221-224`, dd-tracker.md Sec3.1), matched by operation id.
+    Returns `None` for no match or an unreadable board: a missing card
+    leaves the fields it would have supplied unset rather than failing the
+    call (dd-tracker.md Sec5)."""
+    listed = hermes("kanban", "--board", board, "list", "--assignee", "ralph-chat-maintainer",
+                     "--status", "done", "--json")
+    if listed.returncode:
+        return None
+    try:
+        tasks = json.loads(listed.stdout)
+        tasks = tasks if isinstance(tasks, list) else tasks["tasks"]
+        task_id = next(t["id"] for t in tasks if operation_of(t) == op_id)
+    except (ValueError, KeyError, TypeError, StopIteration):
+        return None
+    shown = hermes("kanban", "--board", board, "show", task_id, "--json")
+    if shown.returncode:
+        return None
+    try:
+        detail = json.loads(shown.stdout)
+        run = detail["runs"][-1]
+        if run["outcome"] != "completed" or not isinstance(run["metadata"], dict):
+            return None
+        return run["metadata"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def write_marker(path, text=""):
+    """Overwritten freely, never `O_EXCL`: a step re-run after a later
+    failure must be able to rewrite this file, unlike a reply marker that
+    must happen once (dd-tracker.md Sec3.2)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.chmod(0o600)
+    tmp.replace(path)
+
+
+def converge(client, canonical, newer):
+    """The guard of dd-tracker.md Sec3.3, stated completely: every item but
+    the canonical (oldest) one loses the thread-key custom field and becomes
+    `Duplicate`, with a note saying which item it folded into, and is related
+    to the canonical item. Detecting the race is not resolving it; this
+    resolves it."""
+    for dup in newer:
+        client.update(dup["id"], {"thread": "", "status": "Duplicate"})
+        client.note(dup["id"], "folded into canonical item %s" % canonical["id"])
+        client.relate(dup["id"], canonical["id"])
+
+
+def record(client, root, op_id):
+    """`--record <op>` (dd-tracker.md Sec3.1, Sec3.3). Resolves the item by
+    thread key at the start of every call and treats a prior
+    `.tracker-recorded` as advisory, so a losing operation's own marker
+    converges here once the guard has run from the other side."""
+    try:
+        item = chat_evidence.read_item(root, op_id)
+    except chat_evidence.Invalid as error:
+        print("refused tracker-sync --record %s: %s" % (op_id, error), file=sys.stderr)
+        return 2
+    thread = item["thread"]
+    canonical, newer = client.find(thread)
+    if canonical is None:
+        card = find_card("queues", op_id) or {}
+        message = item["messages"][-1]["text"]
+        fields = {"thread": thread, "subject": message[:255], "description": message,
+                  "status": "In progress"}
+        if item.get("sender"):
+            fields["requester"] = item["sender"]
+        if card.get("kind") in KINDS:
+            fields["kind"] = card["kind"]
+        if card.get("ack"):
+            fields["restatement"] = card["ack"]
+        client.create(fields)
+        canonical, newer = client.find(thread)
+    converge(client, canonical, newer)
+    write_marker(root / op_id / RECORDED, str(canonical["id"]))
+    return 0
+
+
+def load_client(creds_path):
+    config = tracker_client.load(creds_path)
+    return tracker_client.Tracker(config) if config is not None else None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--record", metavar="OP", required=True)
+    parser.add_argument("--work-root", required=True, type=pathlib.Path)
+    args = parser.parse_args(argv)
+
+    client = load_client(os.environ.get(TRACKER_CREDS_ENV, ""))
+    if client is None:
+        print("tracker not configured")
+        return 0
+    return record(client, args.work_root, args.record)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
