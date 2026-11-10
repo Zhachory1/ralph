@@ -147,6 +147,16 @@ class DeclarationTests(unittest.TestCase):
         self.assertIn("ralph-librarian", push_block)
         self.assertIn("*/ralph-librarian/*", install)
 
+    def test_push_token_is_written_after_the_profiles_exist(self):
+        """A profile created in this run has no .env until the profile loop
+        has run, and the push-token loop skips a profile whose .env is absent.
+        The read-token loop skips the librarian on purpose, so if the push
+        token were written first, a first install would leave it no token."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        created = install.index("hermes profile create")
+        pushed = install.index("for profile in ralph-maintainer ralph-builder ralph-author")
+        self.assertLess(created, pushed)
+
     def test_librarian_does_not_get_the_repo_cache_mount(self):
         """dd-ralph-librarian 4.2: the cache spans every repository the
         instance has touched; the librarian needs one small repository and

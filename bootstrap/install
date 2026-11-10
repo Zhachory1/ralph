@@ -225,30 +225,6 @@ if [ -n "${RALPH_OPENAI_API_KEY:-}" ]; then
     fi
 fi
 
-# The author, builder and maintainer push as the PR author, not as the reviewer:
-# maintain-pr ignores feedback from its own login. Profile-scoped GH_TOKEN
-# overrides the stack-wide review token and is forwarded into their sandboxes.
-if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
-    # The token travels as an env var to the exec, never on a command line.
-    docker exec -i -u hermes -e RALPH_MAINTAIN_TOKEN -e "RALPH_MAINTAIN_LOGIN=${RALPH_MAINTAIN_LOGIN:-}" \
-        "${RALPH_HERMES_CONTAINER:-ralph-hermes-1}" sh -eu -c '
-        for profile in ralph-maintainer ralph-builder ralph-author ralph-librarian; do
-            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
-            [ -f "$f" ] || continue
-            tmp=$(mktemp "$f.XXXXXX")
-            grep -vE "^(GH_TOKEN|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))=" "$f" > "$tmp" || true
-            printf "GH_TOKEN=%s\n" "$RALPH_MAINTAIN_TOKEN" >> "$tmp"
-            if [ -n "$RALPH_MAINTAIN_LOGIN" ]; then
-                for k in AUTHOR COMMITTER; do
-                    printf "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s@users.noreply.github.com\n" \
-                        "$k" "$RALPH_MAINTAIN_LOGIN" "$k" "$RALPH_MAINTAIN_LOGIN" >> "$tmp"
-                done
-            fi
-            chmod 600 "$tmp" && mv "$tmp" "$f"
-        done'
-    echo "  author, builder, maintainer and librarian push with RALPH_MAINTAIN_TOKEN"
-fi
-
 # Agent-instruction files (AGENTS.md, CLAUDE.md, ...) need a human's
 # approval per write, and a card run has no human: the edit is refused even
 # when a reviewer asked for it (op3#17752). Opt-in per instance; on, the
@@ -344,6 +320,32 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
         "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
 fi
 rm -f "$SRC_TMP"
+
+# The author, builder, maintainer and librarian push as the PR author, not as the reviewer:
+# maintain-pr ignores feedback from its own login. Profile-scoped GH_TOKEN
+# overrides the stack-wide review token and is forwarded into their sandboxes.
+# This runs after the profile loop above: a profile created in this run has no
+# .env until then, and the loop below skips a profile whose .env is absent.
+if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
+    # The token travels as an env var to the exec, never on a command line.
+    docker exec -i -u hermes -e RALPH_MAINTAIN_TOKEN -e "RALPH_MAINTAIN_LOGIN=${RALPH_MAINTAIN_LOGIN:-}" \
+        "${RALPH_HERMES_CONTAINER:-ralph-hermes-1}" sh -eu -c '
+        for profile in ralph-maintainer ralph-builder ralph-author ralph-librarian; do
+            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
+            [ -f "$f" ] || continue
+            tmp=$(mktemp "$f.XXXXXX")
+            grep -vE "^(GH_TOKEN|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))=" "$f" > "$tmp" || true
+            printf "GH_TOKEN=%s\n" "$RALPH_MAINTAIN_TOKEN" >> "$tmp"
+            if [ -n "$RALPH_MAINTAIN_LOGIN" ]; then
+                for k in AUTHOR COMMITTER; do
+                    printf "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s@users.noreply.github.com\n" \
+                        "$k" "$RALPH_MAINTAIN_LOGIN" "$k" "$RALPH_MAINTAIN_LOGIN" >> "$tmp"
+                done
+            fi
+            chmod 600 "$tmp" && mv "$tmp" "$f"
+        done'
+    echo "  author, builder, maintainer and librarian push with RALPH_MAINTAIN_TOKEN"
+fi
 
 # CI logs for the profiles that fix failing builds. Runs after the profiles
 # are created, so a fresh install gets it too (#107 review). Only the maintainer and
