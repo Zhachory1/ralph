@@ -587,6 +587,21 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual(1, len(self.blocks()))
         self.assertFalse((self.root / self.op / ".held-ack").is_file())
 
+    def test_switch_back_on_does_not_refuse_or_block_an_already_held_final(self):
+        """Queue finding: `--task` on a held final, with the switch on and no
+        acknowledgement marker, must be 'nothing to do', not a refusal."""
+        self.assertEqual(0, self.handle_with_send("ralph", "t_final", send_enabled=False))
+        self.assertTrue((self.root / self.op / ".held-final").is_file())
+        self.assertEqual(0, self.handle_with_send("ralph", "t_final", send_enabled=True))
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+
+    def test_switch_back_on_does_not_resend_an_already_sent_final_without_ack(self):
+        (self.root / self.op / ".final-sent").touch()
+        self.assertEqual(0, self.handle_with_send("ralph", "t_final", send_enabled=True))
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+
     def test_switch_off_holds_final_without_ack_marker_and_does_not_block(self):
         """The switch is read before the final-needs-acknowledgement check: a
         held final is held, not refused, with no acknowledgement marker at all."""

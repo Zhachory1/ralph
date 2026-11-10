@@ -406,6 +406,12 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
             # acknowledgement of the pilot week is held too, and refusing each
             # final against them would block and alert once per card for
             # nothing a requester did.
+            # An already-answered final (sent, or held while the switch was
+            # off) has nothing left to decide. Without this, flipping the
+            # switch on and calling `--task` for a held final would fail the
+            # ack check below and block a card that is correctly finished.
+            if answered(root, op_id, "final"):
+                return 0
             if send_enabled and not sent(root, op_id, "ack"):
                 raise Refused("final response before the request was acknowledged")
         item = destination(root, op_id, allowed_spaces)
