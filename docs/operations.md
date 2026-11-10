@@ -65,6 +65,14 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | A memory write is rejected (409) | The docs repo's default branch requires pull requests; memories are written directly by design. Allow the write or turn the rule off. |
 | Turn it off | Remove `knowledge` from `COMPOSE_PROFILES`, stop the container, re-run `init`: the MCP block and index step go away. |
 
+## Librarian
+
+| Situation | Action |
+|---|---|
+| Force a run now | Clear `$WORK/.librarian-stamp` (`/workspaces/review-work` by default) or run `docker exec <instance>-review-loop-1 /ralph/bootstrap/run-review-loop --once`. Needs `RALPH_DOCS_REPO` set and no open pull request with a `librarian/` head, or nothing is created. |
+| A librarian pull request is open, unmerged | Blocks the next weekly card: `run-review-loop` and the run itself both skip creation while a `librarian/*` head is still open. Merge or close it to let next week's card through. |
+| After the profile and `install` changes merge | Re-run `init` on every instance once the image is pulled, so `ralph-librarian` exists there. No build pull request or card does this; it is an owner-only step. |
+
 ## Glossary
 
 | Term | Meaning |

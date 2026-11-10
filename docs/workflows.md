@@ -134,3 +134,16 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 - *Fetch, update or embed fails:* the previous index keeps answering; `status.json` records the error, and the next hour retries.
 - *The docs repo requires PRs on its default branch:* the memory write gets 409 and the card blocks with the reason.
 - *Service off or down:* profiles fall back to reading the docs repo through `gh`.
+
+## Librarian
+
+**Entry:** a card the review loop creates once a week on `queues`, assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
+
+- One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
+- Promotes a document's `status` to `approved` once its newest `prs:` entry has merged, fills what memory front matter it can derive and nothing else, merges duplicate notes and marks superseded ones (each capped at five per run), archives a `projects/` folder once every document in it and every issue it names are closed, rewrites links to anything moved, and regenerates folder indexes.
+- One commit per requirement group, then one pull request — or none, if the pass changed nothing.
+
+**Failure modes:**
+- *Two runs would overlap:* an open pull request with a `librarian/` head skips both the weekly card and the run itself.
+- *A cap bites:* merged pairs, supersede marks, or changed lines. The run stops between steps, never inside one, lists what it deferred in the pull request body, and next week's run picks it up.
+- *Nothing to change:* an empty diff opens no pull request; the card completes saying so.
