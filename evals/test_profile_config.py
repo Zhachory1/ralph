@@ -576,6 +576,34 @@ class VoiceTests(unittest.TestCase):
         out = yaml.safe_load(text)
         self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
 
+    def test_an_entry_with_three_space_indentation_is_fully_removed(self):
+        """#134 review: a hand-written entry need not use four-space YAML
+        indentation. A replace must drop every continuation line regardless
+        of width, or the orphaned lines break the file's YAML."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  team-memory:\n   url: http://old\n   enabled: true\n"
+                           "  other:\n    url: http://keep\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual("http://keep", out["mcp_servers"]["other"]["url"])
+        self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
+
+    def test_an_untagged_entry_is_always_the_owners_and_survives_revocation(self):
+        """The tag is the only distinction the writer makes: an entry without
+        it is never treated as overlay-owned, on any run, including after the
+        grant that would otherwise match its name is removed. This is the
+        intended behaviour (#134), not a migration case: nothing before this
+        PR ever wrote an overlay entry without the tag."""
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("mcp_servers:\n  team-memory:\n    url: http://hand-added\n")
+            wpc.set_overlay_global(str(cfg), "")
+            self.assertIn("http://hand-added", cfg.read_text())
+
     def test_overlay_mcp_cannot_shadow_built_in_servers(self):
         """#134 review: knowledge and lens-tools are Ralph's names."""
         import json
