@@ -355,8 +355,10 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual(1, notify.call_count)
         self.assertEqual(1, len(self.blocks()))
 
-    def test_retryable_failure_blocks_once_and_alerts_once_across_scans(self):
-        """A second scan over the same operation and kind must not alert again."""
+    def test_retryable_failure_alerts_once_and_does_not_block_so_it_retries(self):
+        """A retryable failure must leave the card `done`: that listing is what
+        the next scan retries from. A second scan alerts no second time, and
+        once the send works the reply goes out."""
         (self.root / self.op / ".receipt-sent").touch()
 
         def failing_send(argv):
@@ -371,7 +373,73 @@ class ChatReplyTests(unittest.TestCase):
             self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
                                                   {"spaces/example"}, "ralph", "t_final"))
         self.assertEqual(1, notify.call_count)
+        self.assertEqual([], self.blocks())
+        # The same card, still done, sends on the next scan once Chat works.
+        self.assertEqual(0, self.handle("ralph", "t_final"))
+        self.assertEqual(1, len(self.sends()))
+        self.assertTrue((self.root / self.op / ".final-sent").is_file())
+
+    def test_ack_ceiling_breach_is_held_not_blocked(self):
+        """R6: an `ack` breach is held for the next scan. Blocking the card
+        would take it out of the done listing and the hold could never lift."""
+        other = self.make_operation("spaces/example/messages/two")
+        (self.root / other / ".receipt-sent").touch()
+        item = dict(self.item, prior_operations=[other])
+        self.item = item
+        self.write_item()
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(1, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+        self.assertEqual(1, notify.call_count)
+
+    def test_a_failed_block_leaves_no_sentinel_so_the_next_scan_retries_it(self):
+        del self.cards[("ralph", "t_final")]
+        other = self.make_operation("spaces/example/messages/two")
+        (self.root / other / ".decline-sent").touch()
+        third = self.make_operation("spaces/example/messages/three", prior=[other])
+        self.cards[("queues", "t_third")] = {
+            "task": {"id": "t_third", "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": f"operation_id: {third}\n",
+                     "workspace_path": f"/workspaces/chat-inbox/{third}"},
+            "metadata": {"decision": "reply", "reply_kind": "decline", "body": "no."}}
+        state = {"fail": True}
+
+        def command(argv):
+            if "block" in argv and state["fail"]:
+                return subprocess.CompletedProcess(argv, 1, "", "docker down")
+            return self.command(argv)
+
+        with patch.object(self.reply, "command", side_effect=command), \
+                patch.object(self.reply, "notify") as notify:
+            self.assertEqual(2, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "queues", "t_third"))
+            self.assertFalse((self.root / third / ".alerted-decline").exists())
+            self.assertEqual(0, notify.call_count)
+            state["fail"] = False
+            self.assertEqual(2, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "queues", "t_third"))
+        self.assertTrue((self.root / third / ".alerted-decline").exists())
+        self.assertEqual(1, notify.call_count)
         self.assertEqual(1, len(self.blocks()))
+
+    def test_a_send_timeout_fails_that_operation_and_does_not_abort_the_scan(self):
+        """`command()` turns a timeout into a failed result, so one hung send
+        cannot stop the scan from reaching the next card."""
+        timed_out = subprocess.TimeoutExpired(["x"], 60)
+        with patch.object(self.reply.subprocess, "run", side_effect=timed_out):
+            result = self.reply.command(["docker", "exec", "x"])
+        self.assertEqual(124, result.returncode)
+
+        def hanging_send(argv):
+            if "send" in argv and "/ralph/bootstrap/chat-route" not in argv:
+                return self.reply.subprocess.CompletedProcess(argv, 124, "", "timed out")
+            return self.command(argv)
+
+        with patch.object(self.reply, "command", side_effect=hanging_send), \
+                patch.object(self.reply, "notify"):
+            self.assertEqual(1, self.reply.scan(self.env))
+        self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
 
     def test_notify_with_no_webhook_prints_and_does_not_raise(self):
         self.reply.notify("a test alert")
