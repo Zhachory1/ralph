@@ -195,7 +195,12 @@ def stage_once(path, text, mode):
 
 
 def command(argv):
-    return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    """A timeout is a failed result (124), not an exception, so one hung
+    `docker exec` fails its own operation and the scan goes on."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", "timed out after 60s")
 
 
 def create_card(container, op_id):
@@ -212,11 +217,15 @@ def create_card(container, op_id):
 
 def stage(svc, root, space, message, allow_unseen_history):
     """Stage one eligible message under the cutover guard. Returns
-    (op_id, staged); staged is False if already on disk or guarded."""
+    (op_id, staged): staged is True when `evidence/item.json` is on disk after
+    the call, whether this call wrote it or an earlier one did, and False only
+    when the cutover guard refused it. Whether the card exists is a separate
+    fact, kept in `.card-created` (see `once`): a staged directory with no card
+    must not be mistaken for a finished operation."""
     op_id = operation_id(message.get("name", ""))
     workspace = root / op_id
-    if workspace.is_dir():
-        return op_id, False
+    if (workspace / "evidence" / "item.json").is_file():
+        return op_id, True
     thread = (message.get("thread") or {}).get("name", "")
     history = list_thread(svc, space, thread)
     records = [{"name": m.get("name"), "text": (m.get("text") or "").splitlines(),
@@ -262,11 +271,25 @@ def once(svc, allowed_spaces, container, root, allow_unseen_history, now=None):
         op_id, staged = stage(svc, root, space, message, allow_unseen_history)
         if not staged:
             continue
+        # The card is created once per operation, recorded by `.card-created`
+        # written only after a successful create. Without it, a create that
+        # failed after staging would be skipped on every later scan (the
+        # directory exists), and the message would never reach the maintainer.
+        # The create is itself idempotent on the operation id, so retrying it
+        # cannot make a second card.
+        marker = root / op_id / ".card-created"
+        if marker.exists():
+            continue
         created = create_card(container, op_id)
         if created.returncode:
-            print(f"could not create Chat card for {op_id}", file=sys.stderr)
+            print(f"could not create Chat card for {op_id}; will retry", file=sys.stderr)
             status = 1
             continue
+        try:
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+        except FileExistsError:
+            pass
         print(f"{op_id} staged, card created")
     return status
 

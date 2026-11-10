@@ -359,6 +359,39 @@ class OnceIdempotencyTests(unittest.TestCase):
         self.assertEqual(0, self.run_once())
         self.assertEqual(1, len(self.calls))
 
+    def test_a_failed_card_create_is_retried_on_the_next_run_and_made_once(self):
+        """Staging succeeded, card creation failed: the directory exists, but
+        the next scan must still create the card, exactly once more."""
+        state = {"fail": True}
+
+        def command(argv):
+            self.calls.append(argv)
+            if state["fail"]:
+                return subprocess.CompletedProcess(argv, 1, "", "hermes down")
+            return subprocess.CompletedProcess(argv, 0, '{"id": "t_x"}', "")
+
+        with patch.object(self.producer, "command", side_effect=command):
+            self.assertEqual(1, self.producer.once(self.svc, {"spaces/example"},
+                                                   "ralph-work-hermes-1", self.root, False,
+                                                   now=NOW))
+            op_id = self.producer.operation_id(self.message_name)
+            self.assertTrue((self.root / op_id / "evidence" / "item.json").is_file())
+            self.assertFalse((self.root / op_id / ".card-created").exists())
+            state["fail"] = False
+            self.assertEqual(0, self.producer.once(self.svc, {"spaces/example"},
+                                                   "ralph-work-hermes-1", self.root, False,
+                                                   now=NOW))
+            self.assertTrue((self.root / op_id / ".card-created").is_file())
+            self.assertEqual(0, self.producer.once(self.svc, {"spaces/example"},
+                                                   "ralph-work-hermes-1", self.root, False,
+                                                   now=NOW))
+        self.assertEqual(2, len(self.calls))   # one failed, one that landed, none after
+
+    def test_a_timeout_on_card_create_is_a_failed_result_not_an_exception(self):
+        timed_out = subprocess.TimeoutExpired(["x"], 60)
+        with patch.object(self.producer.subprocess, "run", side_effect=timed_out):
+            self.assertEqual(124, self.producer.command(["docker", "exec", "x"]).returncode)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
