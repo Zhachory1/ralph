@@ -95,11 +95,15 @@ class PinnedIdentityTests(unittest.TestCase):
 class RunChatSenderTests(unittest.TestCase):
     """bootstrap/run-chat-sender: one failing pass must not stop the next."""
 
-    def run_sender(self, producer_cmd, sender_cmd, iterations, env_extra=None):
+    def run_sender(self, producer_cmd, sender_cmd, iterations, env_extra=None, token=True):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         instance_env = pathlib.Path(tmp.name) / "instance.env"
+        token_file = pathlib.Path(tmp.name) / "chat_token.json.enc"
+        if token:
+            token_file.write_text("not a real token")
         env = {
+            "RALPH_CHAT_TOKEN_FILE": str(token_file),
             "PATH": "/usr/bin:/bin",
             "RALPH_CHAT_INSTANCE_ENV": str(instance_env),
             "RALPH_CHAT_PRODUCER_CMD": producer_cmd,
@@ -136,6 +140,43 @@ class RunChatSenderTests(unittest.TestCase):
         result, _ = self.run_sender("true", f"echo ran >> {marker.name}", 5)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(5, len(pathlib.Path(marker.name).read_text().split()))
+
+    def test_with_no_token_the_sidecar_idles_and_runs_neither_command(self):
+        """The token copy docker-execs into this container, so it must be able to
+        start first; until the token exists it must read and send nothing."""
+        marker = tempfile.NamedTemporaryFile(delete=False)
+        marker.close()
+        self.addCleanup(lambda: pathlib.Path(marker.name).unlink(missing_ok=True))
+        result, _ = self.run_sender(f"echo producer >> {marker.name}",
+                                    f"echo sender >> {marker.name}", 3, token=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", pathlib.Path(marker.name).read_text())
+        self.assertEqual(1, result.stderr.count("no Chat token"))
+
+    def test_a_hung_producer_is_ended_and_the_sender_still_runs(self):
+        """Review finding: an unbounded producer call stopped reply scans."""
+        marker = tempfile.NamedTemporaryFile(delete=False)
+        marker.close()
+        self.addCleanup(lambda: pathlib.Path(marker.name).unlink(missing_ok=True))
+        result, _ = self.run_sender("sleep 30", f"echo sender >> {marker.name}", 2,
+                                    {"RALPH_CHAT_PASS_TIMEOUT_SECONDS": "1"})
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(["sender"] * 2, pathlib.Path(marker.name).read_text().split())
+        self.assertIn("timed out", result.stderr)
+
+    def test_the_stop_switch_is_documented_as_applying_on_recreate(self):
+        """Review finding: the docs implied a running sidecar re-reads CHAT_SEND.
+        It reads it from the environment it was created with."""
+        operations = (ROOT / "docs" / "operations.md").read_text()
+        self.assertIn("recreate the sidecar", operations)
+        example = (ROOT / "compose" / ".env.example").read_text()
+        self.assertIn("up -d chat-sender", example)
+
+    def test_runbook_starts_the_sidecar_before_the_token_copy_needs_it(self):
+        operations = (ROOT / "docs" / "operations.md").read_text()
+        section = operations[operations.index("## Chat sidecar cutover"):]
+        self.assertLess(section.index("Start the sidecar first"),
+                        section.index("Copy today's Chat token"))
 
     def test_chat_send_from_the_instance_env_reaches_the_sender(self):
         """CHAT_SEND, rendered by the entrypoint, is the same key

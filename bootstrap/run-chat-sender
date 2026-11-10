@@ -18,6 +18,16 @@ PRODUCER_CMD=${RALPH_CHAT_PRODUCER_CMD:-"python3 /ralph/bootstrap/chat-producer 
 SENDER_CMD=${RALPH_CHAT_SENDER_CMD:-"python3 /ralph/bootstrap/chat-reply --scan --instance-env $INSTANCE_ENV"}
 # 0 (the default) is unbounded; the eval above sets a real count.
 MAX_ITERATIONS=${RALPH_CHAT_MAX_ITERATIONS:-0}
+# The sidecar does nothing until the owner's one-time token copy
+# (bootstrap/chat-creds-copy) has put a token here. That copy `docker exec`s
+# into this running container, so the container has to exist first; waiting
+# for the token, rather than failing every pass without one, is what makes
+# starting it before the copy safe: no Chat read, no reply, no alert.
+TOKEN_FILE=${RALPH_CHAT_TOKEN_FILE:-/root/.config/gws-cli/chat_token.json.enc}
+# One pass may not hold the loop: a hung Chat read in the producer would
+# otherwise stop the sender from ever running again. `timeout` ends it (exit
+# 124), the next command runs, and the next interval retries both.
+PASS_TIMEOUT=${RALPH_CHAT_PASS_TIMEOUT_SECONDS:-120}
 
 # chat-producer and chat-reply both take one `--instance-env` file
 # (chat-producer:300, chat-reply:529); this service carries its variables as
@@ -46,10 +56,19 @@ render_instance_env
 echo "ralph chat sidecar: instance=${RALPH_INSTANCE:-ralph} every ${INTERVAL}s"
 
 iteration=0
+announced_wait=0
 while true; do
-    # shellcheck disable=SC2086  # PRODUCER_CMD/SENDER_CMD are trusted, operator-set strings
-    eval "$PRODUCER_CMD" || echo "chat sidecar: producer pass failed, will retry" >&2
-    eval "$SENDER_CMD" || echo "chat sidecar: sender pass failed, will retry" >&2
+    if [ ! -f "$TOKEN_FILE" ]; then
+        if [ "$announced_wait" -eq 0 ]; then
+            echo "chat sidecar: no Chat token at $TOKEN_FILE yet; idle until bootstrap/chat-creds-copy has run" >&2
+            announced_wait=1
+        fi
+    else
+        announced_wait=0
+        # shellcheck disable=SC2086  # the *_CMD values are trusted, operator-set strings
+        eval "timeout $PASS_TIMEOUT $PRODUCER_CMD" || echo "chat sidecar: producer pass failed or timed out, will retry" >&2
+        eval "timeout $PASS_TIMEOUT $SENDER_CMD" || echo "chat sidecar: sender pass failed or timed out, will retry" >&2
+    fi
 
     iteration=$((iteration + 1))
     if [ "$MAX_ITERATIONS" -gt 0 ] && [ "$iteration" -ge "$MAX_ITERATIONS" ]; then

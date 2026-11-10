@@ -14,6 +14,9 @@ on:
     paths:
       - "bootstrap/chat-*"
       - "bootstrap/chat_*"
+      - "bootstrap/run-chat-*"
+      - "compose/Dockerfile.notifier"
+      - "compose/docker-compose.yml"
       - "skills/ops/google-chat/**"
       - "evals/test_chat_*"
 
@@ -37,7 +40,20 @@ jobs:
       # PEP 723 dependencies (skills/ops/google-chat/gchat.py:3-7) installed
       # in the runner's ambient Python first.
       - name: Google Chat send dependencies
-        run: pip install "google-api-python-client>=2.100" "google-auth-oauthlib>=1.2" "google-auth>=2.30" "cryptography>=42"
+        run: pip install "google-api-python-client>=2.100" "google-auth-oauthlib>=1.2" "google-auth>=2.30" "cryptography>=42" "pyyaml>=6"
 
       - name: Google Chat send
         run: python3 evals/test_gchat_send.py
+
+      # These were written to guard the sidecar and the token copy (the pinned
+      # machine id and user that must match between the Dockerfile and
+      # chat-creds-copy, the entrypoint's idle and timeout behaviour) but the
+      # workflow named none of them, so a drift would have gone green.
+      - name: Producer
+        run: python3 evals/test_chat_producer.py
+
+      - name: Credential copy
+        run: python3 evals/test_chat_creds_copy.py
+
+      - name: Sidecar compose, entrypoint and pinned identity
+        run: python3 evals/test_chat_sender_compose.py
