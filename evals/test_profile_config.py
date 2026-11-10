@@ -652,6 +652,42 @@ class VoiceTests(unittest.TestCase):
             wpc.set_overlay_global(str(cfg), "")
             self.assertIn("http://hand-added", cfg.read_text())
 
+    def test_an_already_empty_mcp_servers_block_is_replaced_not_duplicated(self):
+        """#134 review: `mcp_servers:` present with nothing under it didn't
+        satisfy block_re's old \"one or more indented lines\" requirement, so
+        it was never found -- the grant was appended as a second, separate
+        `mcp_servers:` key instead of replacing the empty one."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\nother: 1\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            text = cfg.read_text()
+        self.assertEqual(1, text.count("mcp_servers:"))
+        out = yaml.safe_load(text)
+        self.assertEqual(1, out["other"])
+        self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
+
+    def test_a_leading_comment_deeper_than_the_real_entries_does_not_confuse_width(self):
+        """#134 review: a standalone comment indented deeper than the entries
+        that follow it (e.g. a note about the next server) was read as the
+        block's own indent width, since it was the first non-blank line --
+        making every real entry look shallower than the \"width\" and so not
+        a sibling, producing a duplicate on replace."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n    # a note about this server\n  team-memory:\n    url: http://old\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            text = cfg.read_text()
+        self.assertEqual(1, text.count("team-memory"))
+        self.assertIn("# a note about this server", text)
+        self.assertEqual("http://new", yaml.safe_load(text)["mcp_servers"]["team-memory"]["url"])
+
     def test_overlay_mcp_cannot_shadow_built_in_servers(self):
         """#134 review: knowledge and lens-tools are Ralph's names."""
         import json

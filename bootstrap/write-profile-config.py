@@ -69,7 +69,11 @@ def read_yaml_text(path: pathlib.Path) -> str:
 
 
 def block_re(name: str) -> re.Pattern[str]:
-    return re.compile(rf"^{name}:\n(?:[ \t]+.*\n)+", re.M)
+    # Zero or more indented lines, not one or more (#134 review): a block that
+    # is present but empty (`mcp_servers:` with nothing under it) must still
+    # be found and replaced in place, not left alone while a second, non-empty
+    # block of the same name is appended elsewhere.
+    return re.compile(rf"^{name}:\n(?:[ \t]+.*\n)*", re.M)
 
 
 def apply_block(name: str, src: str, dst: str) -> str:
@@ -90,13 +94,17 @@ def _split_top_level_entries(entries: str) -> list[str]:
     """Split an `mcp_servers` body into whole top-level entries (header line
     plus everything under it), each kept together as one chunk.
 
-    The outermost indent is whatever the *first* non-blank line uses -- Ralph
-    always writes two spaces, but a hand-added entry may use one, two or
-    three (#134 review). Every other top-level entry in the same block uses
-    that same width (anything narrower would already be invalid YAML: see
-    merge_mcp_servers' own first-line-sets-the-width assumption). A line
-    belongs to the entry above it while it is blank or indented deeper than
-    that outermost width; a line back at the outermost width starts the next
+    The outermost indent is whatever the first actual **key** line uses --
+    Ralph always writes two spaces, but a hand-added entry may use one, two
+    or three (#134 review). A pure-comment line is skipped when picking that
+    width (#134 review: a standalone comment written deeper than the entries
+    it precedes, e.g. a note about the server that follows, is not itself an
+    entry and must never set the width other lines are measured against).
+    Every actual top-level entry in the same block uses that same width
+    (anything narrower would already be invalid YAML: see merge_mcp_servers'
+    own first-line-sets-the-width assumption). A line belongs to the entry
+    above it while it is blank, a comment, or indented deeper than the
+    outermost width; a line back at the outermost width starts the next
     entry. This is done once, before any name or tag is considered, so a
     *nested* property several levels inside one entry's own config (e.g. a
     hand-added server whose own `url` key happens to share a name with an
@@ -108,14 +116,17 @@ def _split_top_level_entries(entries: str) -> list[str]:
     lines = entries.splitlines(keepends=True)
     width = None
     for line in lines:
-        if line.strip():
+        if line.strip() and not line.lstrip(" ").startswith("#"):
             width = len(line) - len(line.lstrip(" "))
             break
     if width is None:
         return []
     chunks, current = [], []
     for line in lines:
-        at_top = line.strip() and (len(line) - len(line.lstrip(" "))) == width
+        # A standalone comment at the entry's own width is still part of the
+        # entry above it, not a new header: only an actual key line starts one.
+        at_top = (line.strip() and not line.lstrip(" ").startswith("#")
+                  and (len(line) - len(line.lstrip(" "))) == width)
         if at_top and current:
             chunks.append("".join(current))
             current = []
