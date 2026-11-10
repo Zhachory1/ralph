@@ -209,6 +209,10 @@ def refuse_unsendable(body, tracker_host):
     if has_credential(body):
         raise Refused("reply text looks like it carries a credential")
     for url in URL.findall(body):
+        # A link at the end of a sentence carries the sentence's punctuation:
+        # "see https://github.com/o/r/pull/1." must be checked as the link, not
+        # refused for a trailing dot. Only these characters, and only at the end.
+        url = url.rstrip(".,;:!?")
         if not reachable(url):
             raise Refused("reply text links to something the requester cannot already open")
     return body

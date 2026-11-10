@@ -441,6 +441,25 @@ class ChatReplyTests(unittest.TestCase):
             self.assertEqual(1, self.reply.scan(self.env))
         self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
 
+    def test_a_public_link_at_the_end_of_a_sentence_is_not_refused_for_its_punctuation(self):
+        self.assertTrue(hasattr(self.reply, "refuse_unsendable"))
+        for tail in (".", ",", ";", ":", "!", "?", ").", ".)"):
+            with self.subTest(tail=tail), \
+                    patch.object(self.reply, "github_repo_is_public", return_value=True) as read:
+                body = f"The change is at https://github.com/example/project/pull/12{tail} Thanks"
+                self.assertEqual(body, self.reply.refuse_unsendable(body, None))
+                read.assert_called_once_with("example", "project")
+
+    def test_a_private_link_is_still_refused_with_trailing_punctuation(self):
+        with patch.object(self.reply, "github_repo_is_public", return_value=False):
+            with self.assertRaises(self.reply.Refused):
+                self.reply.refuse_unsendable(
+                    "See https://github.com/example/private/pull/3.", None)
+
+    def test_a_non_github_link_is_still_refused_with_trailing_punctuation(self):
+        with self.assertRaises(self.reply.Refused):
+            self.reply.refuse_unsendable("See https://example.com/doc.", None)
+
     def test_notify_with_no_webhook_prints_and_does_not_raise(self):
         self.reply.notify("a test alert")
 
