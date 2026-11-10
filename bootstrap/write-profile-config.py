@@ -103,7 +103,9 @@ def merge_mcp_servers(src: str) -> str:
     for m in blocks:
         body = m.group(0).split("\n", 1)[1]
         for entry in re.findall(r"^  [^ \n][^\n]*\n(?:(?:    |\s*\n).*\n?)*", body, re.M):
-            key = entry.split(":", 1)[0].strip()
+            # Strip optional quotes before comparing: YAML treats `knowledge:`
+            # and `"knowledge":` as the same key, so dedup must too (#134 review).
+            key = entry.split(":", 1)[0].strip().strip('"').strip("'")
             if key not in seen:
                 seen.add(key)
                 kept.append(entry if entry.endswith("\n") else entry + "\n")

@@ -593,7 +593,7 @@ class VoiceTests(unittest.TestCase):
         install = (ROOT / "bootstrap" / "install").read_text()
         check = install.index("--overlay-check")
         self.assertLess(check, install.index("for dir in \"$PROFILES_DIR\"/*/"))
-        self.assertLess(check, install.index('printf \'%s\' "$all"'))
+        self.assertLess(check, install.index('printf \'%s\' "$now" | docker exec -i -u hermes'))
 
     def test_merged_mcp_blocks_never_repeat_a_server_name(self):
         """#134 review: a name in two blocks lands once, the first block's."""
@@ -611,6 +611,22 @@ class VoiceTests(unittest.TestCase):
         out = yaml.safe_load(text)
         self.assertEqual(["shared", "a", "b"], list(out["mcp_servers"]))
         self.assertEqual("http://own", out["mcp_servers"]["shared"]["url"])
+
+    def test_merged_mcp_blocks_dedup_a_quoted_key_against_its_plain_spelling(self):
+        """#134 review: `knowledge:` and `"knowledge":` are the same YAML key."""
+        import yaml
+        src = ('mcp_servers:\n  "knowledge":\n    url: http://own\n'
+               "model:\n  default: m\n"
+               "mcp_servers:\n  knowledge:\n    url: http://overlay\n")
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text(src)
+            d_path.write_text("other: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            text = d_path.read_text()
+        self.assertEqual(1, text.count("knowledge"))
+        out = yaml.safe_load(text)
+        self.assertEqual("http://own", out["mcp_servers"]["knowledge"]["url"])
 
     def test_atomic_writes_use_a_unique_temp_file(self):
         """#134 review: concurrent writers must not share a temp path."""
@@ -638,7 +654,7 @@ class VoiceTests(unittest.TestCase):
 
     def test_install_writes_the_overlay_record_atomically(self):
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
+        self.assertEqual(1, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
 
     def test_overlay_mcp_rejects_empty_profiles_and_injected_config_keys(self):
         """#134 review: empty profiles silently grants no one; a newline in a
@@ -701,13 +717,6 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 wpc.overlay_mcp_block(str(mcp), "researcher")
 
-    def test_install_merges_overlay_names_without_a_failing_pipeline(self):
-        """#134 review: with no grant, grep -v on empty input exits 1 and
-        pipefail aborted install. The union is computed in Python."""
-        install = (ROOT / "bootstrap" / "install").read_text()
-        line = next(l for l in install.splitlines() if l.strip().startswith("all=$("))
-        self.assertNotIn("grep", line)
-
     def test_global_overlay_replaces_a_hand_added_server_of_the_same_name(self):
         """#134 review: one key, never two."""
         import json, yaml
@@ -722,11 +731,16 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual("http://new", yaml.safe_load(text)["mcp_servers"]["team-memory"]["url"])
         self.assertIn("mine", yaml.safe_load(text)["mcp_servers"])
 
-    def test_install_records_overlay_names_before_writing_the_global_config(self):
+    def test_install_records_overlay_names_only_after_the_global_config_write_succeeds(self):
+        """#134 review: a pre-committed record could delete a hand-added server
+        of the same name if the config write never actually happened. The
+        config write (which aborts the script on failure, under set -e) must
+        come before the record write, not after a pre-emptive union."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        record = install.index('printf \'%s\' "$all"')
         write = install.index('--overlay-global')
-        self.assertLess(record, write)
+        record = install.index('printf \'%s\' "$now" | docker exec -i -u hermes')
+        self.assertLess(write, record)
+        self.assertNotIn('"$all"', install)
 
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
