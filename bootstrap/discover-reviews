@@ -269,7 +269,11 @@ _LOGIN = None
 def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
     """Heads (8-char prefixes) this PR already has a review graph for, and
     whether one is still running. None means the board could not be read,
-    and the PR is skipped this pass, as for unreadable reviews."""
+    and the PR is skipped this pass, as for unreadable reviews.
+
+    A blocked card is not running: it waits for a human and never finishes on
+    its own, so counting it held back every later head of the PR indefinitely.
+    Its own head still counts as having a graph, so it is not rebuilt."""
     r = subprocess.run(hermes_argv("kanban", "--board", board, "list", "--archived",
                                    "--assignee", "ralph-review-synthesis", "--json"),
                        capture_output=True, text=True)
@@ -283,7 +287,7 @@ def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] |
     prefix = f"Synthesize review {repo}#{number} @ "
     mine = [c for c in cards if c.get("title", "").startswith(prefix)]
     return ({c["title"][len(prefix):][:8] for c in mine},
-            any(c.get("status") not in ("done", "archived") for c in mine))
+            any(c.get("status") not in ("done", "archived", "blocked") for c in mine))
 
 
 def _login() -> str:

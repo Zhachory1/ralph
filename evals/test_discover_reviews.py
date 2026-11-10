@@ -164,6 +164,47 @@ class ReviewSpacingTests(unittest.TestCase):
         self.assertEqual(0, self.admitted({"1" * 40: self.ago(1)}))
 
 
+class ReviewGraphsStatusTests(unittest.TestCase):
+    """The real review_graphs, against a fake board. A synthesis card that is
+    blocked (a lens returned malformed output and needs a human) never
+    finishes on its own, so counting it as in flight starved every later head
+    of the PR: PR #132 was never reviewed again until the card was archived."""
+
+    def graphs(self, *cards):
+        import json
+        loader = importlib.machinery.SourceFileLoader("dr_real", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("dr_real", loader)
+        real = importlib.util.module_from_spec(spec)
+        loader.exec_module(real)
+        board = json.dumps({"tasks": [
+            {"title": f"Synthesize review o/r#7 @ {sha}", "status": status}
+            for sha, status in cards]})
+        done = mock.Mock(returncode=0, stdout=board)
+        with mock.patch.object(real.subprocess, "run", return_value=done):
+            return real.review_graphs("queues", "o/r", 7)
+
+    def test_a_running_synthesis_is_in_flight(self):
+        self.assertEqual(({"aaaaaaaa"}, True), self.graphs(("aaaaaaaa", "running")))
+
+    def test_a_ready_synthesis_is_in_flight(self):
+        self.assertTrue(self.graphs(("aaaaaaaa", "ready"))[1])
+
+    def test_a_blocked_synthesis_is_not_in_flight(self):
+        heads, running = self.graphs(("aaaaaaaa", "blocked"))
+        self.assertFalse(running)
+
+    def test_a_blocked_synthesis_still_counts_as_a_graph_for_its_own_head(self):
+        """The same head is not rebuilt behind a human's back; only a newer one proceeds."""
+        heads, _ = self.graphs(("aaaaaaaa", "blocked"))
+        self.assertIn("aaaaaaaa", heads)
+
+    def test_done_and_archived_are_not_in_flight(self):
+        self.assertFalse(self.graphs(("aaaaaaaa", "done"), ("bbbbbbbb", "archived"))[1])
+
+    def test_a_blocked_card_does_not_hide_a_running_one(self):
+        self.assertTrue(self.graphs(("aaaaaaaa", "blocked"), ("bbbbbbbb", "running"))[1])
+
+
 class PerRunCapTests(unittest.TestCase):
     """The one remaining admission bound: how many PRs one invocation can
     build, regardless of how many gh search prs returns."""
