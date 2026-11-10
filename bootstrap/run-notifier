@@ -6,42 +6,57 @@
 
 set -euo pipefail
 
-BOARD=${RALPH_BOARD:-ralph}
+# Every board a feature can run on: work-instance features start from review
+# and maintenance cards on the review board, so their gates live there (#145).
+BOARDS=$(printf '%s\n' "${RALPH_BOARD:-ralph}" "${RALPH_REVIEW_BOARD:-queues}" | awk 'NF && !seen[$0]++')
 INTERVAL=${RALPH_POLL_SECONDS:-900}
 STATE=${RALPH_STATE_FILE:-/var/lib/ralph/notifier-state.json}
 DIGEST_HOUR=${RALPH_DIGEST_HOUR:-8}
 DIGEST_STAMP=${RALPH_DIGEST_STAMP:-/var/lib/ralph/digest-sent}
 
-echo "ralph notifier: board=${BOARD} every ${INTERVAL}s"
+echo "ralph notifier: boards=$(echo $BOARDS) every ${INTERVAL}s"
 
 while true; do
     # Decisions first, then alerts: a gate the owner has just decided on is
     # moved before the poller can announce it as still waiting (#64).
-    if [ -n "${GH_TOKEN:-}" ]; then
-        python3 /ralph/notifier/approvals.py --board "$BOARD" \
-            || echo "notifier: approval poll failed, will retry" >&2
-    fi
+    # The first board keeps the original state file, so an upgrade announces
+    # nothing twice; each other board gets its own, because each run prunes
+    # every gate it did not see.
+    state=$STATE
+    for board in $BOARDS; do
+        if [ -n "${GH_TOKEN:-}" ]; then
+            python3 /ralph/notifier/approvals.py --board "$board" \
+                || echo "notifier: approval poll failed on $board, will retry" >&2
+        fi
 
-    if [ -n "${GCHAT_WEBHOOK_URL:-}" ]; then
-        python3 /ralph/notifier/poller.py --board "$BOARD" --state "$STATE" \
-            || echo "notifier: poll failed, will retry" >&2
-    else
-        echo "notifier: GCHAT_WEBHOOK_URL unset, skipping alerts" >&2
-    fi
+        if [ -n "${GCHAT_WEBHOOK_URL:-}" ]; then
+            python3 /ralph/notifier/poller.py --board "$board" --state "$state" \
+                || echo "notifier: poll failed on $board, will retry" >&2
+        else
+            echo "notifier: GCHAT_WEBHOOK_URL unset, skipping alerts" >&2
+        fi
+        state=${STATE%.json}-$board.json
+    done
 
     # The morning digest, once a day. A stamp file rather than a timer, so a
     # restart does not send it twice and a machine asleep at the hour still
     # gets it on the first poll after waking.
     today=$(date +%Y-%m-%d)
     hour=$(date +%-H)
-    if [ -n "${GCHAT_WEBHOOK_URL:-}" ] && [ "$hour" -ge "$DIGEST_HOUR" ] \
-       && [ "$(cat "$DIGEST_STAMP" 2>/dev/null || true)" != "$today" ]; then
-        if python3 /ralph/notifier/digest.py --board "$BOARD"; then
-            echo "$today" > "$DIGEST_STAMP"
-        else
-            echo "notifier: digest failed, will retry" >&2
+    # One stamp per board, the first keeping the original, so a retry does
+    # not resend a board whose digest already went out.
+    stamp=$DIGEST_STAMP
+    for board in $BOARDS; do
+        if [ -n "${GCHAT_WEBHOOK_URL:-}" ] && [ "$hour" -ge "$DIGEST_HOUR" ] \
+           && [ "$(cat "$stamp" 2>/dev/null || true)" != "$today" ]; then
+            if python3 /ralph/notifier/digest.py --board "$board"; then
+                echo "$today" > "$stamp"
+            else
+                echo "notifier: digest failed on $board, will retry" >&2
+            fi
         fi
-    fi
+        stamp=$DIGEST_STAMP-$board
+    done
 
     sleep "$INTERVAL"
 done
