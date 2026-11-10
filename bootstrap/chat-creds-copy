@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "cryptography>=42",
+# ]
+# ///
+"""Copy today's host Chat token into the chat-sender sidecar's volume (D8).
+
+One command, on the host, run once after chat PR 8 merges and before the
+cutover -- never by any automatic process. Reads this machine's own encrypted
+token (~/.config/gws-cli/chat_token.json.enc) with this machine's own key,
+the same `_key()` gchat.py already computes from this machine's id and this
+user (`gchat.py:106-114`), and re-encrypts it under HKDF of a pinned
+"<machine id>:<user>:gws-cli" -- the chat-sender image's own fixed
+/etc/machine-id and its own user, both defaulted here to match
+compose/Dockerfile.notifier. The result lands in the running chat-sender
+container's own `/root/.config/gws-cli` (the `chat-creds` volume), over
+`docker cp`.
+
+gchat.py is unchanged: the encrypted client secret never enters the
+container, and `_load_creds`/`_creds_or_die` need only the token and the
+shared salt (dd-chat.md Sec 4.2, option b). The host token is not moved or
+replaced; a second copy comes into existence that can post as you from the
+container until you revoke the grant in your Google account.
+
+Never prints the token, the client secret, or any other decrypted content.
+Reads the host token file; never writes it.
+
+    bootstrap/chat-creds-copy --instance-env /path/to/.env
+"""
+import argparse
+import base64
+import json
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+INSTANCE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
+GCHAT = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
+CFG_DIR_IN_CONTAINER = "/root/.config/gws-cli"
+# compose/Dockerfile.notifier's own fixed /etc/machine-id, and the user that
+# image runs as (it sets no USER, so gchat.py's `getpass.getuser()` reads
+# root). Override only if a later change to that image moves either one.
+DEFAULT_MACHINE_ID = "ralph-chat-sender"
+DEFAULT_USER = "root"
+
+
+def load_gchat():
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("gchat", str(GCHAT))
+    spec = importlib.util.spec_from_loader("gchat", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def pinned_key(salt: bytes, machine_id: str, user: str, app_id: str = "gws-cli") -> bytes:
+    """Mirrors gchat.py's `_key()` formula (`gchat.py:106-114`), parameterized
+    for a machine id and user that are not this host's own. `_key()` itself
+    always reads the live machine and the live user, which is exactly why a
+    token copied off this host decrypts nowhere else today."""
+    fingerprint = f"{machine_id}:{user}:{app_id}".encode()
+    derived = HKDF(algorithm=SHA256(), length=32, salt=salt,
+                   info=b"token-encryption").derive(fingerprint)
+    return base64.urlsafe_b64encode(derived)
+
+
+def reencrypt(gchat, host_config: pathlib.Path, machine_id: str, user: str):
+    """Returns (config_bytes, token_bytes), ready to land at
+    CFG_DIR_IN_CONTAINER. Reads host_config's two files; never writes there,
+    so a failed or repeated run leaves the host token exactly as it was."""
+    token_enc = host_config / "chat_token.json.enc"
+    config_path = host_config / "gws_config.json"
+    if not token_enc.is_file() or not config_path.is_file():
+        raise ValueError(f"no Chat token at {host_config}; run `uv run gchat.py auth` first")
+    config_bytes = config_path.read_bytes()
+    try:
+        host_key = gchat._key()
+    except SystemExit as error:
+        raise ValueError(str(error)) from error
+    try:
+        info = json.loads(Fernet(host_key).decrypt(token_enc.read_bytes()))
+    except InvalidToken as error:
+        raise ValueError("cannot decrypt this host's own Chat token "
+                         "(machine or user changed?)") from error
+    salt = json.loads(config_bytes)["encryption_salt"].encode()
+    dest_key = pinned_key(salt, machine_id, user)
+    token_bytes = Fernet(dest_key).encrypt(json.dumps(info).encode())
+    return config_bytes, token_bytes
+
+
+def command(argv, timeout=60):
+    """A timeout is a failed result, not an exception (the same rule
+    chat-reply:76-84 and chat-producer:197-203 apply to every subprocess call
+    they add): one hung `docker` call must fail this one-time copy cleanly,
+    not crash it mid-write."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", f"timed out after {timeout}s")
+
+
+def write_into_container(container, config_bytes, token_bytes):
+    """`docker cp` two files into the running container's own chat-creds
+    mount. Both are written every run, with no once-only marker: a copy that
+    fails partway is simply safe to run again, since neither file depends on
+    the other having already landed."""
+    made = command(["docker", "exec", container, "mkdir", "-p", CFG_DIR_IN_CONTAINER])
+    if made.returncode:
+        raise ValueError(f"could not create {CFG_DIR_IN_CONTAINER} in {container}: "
+                         f"{made.stderr.strip()[:300]}")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = pathlib.Path(tmp)
+        (tmp_dir / "gws_config.json").write_bytes(config_bytes)
+        (tmp_dir / "chat_token.json.enc").write_bytes(token_bytes)
+        for name in ("gws_config.json", "chat_token.json.enc"):
+            copied = command(["docker", "cp", str(tmp_dir / name),
+                              f"{container}:{CFG_DIR_IN_CONTAINER}/{name}"])
+            if copied.returncode:
+                raise ValueError(f"docker cp {name} into {container} failed: "
+                                 f"{copied.stderr.strip()[:300]}")
+    chmodded = command(["docker", "exec", container, "chmod", "600",
+                       f"{CFG_DIR_IN_CONTAINER}/gws_config.json",
+                       f"{CFG_DIR_IN_CONTAINER}/chat_token.json.enc"])
+    if chmodded.returncode:
+        raise ValueError(f"could not chmod the copied files in {container}: "
+                         f"{chmodded.stderr.strip()[:300]}")
+
+
+def instance_name(path: pathlib.Path) -> str:
+    for line in path.read_text().splitlines():
+        if line.startswith("RALPH_INSTANCE="):
+            value = line.split("=", 1)[1].strip().strip("'\"")
+            if not INSTANCE.fullmatch(value):
+                raise ValueError("invalid RALPH_INSTANCE")
+            return value
+    raise ValueError(f"RALPH_INSTANCE not set in {path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--instance-env", required=True, type=pathlib.Path)
+    parser.add_argument("--host-config", type=pathlib.Path,
+                        default=pathlib.Path.home() / ".config" / "gws-cli")
+    parser.add_argument("--machine-id", default=DEFAULT_MACHINE_ID,
+                        help="the pinned id to encrypt for (default: the chat-sender "
+                             "image's own fixed /etc/machine-id)")
+    parser.add_argument("--user", default=DEFAULT_USER,
+                        help="the pinned user to encrypt for (default: the chat-sender "
+                             "image's own user)")
+    args = parser.parse_args()
+    try:
+        container = instance_name(args.instance_env) + "-chat-sender-1"
+        gchat = load_gchat()
+        config_bytes, token_bytes = reencrypt(gchat, args.host_config,
+                                              args.machine_id, args.user)
+        write_into_container(container, config_bytes, token_bytes)
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"Chat token copied into {container}'s chat-creds volume.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
