@@ -524,6 +524,38 @@ class VoiceTests(unittest.TestCase):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertEqual(2, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
 
+    def test_overlay_mcp_rejects_empty_profiles_and_injected_config_keys(self):
+        """#134 review: empty profiles silently grants no one; a newline in a
+        config key could smuggle an extra, unallowlisted server entry."""
+        import json
+        bad = [
+            {"team": {"profiles": [], "config": {"url": "u"}, "tools": ["recall"]}},
+            {"team": {"profiles": ["researcher"],
+                      "config": {"url\n  evil:\n    enabled": "true"},
+                      "tools": ["recall"]}},
+            {"team": {"profiles": ["researcher"], "config": "not a dict", "tools": ["recall"]}},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            for case in bad:
+                with self.subTest(case=list(case.values())[0].get("config")):
+                    mcp.write_text(json.dumps(case))
+                    with self.assertRaises(SystemExit):
+                        wpc.overlay_mcp_block(str(mcp), "researcher")
+
+    def test_overlay_mcp_config_values_with_newlines_are_escaped_not_injected(self):
+        """A newline inside a *value* (not a key) must stay inside the YAML
+        scalar, never start a new line."""
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            mcp = pathlib.Path(d, "mcp.json")
+            mcp.write_text(json.dumps({"team": {"profiles": ["researcher"],
+                "config": {"note": "line one\n  evil:\n    enabled: true"},
+                "tools": ["recall"]}}))
+            block = wpc.overlay_mcp_block(str(mcp), "researcher")
+        self.assertEqual(1, block.count("\n  team:"))
+        self.assertNotIn("\n  evil:", block)
+
     def test_overlay_mcp_rejects_malformed_profiles_tools_and_yaml_names(self):
         """#134 review: a string `profiles` matched by substring; names like
         `true` or `1` became non-string YAML keys."""

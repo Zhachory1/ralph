@@ -179,15 +179,24 @@ def overlay_mcp_block(path: str, profile: str) -> str:
             raise SystemExit(f"mcp.json: server name {name!r}: lowercase letter first, then a-z 0-9 _ -, not a YAML keyword")
         profiles = spec.get("profiles")
         # A string here would match by substring ("researcher" in "researchers").
-        if not isinstance(profiles, list) or not all(isinstance(x, str) for x in profiles):
-            raise SystemExit(f"mcp.json: {name}: profiles must be a list of names")
+        # Empty is rejected too: a server nobody is granted to is a mistake in
+        # the file, not a silent no-op (#134 review).
+        if not isinstance(profiles, list) or not profiles or not all(isinstance(x, str) for x in profiles):
+            raise SystemExit(f"mcp.json: {name}: profiles must be a non-empty list of names")
         if profile not in profiles:
             continue
         tools = spec.get("tools")
         if not isinstance(tools, list) or not tools or not all(isinstance(x, str) for x in tools):
             raise SystemExit(f"mcp.json: {name} needs a tools allowlist (a non-empty list of names)")
         out.append(f"  {name}:")
-        for key, value in spec.get("config", {}).items():
+        config = spec.get("config", {})
+        if not isinstance(config, dict):
+            raise SystemExit(f"mcp.json: {name}: config must be an object")
+        for key, value in config.items():
+            # A newline here would start a new, unindented YAML line -- an
+            # unallowlisted server entry hidden inside this one (#134 review).
+            if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", key):
+                raise SystemExit(f"mcp.json: {name}: config key {key!r} must be a plain identifier")
             out.append(f"    {key}: {json.dumps(value)}")
         out.append("    enabled: true")
         out.append("    tools:")
