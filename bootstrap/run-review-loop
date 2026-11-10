@@ -130,6 +130,28 @@ while true; do
         fi
     fi
 
+    # Librarian's weekly card (#130, dd-ralph-librarian 2.1, 3.5): one card a
+    # week on $BOARD, assigned to ralph-librarian. No docs repository, no
+    # card -- no new switch. Skipped this poll, whatever the stamp says,
+    # while an open pull request already has a librarian/ head, so two runs
+    # never overlap; the run checks the same guard again for itself.
+    if [ -n "${RALPH_DOCS_REPO:-}" ]; then
+        lstamp="$WORK/.librarian-stamp"
+        overlap=$(gh pr list --repo "$RALPH_DOCS_REPO" --state open \
+                --json headRefName --jq '.[].headRefName' 2>/dev/null \
+            | grep -c '^librarian/')
+        if [ -z "$(find "$lstamp" -mmin -10080 2>/dev/null)" ] && [ "${overlap:-0}" -eq 0 ]; then
+            if docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" create \
+                    "librarian: weekly pass, $(date -u +%F)" \
+                    --assignee ralph-librarian \
+                    --body "Docs repository: $RALPH_DOCS_REPO"; then
+                touch "$lstamp"
+            else
+                echo "review loop: librarian card create returned $?" >&2
+            fi
+        fi
+    fi
+
     # --once: one pass now instead of waiting up to INTERVAL for the next,
     # e.g. `docker compose exec review-loop /ralph/bootstrap/run-review-loop --once`.
     [ "${1:-}" = "--once" ] && break

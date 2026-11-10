@@ -10,6 +10,7 @@ import os
 import pathlib
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -208,6 +209,89 @@ class KnowledgeRefreshTests(unittest.TestCase):
                                          knowledge_head="old-sha", refresh_rc=1)
         self.assertTrue(refreshed)
         self.assertEqual("old-sha", head, "a failed refresh must not record a head it never indexed")
+
+
+class LibrarianCardTests(unittest.TestCase):
+    """#130, dd-ralph-librarian 2.1, 3.5: the review loop creates the weekly card."""
+
+    def run_pass(self, docs_repo="owner/docs", stamp=None, pr_heads="", create_rc=0):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            stub = d / "bin"
+            stub.mkdir()
+            work = d / "work"
+            work.mkdir()
+            calls = d / "calls"
+            # gh: `pr list` answers the stubbed open-pull-request heads.
+            (stub / "gh").write_text(
+                "#!/bin/sh\n"
+                'case "$*" in "pr list "*) printf "%s" "$PR_HEADS"; exit 0;; esac\n'
+                "exit 0\n")
+            # docker: `inspect` reports the knowledge container not running,
+            # so that block does nothing here; `create` is recorded and
+            # exits $CREATE_RC; any other `exec` (the done-synthesis list)
+            # answers empty.
+            (stub / "docker").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = inspect ] && { echo false; exit 0; }\n'
+                'case "$*" in\n'
+                '    *" create "*) echo "$*" >> "$CALLS"; exit "$CREATE_RC";;\n'
+                "esac\n"
+                "echo '[]'\n")
+            (stub / "python3").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = -c ] && exec /usr/bin/python3 "$@"\n'
+                "exit 0\n")
+            (stub / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
+            for f in stub.iterdir():
+                f.chmod(0o755)
+            lstamp = work / ".librarian-stamp"
+            if stamp == "fresh":
+                lstamp.touch()
+            elif stamp == "week-old":
+                lstamp.touch()
+                old = time.time() - 8 * 86400
+                os.utime(lstamp, (old, old))
+            env = {"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": str(d), "CALLS": str(calls),
+                   "PR_HEADS": pr_heads, "CREATE_RC": str(create_rc),
+                   "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
+                   "RALPH_REVIEW_ALLOW": "o/r"}
+            if docs_repo is not None:
+                env["RALPH_DOCS_REPO"] = docs_repo
+            subprocess.run(["bash", str(SCRIPT)], env=env,
+                           capture_output=True, text=True, timeout=30)
+            created = calls.read_text().splitlines() if calls.exists() else []
+            return created, lstamp.exists()
+
+    def test_fresh_stamp_creates_no_card(self):
+        created, _ = self.run_pass(stamp="fresh")
+        self.assertEqual([], created)
+
+    def test_absent_stamp_creates_exactly_one_card(self):
+        created, stamped = self.run_pass(stamp=None)
+        self.assertEqual(1, len(created))
+        self.assertIn("--board queues", created[0])
+        self.assertIn("--assignee ralph-librarian", created[0])
+        self.assertIn("librarian:", created[0])
+        self.assertTrue(stamped, "a successful create touches the stamp")
+
+    def test_week_old_stamp_creates_a_card(self):
+        created, stamped = self.run_pass(stamp="week-old")
+        self.assertEqual(1, len(created))
+        self.assertTrue(stamped)
+
+    def test_open_librarian_pr_creates_no_card_regardless_of_stamp(self):
+        created, _ = self.run_pass(stamp=None, pr_heads="librarian/2026-11-03\n")
+        self.assertEqual([], created, "an open librarian/ pull request skips creation")
+
+    def test_docs_repo_unset_creates_no_card(self):
+        created, _ = self.run_pass(docs_repo=None, stamp=None)
+        self.assertEqual([], created)
+
+    def test_failed_create_leaves_stamp_untouched(self):
+        created, stamped = self.run_pass(stamp=None, create_rc=1)
+        self.assertEqual(1, len(created), "a failing create is still attempted")
+        self.assertFalse(stamped, "a failed create must not record a stamp it never earned")
 
 
 if __name__ == "__main__":
