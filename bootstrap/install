@@ -171,7 +171,18 @@ named_mcp_set() {  # named_mcp_set <hermes -p flags or empty> <profile base name
     # overlay being removed entirely must clean up the same as any one
     # server being removed from it -- this profile's own marked servers are
     # what gets checked, not overlay-grants.py's state, since it has none.
-    current=$(hermes $args config get mcp_servers --json 2>/dev/null || echo '{}')
+    # A fresh profile with no mcp_servers key at all is the one case this
+    # command legitimately fails on; anything else (a real read error) must
+    # not be silently treated the same way, since that would skip revoking a
+    # server this profile still has marked (#134 review).
+    if ! current=$(hermes $args config get mcp_servers --json 2>&1); then
+        if printf '%s' "$current" | grep -qF 'Config key not set: mcp_servers'; then
+            current='{}'
+        else
+            echo "  warning: could not read mcp_servers for $base ($current); skipping its overlay cleanup this run" >&2
+            return 0
+        fi
+    fi
     python3 "$(dirname "$0")/overlay-grants.py" "$OVERLAY_MCP" "$base" "$current" | while read -r verb key value; do
         if [ "$verb" = unset ]; then
             hermes $args config unset "$key" >/dev/null 2>&1 || true

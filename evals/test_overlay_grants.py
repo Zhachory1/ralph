@@ -128,6 +128,15 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             og.load(path)
 
+    def test_rejects_a_config_dict_that_sets_the_overlay_marker_itself(self):
+        """#134 review: a config key named _overlay would overwrite this
+        script's own ownership marker right after it is set, so a server it
+        grants could never be recognized -- or revoked -- as overlay-owned
+        again."""
+        self.check_rejects({"a": {"profiles": ["researcher"],
+                                  "config": {"_overlay": False, "url": "u"},
+                                  "tools": ["x"]}})
+
     def test_rejects_reserved_names(self):
         self.check_rejects({"knowledge": {"profiles": ["researcher"], "config": {}, "tools": ["x"]}})
         self.check_rejects({"lens-tools": {"profiles": ["researcher"], "config": {}, "tools": ["x"]}})

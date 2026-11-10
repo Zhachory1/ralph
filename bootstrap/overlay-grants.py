@@ -89,6 +89,11 @@ def load(path: str) -> dict:
         for key, value in config.items():
             if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", key):
                 raise SystemExit(f"mcp.json: {name}: config key {key!r} must be a plain identifier")
+            # _overlay is this script's own ownership marker; a config dict
+            # setting it would overwrite that marker right after it is set,
+            # defeating revocation (#134 review).
+            if key == "_overlay":
+                raise SystemExit(f"mcp.json: {name}: config may not set _overlay, a reserved key")
             if isinstance(value, str) and "\n" in value:
                 raise SystemExit(f"mcp.json: {name}.{key}: config values may not contain a newline")
         for tool in tools:

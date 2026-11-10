@@ -455,6 +455,17 @@ class VoiceTests(unittest.TestCase):
         body = install[install.index("named_mcp_set() {"):install.index('OVERLAY_MCP" "$base" "$current"')]
         self.assertNotIn('[ -n "$OVERLAY_MCP" ] || return 0', body)
 
+    def test_a_failed_mcp_servers_read_is_not_masked_as_empty(self):
+        """#134 review: `|| echo '{}'` could not tell a real read failure from
+        a fresh profile with no mcp_servers key yet, so any failure silently
+        skipped that profile's overlay cleanup for the run with no sign of
+        it. Only the documented \"key not set\" case may become {}; anything
+        else is reported and that profile's cleanup is skipped out loud."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertNotIn("2>/dev/null || echo '{}'", install)
+        self.assertIn("Config key not set: mcp_servers", install)
+        self.assertIn("warning: could not read mcp_servers", install)
+
     def test_default_and_named_profiles_both_get_knowledge_and_overlay_calls(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertIn('knowledge_set "-p $name"', install)
