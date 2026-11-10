@@ -69,8 +69,8 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 
 | Situation | Action |
 |---|---|
-| Force a run now | Clear `$WORK/.librarian-stamp` (`/workspaces/review-work` by default) or run `docker exec <instance>-review-loop-1 /ralph/bootstrap/run-review-loop --once`. Needs `RALPH_DOCS_REPO` set and no open pull request with a `librarian/` head, or nothing is created. |
-| A librarian pull request is open, unmerged | Blocks the next weekly card: `run-review-loop` and the run itself both skip creation while a `librarian/*` head is still open. Merge or close it to let next week's card through. |
+| Force a run now | Clear `$WORK/.librarian-stamp` (`/workspaces/review-work` by default); the next poll creates the card. Add `docker exec <instance>-review-loop-1 /ralph/bootstrap/run-review-loop --once` to poll now instead of waiting. `--once` alone does nothing while the stamp is under seven days old. Needs `RALPH_DOCS_REPO` set, no open pull request with a `librarian/` head, and no librarian card still queued, running or blocked. |
+| A librarian pull request or card is open | Blocks the next weekly card. `run-review-loop` skips creation while a `librarian/*` head is open (it reads up to 100 open pull requests) or a `ralph-librarian` card is not done, and the run checks the pull request again for itself. If either check cannot be read, it skips that poll and retries on the next. Merge or close the pull request, or finish the card, to let the next card through. |
 | After the profile and `install` changes merge | Re-run `init` on every instance once the image is pulled, so `ralph-librarian` exists there. No build pull request or card does this; it is an owner-only step. |
 
 ## Glossary
