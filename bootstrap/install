@@ -390,15 +390,15 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
         docker cp "$OVERLAY_MCP" "$RALPH_HERMES_CONTAINER:/tmp/overlay-mcp.json"
         now=$(python3 -c 'import json,sys; print(",".join(n for n,s in json.load(open(sys.argv[1])).items() if isinstance(s.get("profiles"),list) and "default" in s["profiles"]))' "$OVERLAY_MCP")
     fi
-    # The config write is atomic (write_atomic) and, under `set -e`, a failing
-    # write-profile-config.py call aborts this script before the next line.
-    # So the state record is only ever written *after* a successful config
-    # write, holding exactly what that write just granted -- never a
-    # pre-committed guess that could later delete a hand-added server if the
-    # write never actually happened (#134 review).
-    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
-        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$prev" "$gcfg"
-    printf '%s' "$now" | docker exec -i -u hermes "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1.tmp" && mv -f "$1.tmp" "$1"' sh "$state"
+    # One process writes the config and then records what it granted (#134
+    # review): a separate docker exec for each left a window between "config
+    # written" and "ownership recorded" where an interruption could strand a
+    # granted server with no record of it, un-revokable later. write_atomic
+    # makes each individual write all-or-nothing; doing both in one process
+    # closes the gap between them to two local syscalls instead of two
+    # container round-trips.
+    docker exec -u hermes "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
+        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$prev" "$gcfg" "$state"
     [ -z "$now$prev" ] || echo "  overlay MCP servers for default: ${now:-none}"
 fi
 rm -f "$SRC_TMP"

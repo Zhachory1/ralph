@@ -593,7 +593,7 @@ class VoiceTests(unittest.TestCase):
         install = (ROOT / "bootstrap" / "install").read_text()
         check = install.index("--overlay-check")
         self.assertLess(check, install.index("for dir in \"$PROFILES_DIR\"/*/"))
-        self.assertLess(check, install.index('printf \'%s\' "$now" | docker exec -i -u hermes'))
+        self.assertLess(check, install.index("--overlay-global"))
 
     def test_merged_mcp_blocks_never_repeat_a_server_name(self):
         """#134 review: a name in two blocks lands once, the first block's."""
@@ -653,8 +653,12 @@ class VoiceTests(unittest.TestCase):
             self.assertEqual(0o644, cfg.stat().st_mode & 0o777)
 
     def test_install_writes_the_overlay_record_atomically(self):
+        """#134: write_atomic handles this now, in the same process as the
+        config write, not a separate shell round-trip (see #134 review)."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertEqual(1, install.count('mv -f "$1.tmp" "$1"\' sh "$state"'))
+        self.assertNotIn('mv -f "$1.tmp" "$1"\' sh "$state"', install)
+        self.assertIn('--overlay-global', install)
+        self.assertIn('"$state"\n', install)
 
     def test_overlay_mcp_rejects_empty_profiles_and_injected_config_keys(self):
         """#134 review: empty profiles silently grants no one; a newline in a
@@ -731,16 +735,41 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual("http://new", yaml.safe_load(text)["mcp_servers"]["team-memory"]["url"])
         self.assertIn("mine", yaml.safe_load(text)["mcp_servers"])
 
-    def test_install_records_overlay_names_only_after_the_global_config_write_succeeds(self):
-        """#134 review: a pre-committed record could delete a hand-added server
-        of the same name if the config write never actually happened. The
-        config write (which aborts the script on failure, under set -e) must
-        come before the record write, not after a pre-emptive union."""
+    def test_set_overlay_global_records_state_in_the_same_call(self):
+        """#134 review: state recorded in the same Python process as the
+        config write, not a later separate docker exec -- so there is no
+        window between \"config written\" and \"ownership recorded\" wide
+        enough for an interruption (killed container, host reboot) to land
+        in it."""
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp, state = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json"), pathlib.Path(d, "state")
+            cfg.write_text("other: 1\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "u"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp), "", str(state))
+            self.assertEqual("team-memory", state.read_text())
+            # Revoked: mcp.json removed, previous state passed back in.
+            wpc.set_overlay_global(str(cfg), "", state.read_text(), str(state))
+            self.assertEqual("", state.read_text())
+            self.assertNotIn("team-memory", cfg.read_text())
+
+    def test_set_overlay_global_without_a_state_path_skips_the_record(self):
+        """Back-compat: existing callers that pass no state_path still work."""
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("other: 1\n")
+            self.assertEqual(0, wpc.set_overlay_global(str(cfg), "", ""))
+
+    def test_install_writes_config_and_overlay_record_in_one_process(self):
+        """#134 review: two separate docker exec calls (config write, then
+        record write) left a window where an interruption between them could
+        strand a granted server with no record of it, un-revokable later.
+        One process now does both, in sequence, so install passes the state
+        path straight to write-profile-config.py instead of writing it itself."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        write = install.index('--overlay-global')
-        record = install.index('printf \'%s\' "$now" | docker exec -i -u hermes')
-        self.assertLess(write, record)
         self.assertNotIn('"$all"', install)
+        self.assertIn('--overlay-global \\\n        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$prev" "$gcfg" "$state"', install)
 
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():

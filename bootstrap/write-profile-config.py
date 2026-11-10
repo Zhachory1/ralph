@@ -206,25 +206,35 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     return ("mcp_servers:\n" + "\n".join(out) + "\n") if out else ""
 
 
-def set_overlay_global(path: str, mcp_json: str, previous: str) -> int:
+def set_overlay_global(path: str, mcp_json: str, previous: str, state_path: str = "") -> int:
     """For the global config (the default profile), which can hold servers the
     owner added by hand: drop the overlay servers it had before (`previous`,
-    comma separated), then add the ones mcp.json grants `default`."""
+    comma separated), then add the ones mcp.json grants `default`.
+
+    When `state_path` is given, also records the names just granted there,
+    in the same process as the config write (#134 review): two separate
+    `docker exec` calls left a window between "config written" and "ownership
+    recorded" where an interruption could leave a granted server with no
+    record of it, un-revokable later. One process, two writes in sequence,
+    closes that window to the time between two local syscalls.
+    """
     target = pathlib.Path(path)
     text = read_yaml_text(target)
     block = block_re("mcp_servers").search(text)
     entries = block.group(0).split("\n", 1)[1] if block else ""
     add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
+    granted = sorted(set(re.findall(r"^  ([A-Za-z0-9_.-]+):", add, re.M)))
     # Drop what the overlay wrote last time, and any entry the new grant
     # replaces (a hand-added server of the same name), so no key repeats.
-    names = {n for n in previous.split(",") if n}
-    names |= set(re.findall(r"^  ([A-Za-z0-9_.-]+):", add, re.M))
+    names = {n for n in previous.split(",") if n} | set(granted)
     for name in names:
         entries = re.sub(rf"^  {re.escape(name)}:\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
     entries += add.split("\n", 1)[1] if add else ""
     new_block = ("mcp_servers:\n" + entries) if entries.strip() else ""
     text = (text[:block.start()] + new_block + text[block.end():]) if block else text + new_block
     write_atomic(target, text)
+    if state_path:
+        write_atomic(pathlib.Path(state_path), ",".join(granted))
     return 0
 
 
@@ -301,5 +311,6 @@ if __name__ == "__main__":
         sys.stdout.write(overlay_mcp_block(sys.argv[2], sys.argv[3]))
         raise SystemExit(0)
     if sys.argv[1] == "--overlay-global":
-        raise SystemExit(set_overlay_global(sys.argv[4], sys.argv[2], sys.argv[3]))
+        state = sys.argv[5] if len(sys.argv) > 5 else ""
+        raise SystemExit(set_overlay_global(sys.argv[4], sys.argv[2], sys.argv[3], state))
     raise SystemExit(main(sys.argv[1], sys.argv[2]))
