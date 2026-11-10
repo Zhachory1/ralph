@@ -112,6 +112,15 @@ def directives(servers: dict, profile: str, current: dict) -> list[str]:
         out.append(f"unset mcp_servers.{name}")
     for name in granted:
         spec = servers[name]
+        # _overlay first: each server is several sequential `hermes config
+        # set` calls, and an interruption partway through must never leave a
+        # server that exists but isn't marked (#134 review) -- that would be
+        # indistinguishable from a hand-added server and never cleaned up on
+        # a later revoke. Setting the marker first means the moment any part
+        # of a grant exists on disk, it is already correctly identified;
+        # the unset-before-set above then safely clears a partial grant on
+        # the very next install run, interrupted or not.
+        out.append(f"set mcp_servers.{name}._overlay true")
         for key, value in spec.get("config", {}).items():
             # `hermes config set` stores a string argument literally: it does
             # not decode it as JSON first, so json.dumps-ing a string value
@@ -123,7 +132,6 @@ def directives(servers: dict, profile: str, current: dict) -> list[str]:
             out.append(f"set mcp_servers.{name}.{key} {rendered}")
         out.append(f"set mcp_servers.{name}.enabled true")
         out.append(f"set mcp_servers.{name}.tools.include {json.dumps(spec['tools'])}")
-        out.append(f"set mcp_servers.{name}._overlay true")
     return out
 
 

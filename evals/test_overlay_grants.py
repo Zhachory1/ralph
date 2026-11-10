@@ -50,6 +50,18 @@ class DirectivesTests(unittest.TestCase):
         self.assertEqual("unset mcp_servers.a", out[0])
         self.assertLess(out.index("unset mcp_servers.a"), out.index("set mcp_servers.a.enabled true"))
 
+    def test_overlay_marker_is_set_before_any_other_key_for_a_new_grant(self):
+        """#134 review: each server is several sequential `hermes config set`
+        calls; an interruption partway through must never leave a server
+        that exists but is not yet marked `_overlay: true` -- that would be
+        indistinguishable from a hand-added server and never cleaned up on a
+        later revoke. The marker is the very first `set` for each name."""
+        path = write({"a": {"profiles": ["researcher"], "config": {"url": "u", "port": 1},
+                            "tools": ["x"]}})
+        out = og.directives(og.load(path), "researcher", {})
+        sets = [l for l in out if l.startswith("set mcp_servers.a.")]
+        self.assertEqual("set mcp_servers.a._overlay true", sets[0])
+
     def test_a_server_no_longer_granted_to_this_profile_is_unset(self):
         """The overlay still grants it to someone else, just not this
         profile: this profile's own marked copy must still come down."""
