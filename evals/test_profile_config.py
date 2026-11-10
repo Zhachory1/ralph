@@ -694,6 +694,24 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(["shared", "a", "b"], list(out["mcp_servers"]))
         self.assertEqual("http://own", out["mcp_servers"]["shared"]["url"])
 
+    def test_merging_preserves_a_three_space_indented_servers_full_body(self):
+        """#134 review, reproduced independently by two lenses: a profile's
+        own server written with three-space indentation had its body dropped
+        entirely during the merge with the knowledge block, not just left
+        with orphaned lines."""
+        import yaml
+        src = ("mcp_servers:\n  lens-tools:\n   command: x\n   enabled: true\n"
+               "model:\n  default: m\n"
+               "mcp_servers:\n  knowledge:\n    url: http://k\n")
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text(src)
+            d_path.write_text("other: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            out = yaml.safe_load(d_path.read_text())
+        self.assertEqual({"command": "x", "enabled": True}, out["mcp_servers"]["lens-tools"])
+        self.assertEqual("http://k", out["mcp_servers"]["knowledge"]["url"])
+
     def test_merged_mcp_blocks_dedup_a_quoted_key_against_its_plain_spelling(self):
         """#134 review: `knowledge:` and `"knowledge":` are the same YAML key."""
         import yaml

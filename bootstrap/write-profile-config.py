@@ -102,7 +102,10 @@ def merge_mcp_servers(src: str) -> str:
     seen, kept = set(), []
     for m in blocks:
         body = m.group(0).split("\n", 1)[1]
-        for entry in re.findall(r"^  [^ \n][^\n]*\n(?:(?:    |\s*\n).*\n?)*", body, re.M):
+        # A continuation line is any line indented deeper than the two-space
+        # header, not specifically four spaces (#134 review: a 3-space entry
+        # had its body dropped entirely, not just orphaned).
+        for entry in re.findall(r"^  [^ \n][^\n]*\n(?:(?:   |\s*\n).*\n?)*", body, re.M):
             # Strip optional quotes before comparing: YAML treats `knowledge:`
             # and `"knowledge":` as the same key, so dedup must too (#134 review).
             key = entry.split(":", 1)[0].strip().strip('"').strip("'")
