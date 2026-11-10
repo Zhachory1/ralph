@@ -1,8 +1,10 @@
 """The host Chat sender posts chat-maintainer's own text to the original thread only."""
 
+import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -108,6 +110,16 @@ class ChatReplyTests(unittest.TestCase):
         with patch.object(self.reply, "command", side_effect=self.command):
             return self.reply.handle("ralph-work-hermes-1", self.root, {"spaces/example"},
                                      board, task_id, tracker_host)
+
+    def handle_with_send(self, board, task_id, send_enabled, tracker_host=None):
+        with patch.object(self.reply, "command", side_effect=self.command):
+            return self.reply.handle("ralph-work-hermes-1", self.root, {"spaces/example"},
+                                     board, task_id, tracker_host, send_enabled)
+
+    def set_send(self, value):
+        self.env.write_text("RALPH_INSTANCE=ralph-work\nRALPH_WORKSPACES=./spaces\n"
+                            "CHAT_ROUTE_SPACES=spaces/example\n"
+                            f"CHAT_SEND={value}\n")
 
     def scan(self):
         with patch.object(self.reply, "command", side_effect=self.command):
@@ -545,6 +557,106 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual(2, self.handle("ralph", "t_final"))
         self.assertEqual([], self.sends())
         self.assertGreaterEqual(len(self.blocks()), 1)
+
+    # -- PR 5: the send switch, and the held marker that makes flipping it safe --
+
+    def test_switch_off_holds_ack_runs_chat_route_but_does_not_post(self):
+        self.set_send("0")
+        self.assertEqual(0, self.scan())
+        self.assertEqual([], self.sends())
+        self.assertTrue(any("/ralph/bootstrap/chat-route" in a for a in self.calls))
+        self.assertTrue((self.root / self.op / ".held-ack").is_file())
+        self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
+
+    def test_switch_off_second_scan_skips_already_held_operation(self):
+        self.set_send("0")
+        self.assertEqual(0, self.scan())
+        calls_after_first = len(self.calls)
+        self.assertEqual(0, self.scan())
+        # The held operation is skipped by scan()'s own pre-filter: handle()
+        # is never called again for it, so no second `show` for its cards.
+        self.assertFalse(any("show" in a for a in self.calls[calls_after_first:]))
+
+    def test_switch_off_still_refuses_and_blocks_a_credential_body(self):
+        """A reply that fails a PR 4 refusal check is still refused and still
+        blocks, held or not."""
+        credential = "ghp_" + "a" * 36
+        self.cards[("queues", "t_intake")]["metadata"]["ack"] = f"use token {credential}"
+        self.assertEqual(2, self.handle_with_send("queues", "t_intake", send_enabled=False))
+        self.assertEqual([], self.sends())
+        self.assertEqual(1, len(self.blocks()))
+        self.assertFalse((self.root / self.op / ".held-ack").is_file())
+
+    def test_switch_off_holds_final_without_ack_marker_and_does_not_block(self):
+        """The switch is read before the final-needs-acknowledgement check: a
+        held final is held, not refused, with no acknowledgement marker at all."""
+        self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
+        self.assertEqual(0, self.handle_with_send("ralph", "t_final", send_enabled=False))
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+        self.assertTrue((self.root / self.op / ".held-final").is_file())
+
+    def test_turning_switch_on_sends_nothing_for_an_already_held_operation(self):
+        (self.root / self.op / ".held-ack").touch()
+        self.assertEqual(0, self.handle_with_send("queues", "t_intake", send_enabled=True))
+        self.assertEqual([], self.sends())
+        self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
+        self.assertFalse(any("/ralph/bootstrap/chat-route" in a for a in self.calls))
+
+    def test_held_reply_does_not_consume_a_ceiling(self):
+        """A17: the clarify ceiling is 2 per thread. Three held clarifies in
+        the same thread must all hold, never refuse -- held replies spend no
+        ceiling because `mark()` never runs for them."""
+        del self.cards[("ralph", "t_final")]
+        ops = [self.op]
+        for i in range(2):
+            ops.append(self.make_operation(f"spaces/example/messages/extra{i}", prior=ops))
+        for i, op in enumerate(ops):
+            self.cards[("queues", f"t_clarify{i}")] = {
+                "task": {"id": f"t_clarify{i}", "status": "done", "assignee": "ralph-chat-maintainer",
+                         "body": f"operation_id: {op}\n",
+                         "workspace_path": f"/workspaces/chat-inbox/{op}"},
+                "metadata": {"decision": "reply", "reply_kind": "clarify", "body": "Which one?"}}
+            self.assertEqual(
+                0, self.handle_with_send("queues", f"t_clarify{i}", send_enabled=False))
+            self.assertTrue((self.root / op / ".held-clarify").is_file())
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+
+    def test_chat_send_value_parsing(self):
+        cases = {
+            None: True, "0": False, "false": False, "FALSE": False, "off": False, "OFF": False,
+            "no": False, "NO": False, "1": True, "true": True, "TRUE": True, "on": True,
+            "ON": True, "yes": True, "YES": True,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(expected, self.reply.parse_send_switch(raw))
+
+    def test_unrecognized_chat_send_value_is_treated_as_on_and_printed_once(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self.assertTrue(self.reply.parse_send_switch("maybe"))
+        self.assertIn("CHAT_SEND", buf.getvalue())
+        self.assertEqual(1, buf.getvalue().count("\n"))
+
+    def test_instance_config_defaults_chat_send_on_when_key_absent(self):
+        _, _, _, _, send_enabled = self.reply.instance_config(self.env)
+        self.assertTrue(send_enabled)
+
+    def test_instance_config_reads_chat_send_off(self):
+        self.set_send("0")
+        _, _, _, _, send_enabled = self.reply.instance_config(self.env)
+        self.assertFalse(send_enabled)
+
+    def test_switch_on_with_key_absent_shipped_tests_pass_unchanged(self):
+        """The switch's default must not change today's behaviour."""
+        self.assertEqual(0, self.scan())
+        texts = [a[a.index("send") + 2] for a in self.sends()]
+        self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."],
+                         texts)
+        self.assertTrue((self.root / self.op / ".receipt-sent").is_file())
+        self.assertTrue((self.root / self.op / ".final-sent").is_file())
 
 
 if __name__ == "__main__":
