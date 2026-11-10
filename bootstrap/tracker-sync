@@ -35,6 +35,9 @@ import tracker as tracker_client
 
 TRACKER_CREDS_ENV = "RALPH_TRACKER_CREDS"
 RECORDED = ".tracker-recorded"
+IN_PROGRESS = "In progress"
+# Redmine answers a relation that already exists with 422 Unprocessable Entity.
+RELATION_EXISTS = 422
 # The subset of KINDS (chat-route.py) this half turns into a tracker item
 # kind value. Anything else (the deployed sender's pre-PR behaviour, with no
 # `kind` at all) is recorded with no kind rather than refused.
@@ -100,14 +103,42 @@ def write_marker(path, text=""):
 
 def converge(client, canonical, newer):
     """The guard of dd-tracker.md Sec3.3, stated completely: every item but
-    the canonical (oldest) one loses the thread-key custom field and becomes
-    `Duplicate`, with a note saying which item it folded into, and is related
-    to the canonical item. Detecting the race is not resolving it; this
-    resolves it."""
+    the canonical (oldest) one is related to it, gets a note saying which item
+    it folded into, and only then loses the thread-key custom field and becomes
+    `Duplicate`.
+
+    The order is the point. The thread key is what `find` returns a duplicate
+    by, so clearing it first would make a later failure of the note or the
+    relation unrecoverable: the next call could no longer see the duplicate to
+    finish it. Clearing it last means any failure leaves the duplicate still
+    keyed, found again, and finished on the next call. A relation that already
+    exists (a retry after a later step failed) is answered with 422 and is
+    treated as done; the note may be posted a second time on such a retry,
+    which is untidy and harmless."""
     for dup in newer:
-        client.update(dup["id"], {"thread": "", "status": "Duplicate"})
         client.note(dup["id"], "folded into canonical item %s" % canonical["id"])
-        client.relate(dup["id"], canonical["id"])
+        try:
+            client.relate(dup["id"], canonical["id"])
+        except tracker_client.TrackerError as error:
+            if error.code != RELATION_EXISTS:
+                raise
+        client.update(dup["id"], {"thread": "", "status": "Duplicate"})
+
+
+def status_name(issue):
+    """Redmine returns an issue's status as `{"id": .., "name": ..}`."""
+    status = issue.get("status")
+    return status.get("name") if isinstance(status, dict) else None
+
+
+def reopen_if_needed(client, canonical):
+    """A request in a thread whose item was already closed, resolved or waiting
+    on the requester is new work on that item: it goes back to `In progress`
+    (dd-tracker.md Sec3.1, `--record` "sets `In progress`"). An item already
+    there is left alone, so a repeated `--record` writes nothing (E2)."""
+    wanted = client.config.statuses.get(IN_PROGRESS, IN_PROGRESS)
+    if status_name(canonical) != wanted:
+        client.update(canonical["id"], {"status": IN_PROGRESS})
 
 
 def record(client, root, op_id):
@@ -136,6 +167,7 @@ def record(client, root, op_id):
         client.create(fields)
         canonical, newer = client.find(thread)
     converge(client, canonical, newer)
+    reopen_if_needed(client, canonical)
     write_marker(root / op_id / RECORDED, str(canonical["id"]))
     return 0
 
