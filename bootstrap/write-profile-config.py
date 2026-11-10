@@ -210,7 +210,10 @@ def overlay_mcp_block(path: str, profile: str) -> str:
 
 
 def _drop_entry(entries: str, name: str) -> str:
-    return re.sub(rf"^  {re.escape(name)}:[^\n]*\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
+    # The owner's key may be quoted (`"name":`); match either spelling, the
+    # same way merge_mcp_servers already compares keys (#134 review).
+    quoted = rf"[\"']{re.escape(name)}[\"']"
+    return re.sub(rf"^  (?:{re.escape(name)}|{quoted}):[^\n]*\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
 
 
 def set_overlay_global(path: str, mcp_json: str) -> int:

@@ -560,6 +560,22 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(["owner-added", "team-memory"], list(out["mcp_servers"]))
         self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
 
+    def test_a_new_grant_replaces_a_quoted_hand_added_key_of_the_same_name(self):
+        """#134 review: a hand-added `\"team-memory\":` is the same YAML key as
+        the overlay's `team-memory:`; the replace must match either spelling."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text('mcp_servers:\n  owner-added:\n    url: http://x\n'
+                           '  "team-memory":\n    url: http://old\n')
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            text = cfg.read_text()
+        self.assertEqual(1, text.count("team-memory"))
+        out = yaml.safe_load(text)
+        self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
+
     def test_overlay_mcp_cannot_shadow_built_in_servers(self):
         """#134 review: knowledge and lens-tools are Ralph's names."""
         import json
