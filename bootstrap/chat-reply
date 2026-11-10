@@ -72,6 +72,9 @@ MAX_PARTS = 5
 # loud.
 TRACKER_RECORD_ATTEMPTS = 5
 TRACKER_RECORD_FAILURES = ".tracker-record-failures"
+# What `docker exec` says, in either wording across versions, for a container
+# that does not exist or is stopped. Matched only on a failed exec.
+TRACKER_CONTAINER_DOWN = re.compile(r"no such container|is not running", re.IGNORECASE)
 
 
 class Refused(ValueError):
@@ -103,7 +106,20 @@ def tracker(root, *args):
                 *args, "--work-root", "/workspaces/chat-inbox"]
     else:
         argv = [sys.executable, str(HERE / "tracker-sync"), *args, "--work-root", str(root)]
-    return command(argv)
+    result = command(argv)
+    if container and result.returncode and TRACKER_CONTAINER_DOWN.search(result.stderr or ""):
+        # The chat-sender service names `<instance>-tracker-sync-1` by default, but
+        # that container only exists once the owner starts the `tracker` profile
+        # (D1). Until then every `docker exec` into it fails, and a failed
+        # `--record` holds the acknowledgement: the sidecar would go silent for
+        # every requester the moment it is switched on. A tracker nobody has
+        # started is a tracker that is not configured, so it takes the same exit
+        # as a missing key file: success, nothing recorded.
+        if "--record" in args:
+            print(f"tracker-sync container {container} is not running; "
+                  "treating the tracker as not configured", file=sys.stderr)
+        return subprocess.CompletedProcess(argv, 0, "tracker not configured\n", "")
+    return result
 
 
 def read_record_failures(path):
@@ -148,12 +164,14 @@ def record_item(container, board, task_id, root, op_id):
         return 2
     attempts = read_record_failures(failures) + 1
     write_record_failures(failures, attempts)
-    reason = (f"tracker-sync --record failed ({attempts}/{TRACKER_RECORD_ATTEMPTS}); "
-              "acknowledgement not sent, retrying next scan")
-    print(reason, file=sys.stderr)
     if attempts >= TRACKER_RECORD_ATTEMPTS:
+        reason = (f"tracker-sync --record failed {attempts} times in a row; acknowledgement "
+                  "not sent and the card is blocked (see docs/operations.md, Tracker sync)")
+        print(reason, file=sys.stderr)
         block_and_alert(container, board, task_id, root, op_id, "tracker-record", reason)
         return 2
+    print(f"tracker-sync --record failed ({attempts}/{TRACKER_RECORD_ATTEMPTS}); "
+          "acknowledgement not sent, retrying next scan", file=sys.stderr)
     return 1
 
 

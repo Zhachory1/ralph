@@ -90,6 +90,14 @@ requester-facing path runs unchanged, and nothing below applies.
 - **Key file:** `RALPH_TRACKER_CREDS`, in the `tracker-creds` volume, mode `0600` --
   the base URL, the account's per-user API key, the project identifier, and the
   thread-key custom field id.
+- **The `tracker-sync` container:** the `chat-sender` sidecar calls it with
+  `docker exec` into `<instance>-tracker-sync-1`, which exists only when
+  `COMPOSE_PROFILES` includes `tracker`. Until you start it, a failed `docker exec`
+  ("no such container", "is not running") is treated as the tracker not being
+  configured: `--record` and `--settle` are skipped and the acknowledgement goes out
+  as it does today. `docker logs <instance>-chat-sender-1` says so on each skipped
+  `--record`. After you create the key file, start the container
+  (`docker compose --profile tracker up -d tracker-sync`) or nothing is recorded.
 - **One-time setup, by hand, on the tracker instance (not an API call):** create
   Ralph's own account with access to the project, generate its per-user API key,
   create the thread-key custom field, and create (or map onto stock statuses)

@@ -858,6 +858,51 @@ class ChatReplyTests(unittest.TestCase):
              "--settle", "--work-root", "/workspaces/chat-inbox"],
             seen[-1])
 
+    def test_a_tracker_container_that_is_not_running_is_the_tracker_not_configured(self):
+        """The sidecar names `<instance>-tracker-sync-1` by default, but that
+        container only exists under the `tracker` profile. A failed docker exec
+        into it must not hold the acknowledgement: it is the inert path."""
+        for message in ("Error response from daemon: No such container: ralph-tracker-sync-1",
+                        "Error response from daemon: container abc123 is not running"):
+            with self.subTest(message=message):
+                self.setUp()
+                self.tracker_sync = lambda argv, message=message: subprocess.CompletedProcess(
+                    argv, 1, "", message)
+                with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-sync-1"}), \
+                        patch.object(self.reply, "notify") as notify:
+                    self.assertEqual(0, self.handle("queues", "t_intake"))
+                self.assertEqual(1, len(self.sends()))
+                self.assertEqual([], self.blocks())
+                self.assertEqual(0, notify.call_count)
+                self.assertFalse((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).exists())
+
+    def test_a_tracker_container_that_is_down_does_not_fail_the_scan(self):
+        self.tracker_sync = lambda argv: subprocess.CompletedProcess(
+            argv, 1, "", "Error response from daemon: No such container: ralph-tracker-sync-1")
+        with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-sync-1"}):
+            self.assertEqual(0, self.scan())
+        self.assertEqual(2, len(self.sends()))      # the acknowledgement and the final reply
+
+    def test_a_real_record_failure_through_the_container_still_holds_the_acknowledgement(self):
+        """Only docker's own 'container is down' message is the inert path. A
+        tracker-sync that ran and failed is a failure."""
+        self.tracker_sync = lambda argv: subprocess.CompletedProcess(
+            argv, 1, "", "Traceback ...\ntracker.TrackerError: tracker returned 500")
+        with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-sync-1"}):
+            self.assertEqual(1, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+
+    def test_the_fifth_failure_says_the_card_is_blocked_not_that_it_will_retry(self):
+        self.record_rc = 1
+        printed = io.StringIO()
+        with patch.object(self.reply, "notify") as notify, \
+                patch("sys.stderr", printed):
+            for _ in range(self.reply.TRACKER_RECORD_ATTEMPTS):
+                self.handle("queues", "t_intake")
+        alert = notify.call_args[0][0]
+        self.assertIn("blocked", alert)
+        self.assertNotIn("retrying next scan", alert)
+
     def test_held_ack_still_records_then_holds_but_held_reply_never_records(self):
         """A held ack (CHAT_SEND off) still records, then holds; a held
         reply never records."""
