@@ -137,31 +137,42 @@ knowledge_profile() {
     esac
 }
 # The knowledge server as an mcp_servers block, appended after a profile's own
-# config; write-profile-config folds it in beside lens-tools. Only when the
-# knowledge service exists (COMPOSE_PROFILES is the switch).
-knowledge_block() {
-    [ -n "$KNOWLEDGE_ON" ] || return 0
-    cat <<'YAML'
-mcp_servers:
-  knowledge:
-    url: "http://knowledge:8181/mcp"
-    enabled: true
-    tools:
-      include: [query, get, multi_get, status]
-YAML
+# config directly with `hermes config set` (#134: no text merge -- Hermes
+# already knows how to add one mcp_servers entry to a config without
+# touching any other key). Only when the knowledge service exists
+# (COMPOSE_PROFILES is the switch).
+knowledge_set() {
+    if [ -n "$KNOWLEDGE_ON" ]; then
+        hermes $1 config set mcp_servers.knowledge.url "http://knowledge:8181/mcp" >/dev/null
+        hermes $1 config set mcp_servers.knowledge.enabled true >/dev/null
+        hermes $1 config set mcp_servers.knowledge.tools.include "[query, get, multi_get, status]" >/dev/null
+    else
+        hermes $1 config unset mcp_servers.knowledge >/dev/null 2>&1 || true
+    fi
 }
-# MCP servers the private overlay grants a profile (#133), as an mcp_servers
-# block that write-profile-config folds in beside the others. Profile configs
-# are rewritten whole, so a server removed from mcp.json goes on the next run.
+# MCP servers the private overlay grants a profile (#133). overlay-grants.py
+# only reads mcp.json and validates it; it never touches a config file. It
+# prints one "name key value" triple per setting, for named_mcp_set below to
+# apply with `hermes config set` -- one owned key, no text merge (#134: the
+# previous version hand-edited YAML text to fold these in and spent 26 review
+# rounds chasing indentation and quoting bugs that `hermes config set` does
+# not have, because it is a real YAML writer and this is not).
 OVERLAY_MCP=""
 if [ -f /ralph/private-mcp/mcp.json ]; then
     OVERLAY_MCP=/ralph/private-mcp/mcp.json
-    # Fail before any profile or record is touched (#134 review).
-    python3 "$(dirname "$0")/write-profile-config.py" --overlay-check "$OVERLAY_MCP"
+    # Fail before any profile is touched.
+    python3 "$(dirname "$0")/overlay-grants.py" --check "$OVERLAY_MCP"
 fi
-overlay_mcp_block() {
+named_mcp_set() {  # named_mcp_set <hermes -p flags or empty> <profile base name>
+    local args="$1" base="$2"
     [ -n "$OVERLAY_MCP" ] || return 0
-    python3 "$(dirname "$0")/write-profile-config.py" --overlay-block "$OVERLAY_MCP" "$1"
+    python3 "$(dirname "$0")/overlay-grants.py" "$OVERLAY_MCP" "$base" | while read -r verb key value; do
+        if [ "$verb" = unset ]; then
+            hermes $args config unset "$key" >/dev/null 2>&1 || true
+        else
+            hermes $args config set "$key" "$value" >/dev/null
+        fi
+    done
 }
 KNOWLEDGE_ON=""
 # Running, not merely present: a stopped leftover after the profile is
@@ -323,10 +334,11 @@ for dir in "$PROFILES_DIR"/*/; do
             { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$PROFILES_DIR/STANDARDS.md"; printf '\n'; cat "$dir/SOUL.md"; } |
                 docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "$target/SOUL.md"
         fi
-        { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"
-          knowledge_profile "$base" && knowledge_block; overlay_mcp_block "$base"; } > "$SRC_TMP"
+        { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"; } > "$SRC_TMP"
         docker cp "$SRC_TMP" "$RALPH_HERMES_CONTAINER:/tmp/src.yaml"
         docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
+        knowledge_profile "$base" && knowledge_set "-p $name"
+        named_mcp_set "-p $name" "$base"
         continue
     fi
     if [ -f "$dir/SOUL.md" ]; then
@@ -334,9 +346,14 @@ for dir in "$PROFILES_DIR"/*/; do
     fi
 
     # The model and the toolsets are ours; the rest is Hermes-generated.
-    { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"
-          knowledge_profile "$base" && knowledge_block; overlay_mcp_block "$base"; } > "$SRC_TMP"
+    { cat "$dir/config.yaml" 2>/dev/null || true; terminal_block "$target" "$base"; } > "$SRC_TMP"
     python3 /ralph/bootstrap/write-profile-config.py "$SRC_TMP" "$target/config.yaml"
+    # Knowledge and overlay grants are set directly on the profile's own
+    # config with `hermes config set` (#134), never folded into the text
+    # above: Hermes already owns this file's YAML and already knows how to
+    # add or remove one key without touching anything else in it.
+    knowledge_profile "$base" && knowledge_set "-p $name"
+    named_mcp_set "-p $name" "$base"
 done
 # The default profile's SOUL (the WebUI chat) is the global one, built like
 # every profile's: PRINCIPLES + STANDARDS + its own text (#128). Its own text
@@ -346,22 +363,13 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     { cat "$PROFILES_DIR/PRINCIPLES.md"; printf '\n'; cat "$PROFILES_DIR/STANDARDS.md"; printf '\n'; cat "$PROFILES_DIR/DEFAULT_SOUL.md"; } |
         docker exec -i "$RALPH_HERMES_CONTAINER" sh -c 'cat > "$1"' sh "${HERMES_HOME:-$HOME/.hermes}/SOUL.md"
 fi
-# The default profile (the WebUI chat) searches too. Its config is the global
-# one, which may hold servers the owner added: add or remove only the
-# `knowledge` entry, leaving every other server as it is (#123 review).
+# The default profile (the WebUI chat) searches and reaches the overlay's
+# servers too. Its config is the global one, which may hold servers the owner
+# added by hand: `hermes config set/unset` touches only the one key named,
+# leaving every other server untouched (#123, #133, #134).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --knowledge "${KNOWLEDGE_ON:+on}" \
-        "${HERMES_HOME:-$HOME/.hermes}/config.yaml"
-fi
-# The default profile's overlay servers. Its config is the global one, which
-# may hold servers the owner added, so only the overlay's own entries change:
-# write-profile-config.py finds and replaces its own tagged lines, then adds
-# mcp.json's current grant. No separate record to keep in sync (#134).
-if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    gcfg="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
-    [ -z "$OVERLAY_MCP" ] || docker cp "$OVERLAY_MCP" "$RALPH_HERMES_CONTAINER:/tmp/overlay-mcp.json"
-    docker exec -u hermes "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --overlay-global \
-        "${OVERLAY_MCP:+/tmp/overlay-mcp.json}" "$gcfg"
+    knowledge_set ""
+    named_mcp_set "" default
 fi
 rm -f "$SRC_TMP"
 
