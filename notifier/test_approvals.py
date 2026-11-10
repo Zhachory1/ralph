@@ -210,7 +210,8 @@ class GateAddressPropagationTests(unittest.TestCase):
 
         def show(_board, task_id):
             if task_id == "t_gate":
-                return {"latest_summary": None, "comments": [], "parents": ["t_author"]}
+                return {"task": {"assignee": "none", "title": "Approve design: x"},
+                        "latest_summary": None, "comments": [], "parents": ["t_author"]}
             return {
                 "latest_summary": "Opened https://github.com/o/r/pull/9",
                 "comments": [],
@@ -244,6 +245,33 @@ class GateAddressPropagationTests(unittest.TestCase):
         github.reviews.assert_not_called()
         board.unblock.assert_not_called()
         self.assertIn("t_gate", stderr.getvalue())
+
+    def test_a_worker_card_never_borrows_its_parents_pr(self):
+        """t_124859f1: a plan author blocked on access took its design
+        parent's merged PR as its own, and was 'Approved in GitHub.' four
+        times, each re-running it until the block-loop guard parked it."""
+        board = mock.Mock()
+        board.waiting.return_value = []
+        board.cards.return_value = []
+        board.pending.return_value = [{"id": "t_plan", "status": "blocked"}]
+
+        def show(_board, task_id):
+            if task_id == "t_plan":
+                return {"task": {"assignee": "ralph-author", "title": "Implementation plan: x"},
+                        "latest_summary": None, "comments": [], "parents": ["t_gate"]}
+            return {"latest_summary": "Opened https://github.com/o/r/pull/3", "comments": []}
+
+        board.show.side_effect = show
+        github = self._github()
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github), \
+             redirect_stderr(io.StringIO()):
+            approvals.main(["--board", "b"])
+
+        github.reviews.assert_not_called()
+        board.comment.assert_not_called()
+        board.unblock.assert_not_called()
+        board.handoff.assert_not_called()
 
 
 class ResolveTests(unittest.TestCase):
