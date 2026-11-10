@@ -205,6 +205,7 @@ class GateAddressPropagationTests(unittest.TestCase):
     def test_address_propagates_from_a_completed_ancestor(self):
         board = mock.Mock()
         board.waiting.return_value = []
+        board.cards.return_value = []
         board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
 
         def show(_board, task_id):
@@ -229,6 +230,7 @@ class GateAddressPropagationTests(unittest.TestCase):
     def test_gate_with_nothing_resolvable_is_reported_not_skipped_silently(self):
         board = mock.Mock()
         board.waiting.return_value = []
+        board.cards.return_value = []
         board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
         board.show.return_value = {"latest_summary": None, "comments": [], "parents": []}
         github = self._github()
@@ -294,6 +296,7 @@ class HumanGateTests(unittest.TestCase):
         github.pull_request.return_value = {"merged": True, "labels": []}
         board = mock.Mock()
         board.waiting.return_value = []
+        board.cards.return_value = []
         board.pending.return_value = pending
         board.show.return_value = {
             "latest_summary": "DD https://github.com/o/r/pull/3",
@@ -383,6 +386,7 @@ class LabelClearingTests(unittest.TestCase):
 
         board = mock.Mock()
         board.waiting.return_value = []
+        board.cards.return_value = []
         board.pending.return_value = [{"id": "t_1", "status": "review"}]
         board.show.return_value = {
             "latest_summary": "DD https://github.com/o/r/pull/3",
@@ -437,6 +441,7 @@ class StrandedHandoffTests(unittest.TestCase):
     def test_the_poll_redoes_only_the_handoff(self):
         board = mock.Mock()
         board.waiting.return_value = [{"id": "t_1", "status": "ready"}]
+        board.cards.return_value = []
         board.pending.return_value = []
         board.show.return_value = self.detail([{"kind": "unblocked", "created_at": 101}])
         with mock.patch.object(approvals, "Board", return_value=board), \
@@ -507,6 +512,7 @@ class ApprovalGateTests(unittest.TestCase):
         """#110 review: the gate opens on a merge, not an APPROVED review."""
         board = mock.Mock()
         board.waiting.return_value = []
+        board.cards.return_value = []
         board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
         board.show.return_value = {
             "task": {"assignee": None, "title": "Approve design: x"},
@@ -543,6 +549,7 @@ class ApprovalGateTests(unittest.TestCase):
         """#110 review: an interrupted gate completion is retried."""
         board = mock.Mock()
         board.waiting.return_value = [{"id": "t_gate", "status": "ready"}]
+        board.cards.return_value = []
         board.pending.return_value = []
         board.show.return_value = {
             "task": {"assignee": None, "title": "Approve design: x"},
@@ -591,6 +598,121 @@ class NotifierOrderTests(unittest.TestCase):
         text = (pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "run-notifier").read_text()
         self.assertLess(text.index("approvals.py"), text.index("poller.py"))
 
+
+
+class BoardsTests(unittest.TestCase):
+    """#145: work-instance features run on the review board (`queues`), and
+    the notifier only polled RALPH_BOARD, so their gates were never seen."""
+
+    def run_notifier(self, **env):
+        import os
+        import subprocess
+        import tempfile
+        script = pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "run-notifier"
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            (d / "python3").write_text('#!/bin/sh\necho "$*" >> "$CALLS"\n')
+            (d / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
+            for f in d.iterdir():
+                f.chmod(0o755)
+            calls = d / "calls"
+            subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30,
+                           env={"PATH": f"{d}:/usr/bin:/bin", "CALLS": str(calls),
+                                "GH_TOKEN": "x", "GCHAT_WEBHOOK_URL": "x",
+                                "RALPH_DIGEST_HOUR": "0", "RALPH_STATE_FILE": "/s/state.json",
+                                "RALPH_DIGEST_STAMP": str(d / "stamp"), **env})
+            return calls.read_text().splitlines()
+
+    def test_every_board_is_polled(self):
+        calls = self.run_notifier(RALPH_BOARD="ralph", RALPH_REVIEW_BOARD="queues")
+        for script in ("approvals.py", "poller.py", "digest.py"):
+            for board in ("ralph", "queues"):
+                self.assertTrue(any(script in c and f"--board {board}" in c for c in calls),
+                                f"{script} --board {board} not run: {calls}")
+
+    def test_each_board_announces_from_its_own_state(self):
+        """One shared file: each board's prune would drop the other's gates,
+        and every gate would be announced again on every pass."""
+        calls = [c for c in self.run_notifier(RALPH_BOARD="ralph", RALPH_REVIEW_BOARD="queues")
+                 if "poller.py" in c]
+        self.assertIn("--state /s/state.json", calls[0])
+        self.assertEqual(2, len({c.split("--state ")[1] for c in calls}))
+
+    def test_one_board_is_polled_once(self):
+        calls = self.run_notifier(RALPH_BOARD="queues", RALPH_REVIEW_BOARD="queues")
+        self.assertEqual(1, sum("approvals.py" in c for c in calls))
+
+
+class GateOwnershipTests(unittest.TestCase):
+    """#145: a gate is an `Approve ...:` card whoever the orchestrator assigned
+    it to. The create tool requires an assignee, so gates carry `none` or the
+    orchestrator itself, and neither was recognised."""
+
+    def gate(self, assignee):
+        return approvals.is_approval_gate({"task": {"assignee": assignee, "title": "Approve PRD: x"}})
+
+    def test_unassigned_none_and_orchestrator_are_gates(self):
+        for assignee in (None, "", "none", "ralph-orchestrator"):
+            self.assertTrue(self.gate(assignee), assignee)
+
+    def test_a_worker_card_is_not_a_gate(self):
+        self.assertFalse(self.gate("ralph-author"))
+
+    def test_completion_overrides_a_live_claim(self):
+        """A gate the orchestrator was dispatched on is `running` under its claim."""
+        board = approvals.Board()
+        with mock.patch.object(board, "_run") as run:
+            board.complete("b", "t_1", "Approved in GitHub.")
+        self.assertIn("--force", run.call_args.args)
+
+
+class OpenGateTests(unittest.TestCase):
+    """#145: t_2ef8dca4's PR merged while the gate was not `blocked`, and no
+    poll ever completed it. Nobody runs a gate, so the notifier also blocks a
+    `ready` one for the owner, which is what announces it."""
+
+    def run_main(self, status, merged, title="Approve PRD: x"):
+        board = mock.Mock()
+        board.waiting.return_value = []
+        board.pending.return_value = []
+        board.cards.return_value = [{"id": "t_gate", "status": status}]
+        board.show.return_value = {
+            "task": {"assignee": "ralph-orchestrator", "title": title, "status": status},
+            "latest_summary": None, "events": [],
+            "comments": [{"body": "PRD https://github.com/o/r/pull/2", "created_at": 1}]}
+        github = mock.Mock()
+        github.reviews.return_value = github.diff_comments.return_value = []
+        github.issue_comments.return_value = []
+        github.pull_request.return_value = {"merged": merged, "labels": []}
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+        board.cards.assert_called_once_with("b", "ready", "running")
+        return board
+
+    def test_a_ready_gate_whose_pr_merged_is_completed(self):
+        board = self.run_main("ready", merged=True)
+        board.complete.assert_called_once()
+        board.unblock.assert_not_called()
+
+    def test_a_running_gate_whose_pr_merged_is_completed(self):
+        self.run_main("running", merged=True).complete.assert_called_once()
+
+    def test_a_ready_gate_with_an_open_pr_is_blocked_for_the_owner(self):
+        board = self.run_main("ready", merged=False)
+        board.block.assert_called_once()
+        self.assertIn("https://github.com/o/r/pull/2", board.block.call_args.args[2])
+        board.complete.assert_not_called()
+
+    def test_a_running_gate_with_an_open_pr_is_left_alone(self):
+        board = self.run_main("running", merged=False)
+        board.block.assert_not_called()
+        board.complete.assert_not_called()
+
+    def test_a_ready_card_that_is_not_a_gate_is_left_alone(self):
+        board = self.run_main("ready", merged=True, title="Design: x")
+        board.block.assert_not_called()
+        board.complete.assert_not_called()
 
 
 class SameAuthorReworkTests(unittest.TestCase):

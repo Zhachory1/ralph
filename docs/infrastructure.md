@@ -123,7 +123,7 @@ One QMD index per instance over two collections: `docs` (a checkout of `RALPH_DO
 
 ## Private overlay
 
-`RALPH_PRIVATE_SKILLS` and `RALPH_PRIVATE_JOBS` point at a private checkout (`rokt-it-ralph`) beside this one. Skills mount read-only at `/ralph/private-skills`; each job's `job.env` names its profile and options, and `bootstrap/install-overlay-jobs` copies its scripts into that profile. Nothing work-specific lives in this repo.
+`RALPH_PRIVATE_SKILLS`, `RALPH_PRIVATE_JOBS` and `RALPH_PRIVATE_MCP` point at a private checkout (`rokt-it-ralph`) beside this one. Skills mount read-only at `/ralph/private-skills`; each job's `job.env` names its profile and options, and `bootstrap/install-overlay-jobs` copies its scripts into that profile. `RALPH_PRIVATE_MCP` is a folder holding `mcp.json`: each server's Hermes config, a required tool allowlist, and the profiles that get it (`default` is the WebUI chat). Install merges each server beside `knowledge` and lens-tools. Profiles not named never get it, and a server removed from the file is removed on the next `init` (#133). Nothing work-specific lives in this repo.
 
 ## Is what is live what is on `main`?
 
