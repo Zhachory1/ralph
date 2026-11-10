@@ -592,6 +592,39 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual("http://keep", out["mcp_servers"]["other"]["url"])
         self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
 
+    def test_a_one_space_indented_server_is_matched_and_a_sibling_is_not_swallowed(self):
+        """#134 review: a top-level server at one-space indent (valid YAML,
+        narrower than Ralph's own two-space output) was not recognized and
+        survived as a duplicate. Fixing that regressed the opposite way in
+        testing here first: a naive \"any indent counts as continuation\" rule
+        swallowed the next sibling at that same shallow width as if it were
+        part of the removed entry's body. Both are pinned."""
+        import json, yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg, mcp = pathlib.Path(d, "config.yaml"), pathlib.Path(d, "mcp.json")
+            cfg.write_text("mcp_servers:\n  team-memory:\n    url: http://hand\n"
+                           "  other:\n    url: http://keep\n")
+            mcp.write_text(json.dumps({"team-memory": {"profiles": ["default"],
+                                       "config": {"url": "http://new"}, "tools": ["recall"]}}))
+            wpc.set_overlay_global(str(cfg), str(mcp))
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual(["other", "team-memory"], sorted(out["mcp_servers"]))
+        self.assertEqual("http://keep", out["mcp_servers"]["other"]["url"])
+        self.assertEqual("http://new", out["mcp_servers"]["team-memory"]["url"])
+
+    def test_a_tagged_entry_at_three_space_indent_is_fully_removed_on_revoke(self):
+        """#134 review: the tag-removal path had the same fixed-width
+        continuation assumption as the name-based removal path; both use
+        _remove_entries now."""
+        import yaml
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("mcp_servers:\n  other:\n    url: http://keep\n"
+                           "  team-memory: # ralph-mcp-overlay\n   url: http://old\n   enabled: true\n")
+            wpc.set_overlay_global(str(cfg), "")
+            out = yaml.safe_load(cfg.read_text())
+        self.assertEqual(["other"], list(out["mcp_servers"]))
+
     def test_a_hand_added_key_with_a_space_before_the_colon_is_still_replaced(self):
         """#134 review: YAML tolerates (and ignores) whitespace before the
         colon; `name :` must match the same as `name:` or it survives as a

@@ -212,18 +212,41 @@ def overlay_mcp_block(path: str, profile: str) -> str:
     return ("mcp_servers:\n" + "\n".join(out) + "\n") if out else ""
 
 
+def _remove_entries(entries: str, header_re: str) -> str:
+    """Remove every top-level `mcp_servers` entry whose header line matches
+    `header_re`, along with every line under it.
+
+    A regex alone cannot express "strictly deeper than this entry's own
+    indent", because that width is a property of each match, not of the
+    pattern (#134 review: an entry hand-written at one or three spaces broke
+    both a fixed two/four-space assumption, and a looser "any indent" one
+    swallowed the next sibling entry at the same shallow width as if it were
+    a continuation). Read line by line instead: a line is part of the entry
+    above it only while it is blank or indented deeper than that entry's own
+    header -- the actual YAML rule for a block mapping's scalar/nested value.
+    """
+    lines = entries.splitlines(keepends=True)
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        indent = len(line) - len(line.lstrip(" "))
+        if line.strip() and re.match(header_re, line.lstrip(" ")):
+            i += 1
+            while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip(" ")) > indent):
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "".join(out)
+
+
 def _drop_entry(entries: str, name: str) -> str:
-    # The owner's key may be quoted (`"name":`); match either spelling, the
-    # same way merge_mcp_servers already compares keys (#134 review).
+    # The owner's key may be quoted (`"name":`), and YAML allows (and
+    # ignores) whitespace before the colon (#134 review: `name :` was not
+    # matched and survived as a duplicate).
     quoted = rf"[\"']{re.escape(name)}[\"']"
-    # YAML allows (and ignores) whitespace before the colon (#134 review: a
-    # key written `name :` was not matched and survived as a duplicate).
-    gap = r"[ \t]*"
-    # A continuation line is any line indented deeper than the two-space
-    # header, not specifically four spaces -- YAML allows any consistent
-    # indent under a mapping key (#134 review: a 3-space hand-written entry
-    # orphaned its own body when only `    ` was matched).
-    return re.sub(rf"^  (?:{re.escape(name)}|{quoted}){gap}:[^\n]*\n(?:   .*\n|\s*\n)*", "", entries, flags=re.M)
+    header_re = rf"(?:{re.escape(name)}|{quoted})[ \t]*:"
+    return _remove_entries(entries, header_re)
 
 
 def set_overlay_global(path: str, mcp_json: str) -> int:
@@ -238,7 +261,7 @@ def set_overlay_global(path: str, mcp_json: str) -> int:
     text = read_yaml_text(target)
     block = block_re("mcp_servers").search(text)
     entries = block.group(0).split("\n", 1)[1] if block else ""
-    entries = re.sub(rf"^  [^ \n]+:[^\n]*{re.escape(OVERLAY_TAG)}\n(?:    .*\n|\s*\n)*", "", entries, flags=re.M)
+    entries = _remove_entries(entries, rf"[^ \n]+:[^\n]*{re.escape(OVERLAY_TAG)}")
     add = overlay_mcp_block(mcp_json, "default") if mcp_json else ""
     # A new grant can reuse a name an untagged (hand-added) entry already has;
     # the grant wins that name, as it would if it were simply typed in by
