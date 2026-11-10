@@ -478,7 +478,10 @@ def main(argv=None) -> int:
         if task.get("status") == "triage" and not parked_by_block_loop(detail):
             continue
         link = pull_request_for(detail)
-        if not link:
+        # Only a gate borrows an ancestor's address. A worker card blocked on
+        # something else would take its parent's merged PR as approval and be
+        # resumed on every poll (t_124859f1).
+        if not link and is_approval_gate(detail):
             link = pull_request_from_ancestors(board_client, args.board, detail)
             if link:
                 # The gate card is created before the pull request exists, so
