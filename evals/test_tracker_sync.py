@@ -5,6 +5,7 @@ socket, reads a credential, or reaches a real tracker.
 
 import contextlib
 import hashlib
+import io
 import importlib.machinery
 import importlib.util
 import io
@@ -14,6 +15,7 @@ import pathlib
 import tempfile
 import unittest
 import unittest.mock
+import urllib.error
 import urllib.parse
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "tracker-sync"
@@ -68,6 +70,7 @@ class StatefulFakeTracker:
         self.issues = {}
         self.relations = []
         self.next_id = 1
+        self.fail_relation_once = False
 
     def open(self, request, timeout=None):
         method = request.get_method()
@@ -107,13 +110,21 @@ class StatefulFakeTracker:
         if path.endswith("/relations.json") and method == "POST":
             issue_id = int(path[len("/issues/"):-len("/relations.json")])
             payload = json.loads(request.data)["relation"]
+            if self.fail_relation_once:
+                self.fail_relation_once = False
+                raise urllib.error.HTTPError(request.full_url, 500, "boom", {}, io.BytesIO(b""))
+            if (issue_id, payload["issue_to_id"]) in self.relations:
+                raise urllib.error.HTTPError(request.full_url, 422, "taken", {},
+                                             io.BytesIO(b"already related"))
             self.relations.append((issue_id, payload["issue_to_id"]))
             return FakeResponse(b"{}")
         raise AssertionError("unhandled request: %s %s" % (method, request.full_url))
 
     def _resolve_status(self, payload):
+        # Redmine reports a status as an object, not a bare name.
         if "status_id" in payload:
-            payload["status"] = STATUS_NAMES[payload["status_id"] - 1]
+            payload["status"] = {"id": payload["status_id"],
+                                 "name": STATUS_NAMES[payload["status_id"] - 1]}
 
     def _thread_value(self, issue):
         for field in issue.get("custom_fields", []):
@@ -245,7 +256,7 @@ class TrackerSyncTests(unittest.TestCase):
         self.assertEqual(issue["requester"], "a requester")
         self.assertIn("draft an announcement", issue["description"])
         self.assertEqual(issue["kind"], "question")
-        self.assertEqual(issue["status"], "In progress")
+        self.assertEqual(issue["status"]["name"], "In progress")
         self.assertEqual(self.backend._thread_value(issue), "spaces/example/threads/first")
         self.assertEqual(self.recorded_id(op), str(issue["id"]))
 
@@ -292,7 +303,7 @@ class TrackerSyncTests(unittest.TestCase):
         canonical_id = min(first["id"], second["id"])
         loser_id = max(first["id"], second["id"])
         self.assertEqual(self.recorded_id(op1), str(canonical_id))
-        self.assertEqual(self.backend.issues[loser_id]["status"], "Duplicate")
+        self.assertEqual(self.backend.issues[loser_id]["status"]["name"], "Duplicate")
         self.assertIsNone(self.backend._thread_value(self.backend.issues[loser_id]))
         self.assertIn((loser_id, canonical_id), self.backend.relations)
         self.assertIn("canonical item %s" % canonical_id,
@@ -322,6 +333,68 @@ class TrackerSyncTests(unittest.TestCase):
         rc = self.module.record(client, self.root, loser_op)
         self.assertEqual(rc, 0)
         self.assertEqual(self.recorded_id(loser_op), str(canonical_id))
+
+    def test_new_request_in_a_thread_whose_item_is_closed_reopens_it(self):
+        """Review finding: an existing canonical item in a stale status was
+        recorded against but left Closed, so the tracker said the work was done."""
+        op1 = self.stage(n=1)
+        op2 = self.stage(n=2, prior=(op1,))
+        self.intake_card(op1)
+        self.intake_card(op2)
+        client = self.client()
+        self.module.record(client, self.root, op1)
+        item_id = int(self.recorded_id(op1))
+        client.update(item_id, {"status": "Closed"})
+        self.assertEqual(self.backend.issues[item_id]["status"]["name"], "Closed")
+        self.module.record(client, self.root, op2)
+        self.assertEqual(self.backend.issues[item_id]["status"]["name"], "In progress")
+        self.assertEqual(len(self.backend.issues), 1)
+
+    def test_record_on_an_item_already_in_progress_writes_no_status_update(self):
+        op = self.stage()
+        self.intake_card(op)
+        client = self.client()
+        self.module.record(client, self.root, op)
+        with unittest.mock.patch.object(client, "update", wraps=client.update) as update:
+            self.assertEqual(self.module.record(client, self.root, op), 0)
+        update.assert_not_called()
+
+    def test_failed_relation_leaves_the_duplicate_keyed_and_the_next_call_finishes_it(self):
+        """Review finding: the thread key was cleared before the note and the
+        relation, so a failure there stranded a duplicate no lookup could find."""
+        op1 = self.stage(n=1)
+        op2 = self.stage(n=2, prior=(op1,))
+        self.intake_card(op1)
+        self.intake_card(op2)
+        client = self.client()
+        thread = "spaces/example/threads/first"
+        first = client.create({"thread": thread, "subject": "a", "description": "a",
+                               "status": "In progress"})
+        second = client.create({"thread": thread, "subject": "b", "description": "b",
+                                "status": "In progress"})
+        self.backend.fail_relation_once = True
+        with self.assertRaises(tracker.TrackerError):
+            self.module.record(client, self.root, op1)
+        loser = self.backend.issues[second["id"]]
+        self.assertEqual(self.backend._thread_value(loser), thread)
+        self.assertNotEqual(loser["status"]["name"], "Duplicate")
+        self.assertEqual(self.module.record(client, self.root, op1), 0)
+        loser = self.backend.issues[second["id"]]
+        self.assertEqual(loser["status"]["name"], "Duplicate")
+        self.assertIsNone(self.backend._thread_value(loser))
+        self.assertIn((second["id"], first["id"]), self.backend.relations)
+
+    def test_relation_that_already_exists_is_treated_as_done(self):
+        op1 = self.stage(n=1)
+        self.intake_card(op1)
+        client = self.client()
+        thread = "spaces/example/threads/first"
+        first = client.create({"thread": thread, "subject": "a", "description": "a"})
+        second = client.create({"thread": thread, "subject": "b", "description": "b"})
+        self.backend.relations.append((second["id"], first["id"]))
+        self.assertEqual(self.module.record(client, self.root, op1), 0)
+        self.assertEqual(self.backend.issues[second["id"]]["status"]["name"], "Duplicate")
+        self.assertEqual(self.backend.relations.count((second["id"], first["id"])), 1)
 
     def test_write_a_dropped_connection_never_resends_within_one_call(self):
         """From the merged client (dd-tracker.md, bootstrap/tracker.py): a
@@ -358,7 +431,7 @@ class TrackerSyncTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.backend.issues), 1)
         issue = next(iter(self.backend.issues.values()))
-        self.assertEqual(issue["status"], "Waiting on requester")
+        self.assertEqual(issue["status"]["name"], "Waiting on requester")
         self.assertEqual(self.waiting_id(op), str(issue["id"]))
 
         before, marker_before = dict(self.backend.issues), self.waiting_id(op)
@@ -380,7 +453,7 @@ class TrackerSyncTests(unittest.TestCase):
                 rc = self.module.settle(client, self.root)
                 self.assertEqual(rc, 0)
                 issue = self.backend.issues[int(self.closed_id(op))]
-                self.assertEqual(issue["status"], expected)
+                self.assertEqual(issue["status"]["name"], expected)
                 self.assertEqual(issue.get("outcome", ""), outcome)
 
     def test_close_runs_once_and_an_already_closed_item_stays_retryable(self):
@@ -428,8 +501,8 @@ class TrackerSyncTests(unittest.TestCase):
         rc = self.module.settle(client, self.root)
 
         self.assertEqual(rc, 0)
-        self.assertEqual(self.backend.issues[canonical_id]["status"], "Resolved")
-        self.assertEqual(self.backend.issues[loser_id]["status"], "Duplicate")
+        self.assertEqual(self.backend.issues[canonical_id]["status"]["name"], "Resolved")
+        self.assertEqual(self.backend.issues[loser_id]["status"]["name"], "Duplicate")
 
     # --- --settle: evidence removal --------------------------------------------
 
@@ -445,6 +518,49 @@ class TrackerSyncTests(unittest.TestCase):
         self.assertFalse((op_dir / "evidence").exists())
         self.assertTrue((op_dir / self.module.FINAL_SENT).is_file())
         self.assertTrue((op_dir / self.module.CLOSED).is_file())
+
+    def test_a_failed_evidence_removal_is_reported_not_marked_complete_and_retried(self):
+        """Review finding: the removal's errors were ignored and the closed
+        marker written anyway, so evidence that was never deleted read as done."""
+        op = self.stage()
+        self.intake_card(op)
+        self.touch(op, self.module.FINAL_SENT)
+        self.report_card(op, body="done")
+        client = self.client()
+        with unittest.mock.patch.object(self.module.shutil, "rmtree",
+                                        side_effect=PermissionError("read-only")):
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                rc = self.module.settle(client, self.root)
+        self.assertEqual(rc, 1)
+        self.assertIn("settle-failed: %s" % op, err.getvalue())
+        self.assertTrue((self.root / op / "evidence").exists())
+        with unittest.mock.patch.object(client, "update", wraps=client.update) as update:
+            self.assertEqual(self.module.settle(client, self.root), 0)
+        self.assertFalse((self.root / op / "evidence").exists())
+        update.assert_not_called()      # the retry is local: no second tracker write
+
+    def test_a_failed_closed_marker_leaves_the_evidence_so_the_next_pass_can_retry(self):
+        """Review finding: removing the evidence before writing the marker left
+        an operation with nothing to read and nothing marking it done."""
+        op = self.stage()
+        self.intake_card(op)
+        self.touch(op, self.module.FINAL_SENT)
+        self.report_card(op, body="done")
+        client = self.client()
+        real_write = self.module.write_marker
+
+        def failing_write(path, text=""):
+            if path.name == self.module.CLOSED:
+                raise OSError("disk full")
+            return real_write(path, text)
+
+        with unittest.mock.patch.object(self.module, "write_marker", side_effect=failing_write), \
+                unittest.mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(self.module.settle(client, self.root), 1)
+        self.assertTrue((self.root / op / "evidence" / "item.json").is_file())
+        self.assertEqual(self.module.settle(client, self.root), 0)
+        self.assertTrue((self.root / op / self.module.CLOSED).is_file())
+        self.assertFalse((self.root / op / "evidence").exists())
 
     # --- --settle: a refused operation is skipped, others still settle --------
 
@@ -499,7 +615,7 @@ class TrackerSyncTests(unittest.TestCase):
         self.assertIn("settle-failed: %s" % op1, stderr.getvalue())
         self.assertFalse((self.root / op1 / self.module.CLOSED).exists())
         self.assertTrue((self.root / op2 / self.module.CLOSED).exists())
-        self.assertEqual(self.backend.issues[issue2["id"]]["status"], "Resolved")
+        self.assertEqual(self.backend.issues[issue2["id"]]["status"]["name"], "Resolved")
 
     def test_dropped_connection_on_a_settle_write_fails_once_with_no_second_write(self):
         """Isolates the write: `find` (a GET) succeeds against the real fake

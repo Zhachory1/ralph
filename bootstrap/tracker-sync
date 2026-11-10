@@ -54,6 +54,9 @@ CLOSED = ".tracker-closed"
 # that sending requires.
 CLARIFY_SENT = ".clarify-sent"
 FINAL_SENT = ".final-sent"
+IN_PROGRESS = "In progress"
+# Redmine answers a relation that already exists with 422 Unprocessable Entity.
+RELATION_EXISTS = 422
 # The subset of KINDS (chat-route.py) this half turns into a tracker item
 # kind value. Anything else (the deployed sender's pre-PR behaviour, with no
 # `kind` at all) is recorded with no kind rather than refused.
@@ -119,19 +122,47 @@ def write_marker(path, text=""):
 
 def converge(client, canonical, newer):
     """The guard of dd-tracker.md Sec3.3, stated completely: every item but
-    the canonical (oldest) one loses the thread-key custom field and becomes
-    `Duplicate`, with a note saying which item it folded into, and is related
-    to the canonical item. Detecting the race is not resolving it; this
-    resolves it."""
+    the canonical (oldest) one is related to it, gets a note saying which item
+    it folded into, and only then loses the thread-key custom field and becomes
+    `Duplicate`.
+
+    The order is the point. The thread key is what `find` returns a duplicate
+    by, so clearing it first would make a later failure of the note or the
+    relation unrecoverable: the next call could no longer see the duplicate to
+    finish it. Clearing it last means any failure leaves the duplicate still
+    keyed, found again, and finished on the next call. A relation that already
+    exists (a retry after a later step failed) is answered with 422 and is
+    treated as done; the note may be posted a second time on such a retry,
+    which is untidy and harmless."""
     for dup in newer:
-        client.update(dup["id"], {"thread": "", "status": "Duplicate"})
         client.note(dup["id"], "folded into canonical item %s" % canonical["id"])
-        client.relate(dup["id"], canonical["id"])
+        try:
+            client.relate(dup["id"], canonical["id"])
+        except tracker_client.TrackerError as error:
+            if error.code != RELATION_EXISTS:
+                raise
+        client.update(dup["id"], {"thread": "", "status": "Duplicate"})
+
+
+def status_name(issue):
+    """Redmine returns an issue's status as `{"id": .., "name": ..}`."""
+    status = issue.get("status")
+    return status.get("name") if isinstance(status, dict) else None
+
+
+def reopen_if_needed(client, canonical):
+    """A request in a thread whose item was already closed, resolved or waiting
+    on the requester is new work on that item: it goes back to `In progress`
+    (dd-tracker.md Sec3.1, `--record` "sets `In progress`"). An item already
+    there is left alone, so a repeated `--record` writes nothing (E2)."""
+    wanted = client.config.statuses.get(IN_PROGRESS, IN_PROGRESS)
+    if status_name(canonical) != wanted:
+        client.update(canonical["id"], {"status": IN_PROGRESS})
 
 
 def resolve_or_create(client, item, status, card=None):
     """Find-or-create the item for `item["thread"]`, running dd-tracker.md
-    Sec3.3's convergence guard either way, and return the canonical id.
+    Sec3.3's convergence guard either way, and return the canonical item.
     Shared by every write that must land on exactly one item: `--record`,
     `--settle`'s pending-clarification write and its close all resolve the
     item the same way before touching it (dd-tracker.md Sec3.3, "both entry
@@ -156,7 +187,7 @@ def resolve_or_create(client, item, status, card=None):
         client.create(fields)
         canonical, newer = client.find(thread)
     converge(client, canonical, newer)
-    return canonical["id"]
+    return canonical
 
 
 def record(client, root, op_id):
@@ -170,8 +201,9 @@ def record(client, root, op_id):
         print("refused tracker-sync --record %s: %s" % (op_id, error), file=sys.stderr)
         return 2
     card = find_card("queues", op_id) or {}
-    canonical_id = resolve_or_create(client, item, "In progress", card)
-    write_marker(root / op_id / RECORDED, str(canonical_id))
+    canonical = resolve_or_create(client, item, IN_PROGRESS, card)
+    reopen_if_needed(client, canonical)
+    write_marker(root / op_id / RECORDED, str(canonical["id"]))
     return 0
 
 
@@ -183,7 +215,7 @@ def pending(client, root, op_id, item):
     `Waiting on requester` once a clarifying question is the thing that
     actually went out."""
     card = find_card("queues", op_id) or {}
-    canonical_id = resolve_or_create(client, item, "Waiting on requester", card)
+    canonical_id = resolve_or_create(client, item, "Waiting on requester", card)["id"]
     client.update(canonical_id, {"status": "Waiting on requester"})
     write_marker(root / op_id / WAITING, str(canonical_id))
 
@@ -199,13 +231,35 @@ def close(client, root, op_id, item):
     outcome = report.get("body")
     outcome = outcome.strip() if isinstance(outcome, str) else ""
     status = "Resolved" if outcome else "Closed"
-    canonical_id = resolve_or_create(client, item, status, card)
+    canonical_id = resolve_or_create(client, item, status, card)["id"]
     fields = {"status": status}
     if outcome:
         fields["outcome"] = outcome
     client.update(canonical_id, fields)
-    shutil.rmtree(root / op_id / "evidence", ignore_errors=True)
+    # The marker goes first, and the evidence is removed after it. The other
+    # order strands the operation: with `evidence/` gone and no marker, the
+    # next pass would try to close it again, find no `item.json` to read, and
+    # refuse it forever. A failed removal is `remove_evidence`'s to retry.
     write_marker(root / op_id / CLOSED, str(canonical_id))
+    remove_evidence(root, op_id)
+
+
+def remove_evidence(root, op_id):
+    """Delete the operation's `evidence/` and keep every marker, so the chat
+    producer's `prior_operations` still counts this operation. A failure is
+    raised, not swallowed: a deletion that did not happen must not read as
+    complete, because the evidence holds the requester's message text."""
+    evidence = root / op_id / "evidence"
+    try:
+        shutil.rmtree(evidence)
+    except FileNotFoundError:
+        pass
+
+
+def cleanup_pending(workspace):
+    """A closed operation whose evidence is still on disk: the removal that
+    `close` began and a failure interrupted. No tracker call is needed."""
+    return (workspace / CLOSED).is_file() and (workspace / "evidence").exists()
 
 
 def settle(client, root):
@@ -220,6 +274,13 @@ def settle(client, root):
         op_id = workspace.name
         if not chat_evidence.OP_ID.fullmatch(op_id):
             continue
+        if cleanup_pending(workspace):
+            try:
+                remove_evidence(root, op_id)
+            except OSError as error:
+                print(str(error), file=sys.stderr)
+                print("settle-failed: %s" % op_id, file=sys.stderr)
+                status = 1
         needs_pending = (workspace / CLARIFY_SENT).is_file() and not (workspace / WAITING).is_file()
         needs_close = (workspace / FINAL_SENT).is_file() and not (workspace / CLOSED).is_file()
         if not (needs_pending or needs_close):
@@ -234,7 +295,7 @@ def settle(client, root):
                 pending(client, root, op_id, item)
             if needs_close:
                 close(client, root, op_id, item)
-        except tracker_client.TrackerError as error:
+        except (tracker_client.TrackerError, OSError) as error:
             print(str(error), file=sys.stderr)
             print("settle-failed: %s" % op_id, file=sys.stderr)
             status = 1
