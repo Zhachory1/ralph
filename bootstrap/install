@@ -132,7 +132,7 @@ repo_cache_profile() {
 # only from their staged evidence or have no tools by design, so never get it.
 knowledge_profile() {
     case "$1" in
-        orchestrator|author|builder|maintainer|researcher|reviewer|analyst|experimenter|auditor|watcher) return 0 ;;
+        orchestrator|author|builder|maintainer|researcher|reviewer|analyst|experimenter|auditor|watcher|librarian) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -259,30 +259,6 @@ if [ -n "${RALPH_OPENAI_API_KEY:-}" ]; then
     fi
 fi
 
-# The author, builder and maintainer push as the PR author, not as the reviewer:
-# maintain-pr ignores feedback from its own login. Profile-scoped GH_TOKEN
-# overrides the stack-wide review token and is forwarded into their sandboxes.
-if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
-    # The token travels as an env var to the exec, never on a command line.
-    docker exec -i -u hermes -e RALPH_MAINTAIN_TOKEN -e "RALPH_MAINTAIN_LOGIN=${RALPH_MAINTAIN_LOGIN:-}" \
-        "${RALPH_HERMES_CONTAINER:-ralph-hermes-1}" sh -eu -c '
-        for profile in ralph-maintainer ralph-builder ralph-author; do
-            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
-            [ -f "$f" ] || continue
-            tmp=$(mktemp "$f.XXXXXX")
-            grep -vE "^(GH_TOKEN|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))=" "$f" > "$tmp" || true
-            printf "GH_TOKEN=%s\n" "$RALPH_MAINTAIN_TOKEN" >> "$tmp"
-            if [ -n "$RALPH_MAINTAIN_LOGIN" ]; then
-                for k in AUTHOR COMMITTER; do
-                    printf "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s@users.noreply.github.com\n" \
-                        "$k" "$RALPH_MAINTAIN_LOGIN" "$k" "$RALPH_MAINTAIN_LOGIN" >> "$tmp"
-                done
-            fi
-            chmod 600 "$tmp" && mv "$tmp" "$f"
-        done'
-    echo "  author, builder and maintainer push with RALPH_MAINTAIN_TOKEN"
-fi
-
 # Agent-instruction files (AGENTS.md, CLAUDE.md, ...) need a human's
 # approval per write, and a card run has no human: the edit is refused even
 # when a reviewer asked for it (op3#17752). Opt-in per instance; on, the
@@ -389,6 +365,32 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
 fi
 rm -f "$SRC_TMP"
 
+# The author, builder, maintainer and librarian push as the PR author, not as the reviewer:
+# maintain-pr ignores feedback from its own login. Profile-scoped GH_TOKEN
+# overrides the stack-wide review token and is forwarded into their sandboxes.
+# This runs after the profile loop above: a profile created in this run has no
+# .env until then, and the loop below skips a profile whose .env is absent.
+if [ -n "${RALPH_MAINTAIN_TOKEN:-}" ]; then
+    # The token travels as an env var to the exec, never on a command line.
+    docker exec -i -u hermes -e RALPH_MAINTAIN_TOKEN -e "RALPH_MAINTAIN_LOGIN=${RALPH_MAINTAIN_LOGIN:-}" \
+        "${RALPH_HERMES_CONTAINER:-ralph-hermes-1}" sh -eu -c '
+        for profile in ralph-maintainer ralph-builder ralph-author ralph-librarian; do
+            f="${HERMES_HOME:-$HOME/.hermes}/profiles/$profile/.env"
+            [ -f "$f" ] || continue
+            tmp=$(mktemp "$f.XXXXXX")
+            grep -vE "^(GH_TOKEN|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))=" "$f" > "$tmp" || true
+            printf "GH_TOKEN=%s\n" "$RALPH_MAINTAIN_TOKEN" >> "$tmp"
+            if [ -n "$RALPH_MAINTAIN_LOGIN" ]; then
+                for k in AUTHOR COMMITTER; do
+                    printf "GIT_%s_NAME=%s\nGIT_%s_EMAIL=%s@users.noreply.github.com\n" \
+                        "$k" "$RALPH_MAINTAIN_LOGIN" "$k" "$RALPH_MAINTAIN_LOGIN" >> "$tmp"
+                done
+            fi
+            chmod 600 "$tmp" && mv "$tmp" "$f"
+        done'
+    echo "  author, builder, maintainer and librarian push with RALPH_MAINTAIN_TOKEN"
+fi
+
 # CI logs for the profiles that fix failing builds. Runs after the profiles
 # are created, so a fresh install gets it too (#107 review). Only the maintainer and
 # builder get it, in their own .env, so it reaches only their sandboxes
@@ -425,7 +427,7 @@ if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
         # The top-level .env is the `default` profile, which the WebUI chat
         # uses unless a Ralph profile is picked; it reads like the others.
         for f in "${HERMES_HOME:-$HOME/.hermes}"/.env "${HERMES_HOME:-$HOME/.hermes}"/profiles/ralph-*/.env; do
-            case "$f" in */ralph-maintainer/*|*/ralph-builder/*|*/ralph-author/*) continue ;; esac
+            case "$f" in */ralph-maintainer/*|*/ralph-builder/*|*/ralph-author/*|*/ralph-librarian/*) continue ;; esac
             [ -f "$f" ] || continue
             tmp=$(mktemp "$f.XXXXXX")
             rc=0

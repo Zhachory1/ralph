@@ -164,6 +164,149 @@ class ReviewSpacingTests(unittest.TestCase):
         self.assertEqual(0, self.admitted({"1" * 40: self.ago(1)}))
 
 
+class ReviewGraphsStatusTests(unittest.TestCase):
+    """The real review_graphs, against a fake board. A synthesis card that is
+    blocked (a lens returned malformed output and needs a human) never
+    finishes on its own, so counting it as in flight starved every later head
+    of the PR: PR #132 was never reviewed again until the card was archived."""
+
+    def graphs(self, *cards):
+        import json
+        loader = importlib.machinery.SourceFileLoader("dr_real", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("dr_real", loader)
+        real = importlib.util.module_from_spec(spec)
+        loader.exec_module(real)
+        board = json.dumps({"tasks": [
+            {"title": f"Synthesize review o/r#7 @ {sha}", "status": status}
+            for sha, status in cards]})
+        done = mock.Mock(returncode=0, stdout=board)
+        with mock.patch.object(real.subprocess, "run", return_value=done):
+            return real.review_graphs("queues", "o/r", 7)
+
+    def test_a_running_synthesis_is_in_flight(self):
+        self.assertEqual(({"aaaaaaaa"}, True), self.graphs(("aaaaaaaa", "running")))
+
+    def test_a_ready_synthesis_is_in_flight(self):
+        self.assertTrue(self.graphs(("aaaaaaaa", "ready"))[1])
+
+    def test_a_blocked_synthesis_is_not_in_flight(self):
+        heads, running = self.graphs(("aaaaaaaa", "blocked"))
+        self.assertFalse(running)
+
+    def test_a_blocked_synthesis_still_counts_as_a_graph_for_its_own_head(self):
+        """The same head is not rebuilt behind a human's back; only a newer one proceeds."""
+        heads, _ = self.graphs(("aaaaaaaa", "blocked"))
+        self.assertIn("aaaaaaaa", heads)
+
+    def test_done_and_archived_are_not_in_flight(self):
+        self.assertFalse(self.graphs(("aaaaaaaa", "done"), ("bbbbbbbb", "archived"))[1])
+
+    def test_a_blocked_card_does_not_hide_a_running_one(self):
+        self.assertTrue(self.graphs(("aaaaaaaa", "blocked"), ("bbbbbbbb", "running"))[1])
+
+
+def load_real_discover():
+    loader = importlib.machinery.SourceFileLoader("dr_real2", str(SCRIPT))
+    spec = importlib.util.spec_from_loader("dr_real2", loader)
+    real = importlib.util.module_from_spec(spec)
+    loader.exec_module(real)
+    return real
+
+
+class StaleBlockedSynthesisTests(unittest.TestCase):
+    """A blocked synthesis card for an older head stays resumable. Unblocking
+    it later would run a second review for one PR, so admitting a newer head
+    archives it (PR #140 review). Same-head and in-flight cards are left alone."""
+
+    HEAD = "b" * 40
+
+    def card(self, id_, sha, status):
+        return {"id": id_, "title": f"Synthesize review o/r#7 @ {sha}", "status": status}
+
+    def stale(self, *cards):
+        import json
+        real = load_real_discover()
+        board = mock.Mock(returncode=0, stdout=json.dumps({"tasks": list(cards)}))
+        with mock.patch.object(real.subprocess, "run", return_value=board):
+            return real.stale_blocked_synthesis("queues", "o/r", 7, self.HEAD)
+
+    def test_a_blocked_card_for_an_older_head_is_stale(self):
+        self.assertEqual(["t_old"], self.stale(self.card("t_old", "aaaaaaaa", "blocked")))
+
+    def test_a_blocked_card_for_the_current_head_is_kept(self):
+        self.assertEqual([], self.stale(self.card("t_cur", "bbbbbbbb", "blocked")))
+
+    def test_running_ready_done_and_archived_cards_are_kept(self):
+        cards = [self.card(f"t_{s}", "aaaaaaaa", s) for s in ("running", "ready", "todo", "done", "archived")]
+        self.assertEqual([], self.stale(*cards))
+
+    def test_another_prs_blocked_card_is_kept(self):
+        other = {"id": "t_x", "title": "Synthesize review o/r#8 @ aaaaaaaa", "status": "blocked"}
+        self.assertEqual([], self.stale(other))
+
+    def test_an_unreadable_board_finds_nothing_to_archive(self):
+        real = load_real_discover()
+        with mock.patch.object(real.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+            self.assertEqual([], real.stale_blocked_synthesis("queues", "o/r", 7, self.HEAD))
+
+
+class ArchiveOnAdmissionTests(unittest.TestCase):
+    """Wired into main: archived after the new head's graph is built, not before."""
+
+    def run_main(self, stale_ids, build_rc=0, archive_rc=0):
+        import sys
+        calls = []
+
+        def fake_run(argv, **kw):
+            joined = " ".join(argv)
+            calls.append(joined)
+            if "build-review-graph" in joined:
+                return mock.Mock(returncode=build_rc, stdout="", stderr="boom" if build_rc else "")
+            if " archive " in joined:
+                return mock.Mock(returncode=archive_rc, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[fake_pr("a/repo", 1)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
+                mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch.object(discover_reviews, "stale_blocked_synthesis", return_value=stale_ids), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real"]
+            with mock.patch.object(sys, "argv", argv):
+                rc = discover_reviews.main()
+        return rc, calls
+
+    def archives(self, calls):
+        return [c for c in calls if " kanban " in c and " archive " in c]
+
+    def test_stale_blocked_cards_are_archived_once_the_new_graph_is_built(self):
+        rc, calls = self.run_main(["t_old1", "t_old2"])
+        self.assertEqual(0, rc)
+        archive = self.archives(calls)
+        self.assertEqual(1, len(archive))
+        self.assertTrue(archive[0].endswith("archive t_old1 t_old2"))
+        build = next(i for i, c in enumerate(calls) if "build-review-graph" in c)
+        self.assertGreater(calls.index(archive[0]), build)
+
+    def test_nothing_is_archived_when_there_is_nothing_stale(self):
+        _, calls = self.run_main([])
+        self.assertEqual([], self.archives(calls))
+
+    def test_nothing_is_archived_when_the_new_graph_failed_to_build(self):
+        _, calls = self.run_main(["t_old"], build_rc=1)
+        self.assertEqual([], self.archives(calls))
+
+    def test_a_failed_archive_does_not_fail_discovery(self):
+        rc, _ = self.run_main(["t_old"], archive_rc=1)
+        self.assertEqual(0, rc)
+
+
 class PerRunCapTests(unittest.TestCase):
     """The one remaining admission bound: how many PRs one invocation can
     build, regardless of how many gh search prs returns."""

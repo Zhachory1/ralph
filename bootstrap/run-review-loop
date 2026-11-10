@@ -108,15 +108,26 @@ while true; do
             && touch "$stamp" || echo "review loop: cleanup returned $?" >&2
     fi
 
-    # Knowledge index refresh (#121), at most hourly, when the service runs.
-    # A failed refresh keeps the old index; the next hour retries.
+    # Knowledge index refresh (#121, #130), at most hourly, or sooner when the
+    # docs repository's default branch has moved (dd-ralph-librarian 3.4). A
+    # failed refresh leaves .knowledge-head unchanged, so the next poll
+    # retries instead of recording a head it never actually indexed.
     kstamp="$WORK/.knowledge-stamp"
+    khead="$WORK/.knowledge-head"
     kc="${RALPH_HERMES_CONTAINER%-hermes-1}-knowledge-1"
-    if [ -z "$(find "$kstamp" -mmin -60 2>/dev/null)" ] \
-            && [ "$(docker inspect -f '{{.State.Running}}' "$kc" 2>/dev/null)" = true ]; then
-        touch "$kstamp"
-        docker exec -e GH_TOKEN -e "KNOWLEDGE_REPO=${RALPH_DOCS_REPO:-}" "$kc" /ralph/bootstrap/refresh-knowledge \
-            || echo "review loop: knowledge refresh returned $?" >&2
+    if [ "$(docker inspect -f '{{.State.Running}}' "$kc" 2>/dev/null)" = true ]; then
+        remote_head=""
+        [ -n "${RALPH_DOCS_REPO:-}" ] \
+            && remote_head=$(gh api "repos/$RALPH_DOCS_REPO/commits/HEAD" --jq .sha 2>/dev/null)
+        if [ -z "$(find "$kstamp" -mmin -60 2>/dev/null)" ] \
+                || { [ -n "$remote_head" ] && [ "$remote_head" != "$(cat "$khead" 2>/dev/null)" ]; }; then
+            touch "$kstamp"
+            if docker exec -e GH_TOKEN -e "KNOWLEDGE_REPO=${RALPH_DOCS_REPO:-}" "$kc" /ralph/bootstrap/refresh-knowledge; then
+                [ -n "$remote_head" ] && printf '%s' "$remote_head" > "$khead"
+            else
+                echo "review loop: knowledge refresh returned $?" >&2
+            fi
+        fi
     fi
 
     # --once: one pass now instead of waiting up to INTERVAL for the next,
