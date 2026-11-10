@@ -268,17 +268,24 @@ def once(svc, allowed_spaces, container, root, allow_unseen_history, now=None):
     for space, message, verdict in scan(svc, allowed_spaces, now=now):
         if not verdict:
             continue
-        op_id, staged = stage(svc, root, space, message, allow_unseen_history)
-        if not staged:
-            continue
         # The card is created once per operation, recorded by `.card-created`
         # written only after a successful create. Without it, a create that
         # failed after staging would be skipped on every later scan (the
         # directory exists), and the message would never reach the maintainer.
         # The create is itself idempotent on the operation id, so retrying it
         # cannot make a second card.
-        marker = root / op_id / ".card-created"
+        #
+        # The marker is checked BEFORE staging, not after: once the card exists
+        # the operation is the sender's and tracker-sync's, and `--settle`
+        # removes `evidence/` after the final reply. A message still inside the
+        # scan window would otherwise be staged afresh (a thread read, and the
+        # requester's text written back to disk) for `--settle` to delete again
+        # every cycle.
+        marker = root / operation_id(message.get("name", "")) / ".card-created"
         if marker.exists():
+            continue
+        op_id, staged = stage(svc, root, space, message, allow_unseen_history)
+        if not staged:
             continue
         created = create_card(container, op_id)
         if created.returncode:
