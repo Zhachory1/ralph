@@ -84,11 +84,26 @@ def command(argv):
         return subprocess.CompletedProcess(argv, 124, "", "timed out after 60s")
 
 
+def parse_send_switch(raw):
+    """CHAT_SEND (§4.8, dd-chat.md:564-569, D9): absent means on (P1). An
+    unrecognized value is treated as on and printed once -- silently going
+    quiet is the failure this switch exists to prevent."""
+    if raw is None:
+        return True
+    value = raw.strip().lower()
+    if value in ("0", "false", "off", "no"):
+        return False
+    if value in ("1", "true", "on", "yes"):
+        return True
+    print(f"unrecognized CHAT_SEND value {raw!r}; treating it as on", file=sys.stderr)
+    return True
+
+
 def instance_config(path):
     values = {}
     for line in path.read_text().splitlines():
         if line.startswith(("RALPH_INSTANCE=", "RALPH_WORKSPACES=", "CHAT_ROUTE_SPACES=",
-                             "RALPH_TRACKER_HOST=")):
+                             "RALPH_TRACKER_HOST=", "CHAT_SEND=")):
             key, value = line.split("=", 1)
             values[key] = value.strip().strip("'\"")
     instance = values["RALPH_INSTANCE"]
@@ -97,7 +112,9 @@ def instance_config(path):
             or len(spaces) > 8 or any(not SPACE.fullmatch(space) for space in spaces):
         raise ValueError("invalid Chat pilot configuration")
     root = (path.parent / values["RALPH_WORKSPACES"] / "chat-inbox").resolve()
-    return instance + "-hermes-1", root, spaces, values.get("RALPH_TRACKER_HOST") or None
+    send_enabled = parse_send_switch(values.get("CHAT_SEND"))
+    return (instance + "-hermes-1", root, spaces, values.get("RALPH_TRACKER_HOST") or None,
+            send_enabled)
 
 
 def operation_of(task):
@@ -245,12 +262,32 @@ def mark(root, op_id, kind):
     os.close(fd)
 
 
+def hold(root, op_id, kind):
+    """A reply held by the send switch (§4.8, dd-chat.md:581-595) writes this
+    marker in place of the one `mark()` would have written, through the same
+    `O_EXCL` open, so the loop stays bounded at one attempt per operation and
+    kind instead of re-handling it every scan."""
+    fd = os.open(root / op_id / f".held-{kind}", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+
+
 def sent(root, op_id, kind):
     # A thread already answered before markers became per kind carries only the
     # legacy `.reply-sent`; it satisfies every reply kind so no reply resends.
     if kind in REPLY_MARKERS.values() and (root / op_id / MARKERS["reply"]).is_file():
         return True
     return (root / op_id / MARKERS[kind]).is_file()
+
+
+def held(root, op_id, kind):
+    return (root / op_id / f".held-{kind}").is_file()
+
+
+def answered(root, op_id, kind):
+    """A sent or a held marker both mean "nothing to do here" for this
+    operation and kind (dd-chat.md:589-591): sent because the reply already
+    went out, held because the switch already decided not to send it."""
+    return sent(root, op_id, kind) or held(root, op_id, kind)
 
 
 @contextlib.contextmanager
@@ -330,7 +367,7 @@ def block_and_alert(container, board, task_id, root, op_id, kind, reason, block=
         print(f"could not record Chat alert sentinel for {op_id}/{kind}", file=sys.stderr)
 
 
-def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
+def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, send_enabled=True):
     """0 done or nothing to send, 1 retryable failure, 2 refused."""
     op_id = kind = None
     try:
@@ -363,7 +400,19 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
                 return 0
             kind = "final"
             body = refuse_unsendable(text(metadata["body"]), tracker_host)
-            if not sent(root, op_id, "ack"):
+            # The switch is read before this check (dd-chat.md:597-603): a
+            # final is refused for a missing acknowledgement only while the
+            # switch is on. Off, a held final is held, not refused -- every
+            # acknowledgement of the pilot week is held too, and refusing each
+            # final against them would block and alert once per card for
+            # nothing a requester did.
+            # An already-answered final (sent, or held while the switch was
+            # off) has nothing left to decide. Without this, flipping the
+            # switch on and calling `--task` for a held final would fail the
+            # ack check below and block a card that is correctly finished.
+            if answered(root, op_id, "final"):
+                return 0
+            if send_enabled and not sent(root, op_id, "ack"):
                 raise Refused("final response before the request was acknowledged")
         item = destination(root, op_id, allowed_spaces)
     except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
@@ -376,7 +425,7 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
 
     space, thread = item["space"], item["thread"]
     with thread_lock(root, thread):
-        if sent(root, op_id, kind):
+        if answered(root, op_id, kind):
             return 0
         if kind in CEILINGS and thread_count(root, op_id, item, kind) >= CEILINGS[kind]:
             reason = f"{kind} ceiling reached for this thread"
@@ -401,6 +450,19 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
                 block_and_alert(container, board, task_id, root, op_id, kind, reason,
                                 block=False)
                 return 1
+        if not send_enabled:
+            # A held reply is not a failure: it must neither block nor alert
+            # as one (§4.8). `mark()` never runs, so the ceilings stay exact.
+            try:
+                hold(root, op_id, kind)
+            except FileExistsError:
+                pass
+            except OSError:
+                reason = f"Chat {kind} held but not recorded; retry is safe"
+                print(reason, file=sys.stderr)
+                return 1
+            print(f"Chat {kind} held for {task_id}")
+            return 0
         if not post(space, thread, body, kind, op_id):
             reason = f"Chat {kind} failed for {task_id}; retry reuses the same ids"
             print(reason, file=sys.stderr)
@@ -423,7 +485,7 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
 
 def scan(instance_env):
     try:
-        container, root, allowed_spaces, tracker_host = instance_config(instance_env)
+        container, root, allowed_spaces, tracker_host, send_enabled = instance_config(instance_env)
     except (OSError, ValueError, KeyError):
         print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
@@ -446,12 +508,14 @@ def scan(instance_env):
                 op_id = operation_of(task)
             except Refused:
                 continue
-            if board == "ralph" and sent(root, op_id, "final"):
+            if board == "ralph" and answered(root, op_id, "final"):
                 continue
-            if board == "queues" and (sent(root, op_id, "ack") or sent(root, op_id, "reply")
-                                       or sent(root, op_id, "clarify") or sent(root, op_id, "decline")):
+            if board == "queues" and (answered(root, op_id, "ack") or answered(root, op_id, "reply")
+                                       or answered(root, op_id, "clarify")
+                                       or answered(root, op_id, "decline")):
                 continue
-            if handle(container, root, allowed_spaces, board, task["id"], tracker_host) == 1:
+            if handle(container, root, allowed_spaces, board, task["id"], tracker_host,
+                      send_enabled) == 1:
                 status = 1
     return status
 
@@ -468,8 +532,8 @@ def main():
         parser.error("choose exactly one of --task or --scan")
     if args.scan:
         return scan(args.instance_env)
-    container, root, allowed_spaces, tracker_host = instance_config(args.instance_env)
-    return handle(container, root, allowed_spaces, args.board, args.task, tracker_host)
+    container, root, allowed_spaces, tracker_host, send_enabled = instance_config(args.instance_env)
+    return handle(container, root, allowed_spaces, args.board, args.task, tracker_host, send_enabled)
 
 
 if __name__ == "__main__":
