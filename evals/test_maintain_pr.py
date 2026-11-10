@@ -353,6 +353,52 @@ class CircuitBreakerTests(unittest.TestCase):
         self.assertIn("human_digest: ", body)
 
 
+class MergeConflictTests(unittest.TestCase):
+    """op3#18609: a conflicted PR with no review feedback and green CI was
+    skipped as 'no actionable external feedback'."""
+
+    def run_main(self, *mergeable):
+        import sys
+        views = iter(mock.Mock(returncode=0, stdout=json.dumps(
+            {"headRefOid": "a" * 40, "headRefName": "b", "baseRefOid": "c" * 40,
+             "baseRefName": "main", "mergeable": m})) for m in mergeable)
+        calls = []
+
+        def fake_hermes(*args):
+            calls.append(args)
+            if "create" in args:
+                return mock.Mock(returncode=0, stdout=json.dumps({"id": "t_new"}))
+            return mock.Mock(returncode=0, stdout="[]")
+
+        empty = {"reviews": [], "threads": [], "checks": []}
+        with mock.patch.object(sys, "argv", ["maintain-pr", "--once", "--repo", "o/r",
+                                             "--pr", "1", "--login", "me"]), \
+                mock.patch.object(maintain_pr, "feedback_snapshot", return_value=empty), \
+                mock.patch.object(maintain_pr, "gh", side_effect=lambda *a: next(views)), \
+                mock.patch.object(maintain_pr.time, "sleep"), \
+                mock.patch.object(maintain_pr, "hermes", side_effect=fake_hermes):
+            self.assertEqual(0, maintain_pr.main())
+        return [c for c in calls if len(c) > 3 and c[3] == "create"]
+
+    def test_a_conflicted_pr_gets_a_round_that_names_the_conflict(self):
+        create = self.run_main("CONFLICTING")
+        self.assertEqual(1, len(create))
+        self.assertIn("merge_conflict: main @ " + "c" * 40, create[0][create[0].index("--body") + 1])
+
+    def test_a_mergeable_pr_with_no_feedback_is_still_skipped(self):
+        self.assertEqual([], self.run_main("MERGEABLE"))
+
+    def test_an_unknown_merge_state_is_read_once_more(self):
+        """GitHub computes mergeability lazily; the first read is often UNKNOWN."""
+        self.assertEqual(1, len(self.run_main("UNKNOWN", "CONFLICTING")))
+
+    def test_a_conflict_is_not_review_feedback(self):
+        """So the circuit breaker holds a conflict Ralph cannot resolve, as it does CI."""
+        snap = {"reviews": [], "threads": [],
+                "checks": [{"name": "merge-conflict", "head": "a", "base": "c"}]}
+        self.assertEqual("empty", maintain_pr.human_digest(snap))
+
+
 class HermesArgvTests(unittest.TestCase):
     """Same docker-exec bridge and the same HERMES_HOME fix as
     bootstrap/publish-review and bootstrap/discover-reviews."""
