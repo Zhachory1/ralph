@@ -387,6 +387,20 @@ class OnceIdempotencyTests(unittest.TestCase):
                                                    now=NOW))
         self.assertEqual(2, len(self.calls))   # one failed, one that landed, none after
 
+    def test_an_answered_operation_whose_evidence_was_removed_is_not_staged_again(self):
+        """tracker-sync --settle deletes `evidence/` once a final reply has gone
+        out. A message still inside the scan window must not be staged afresh:
+        that re-reads the thread, writes the requester's text back to disk, and
+        hands --settle something to delete again every cycle."""
+        import shutil
+        self.assertEqual(0, self.run_once())
+        op_id = self.producer.operation_id(self.message_name)
+        shutil.rmtree(self.root / op_id / "evidence")
+        self.assertTrue((self.root / op_id / ".card-created").is_file())
+        self.assertEqual(0, self.run_once())
+        self.assertFalse((self.root / op_id / "evidence").exists())
+        self.assertEqual(1, len(self.calls))
+
     def test_a_timeout_on_card_create_is_a_failed_result_not_an_exception(self):
         timed_out = subprocess.TimeoutExpired(["x"], 60)
         with patch.object(self.producer.subprocess, "run", side_effect=timed_out):
