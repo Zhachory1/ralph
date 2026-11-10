@@ -143,5 +143,72 @@ class PublishSkipTests(unittest.TestCase):
         _, record = self.run_pass([], 1)
         self.assertEqual([], record)
 
+
+class KnowledgeRefreshTests(unittest.TestCase):
+    """#130, dd-ralph-librarian 3.4: a moved docs head forces the refresh."""
+
+    def run_pass(self, remote_head, stamp_fresh, knowledge_head, refresh_rc=0):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            stub = d / "bin"
+            stub.mkdir()
+            work = d / "work"
+            work.mkdir()
+            calls = d / "calls"
+            (stub / "gh").write_text(
+                "#!/bin/sh\n"
+                'case "$*" in *commits/HEAD*) echo "$REMOTE_HEAD"; exit 0;; esac\n'
+                "exit 0\n")
+            # docker: `inspect` reports the knowledge container running;
+            # `exec ... refresh-knowledge` is recorded and exits $REFRESH_RC;
+            # any other `exec` (the done-synthesis list) answers empty.
+            (stub / "docker").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = inspect ] && { echo true; exit 0; }\n'
+                'case "$*" in\n'
+                '    *refresh-knowledge) echo "$*" >> "$CALLS"; exit "$REFRESH_RC";;\n'
+                "esac\n"
+                "echo '[]'\n")
+            (stub / "python3").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = -c ] && exec /usr/bin/python3 "$@"\n'
+                "exit 0\n")
+            (stub / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
+            for f in stub.iterdir():
+                f.chmod(0o755)
+            kstamp = work / ".knowledge-stamp"
+            khead = work / ".knowledge-head"
+            if stamp_fresh:
+                kstamp.touch()
+            if knowledge_head is not None:
+                khead.write_text(knowledge_head)
+            env = {"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": str(d), "CALLS": str(calls),
+                   "REMOTE_HEAD": remote_head, "REFRESH_RC": str(refresh_rc),
+                   "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
+                   "RALPH_REVIEW_ALLOW": "o/r", "RALPH_DOCS_REPO": "owner/docs"}
+            subprocess.run(["bash", str(SCRIPT)], env=env,
+                           capture_output=True, text=True, timeout=30)
+            refreshed = calls.exists()
+            return refreshed, (khead.read_text() if khead.exists() else None)
+
+    def test_differing_head_runs_refresh_even_when_stamp_fresh(self):
+        refreshed, head = self.run_pass(remote_head="new-sha", stamp_fresh=True,
+                                         knowledge_head="old-sha")
+        self.assertTrue(refreshed, "a moved docs head must force the refresh")
+        self.assertEqual("new-sha", head)
+
+    def test_matching_head_and_fresh_stamp_runs_nothing(self):
+        refreshed, head = self.run_pass(remote_head="same-sha", stamp_fresh=True,
+                                         knowledge_head="same-sha")
+        self.assertFalse(refreshed, "an unmoved head and a fresh stamp need no refresh")
+        self.assertEqual("same-sha", head)
+
+    def test_failed_refresh_leaves_head_unchanged_for_retry(self):
+        refreshed, head = self.run_pass(remote_head="new-sha", stamp_fresh=True,
+                                         knowledge_head="old-sha", refresh_rc=1)
+        self.assertTrue(refreshed)
+        self.assertEqual("old-sha", head, "a failed refresh must not record a head it never indexed")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
