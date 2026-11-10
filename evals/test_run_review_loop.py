@@ -214,7 +214,8 @@ class KnowledgeRefreshTests(unittest.TestCase):
 class LibrarianCardTests(unittest.TestCase):
     """#130, dd-ralph-librarian 2.1, 3.5: the review loop creates the weekly card."""
 
-    def run_pass(self, docs_repo="owner/docs", stamp=None, pr_heads="", create_rc=0):
+    def run_pass(self, docs_repo="owner/docs", stamp=None, pr_heads="", create_rc=0,
+                 gh_rc=0, lib_cards="[]", list_rc=0):
         with tempfile.TemporaryDirectory() as d:
             d = pathlib.Path(d)
             stub = d / "bin"
@@ -225,7 +226,7 @@ class LibrarianCardTests(unittest.TestCase):
             # gh: `pr list` answers the stubbed open-pull-request heads.
             (stub / "gh").write_text(
                 "#!/bin/sh\n"
-                'case "$*" in "pr list "*) printf "%s" "$PR_HEADS"; exit 0;; esac\n'
+                'case "$*" in "pr list "*) printf "%s" "$PR_HEADS"; exit "$GH_RC";; esac\n'
                 "exit 0\n")
             # docker: `inspect` reports the knowledge container not running,
             # so that block does nothing here; `create` is recorded and
@@ -236,6 +237,7 @@ class LibrarianCardTests(unittest.TestCase):
                 '[ "$1" = inspect ] && { echo false; exit 0; }\n'
                 'case "$*" in\n'
                 '    *" create "*) echo "$*" >> "$CALLS"; exit "$CREATE_RC";;\n'
+                '    *"assignee ralph-librarian"*) printf "%s" "$LIB_CARDS"; exit "$LIST_RC";;\n'
                 "esac\n"
                 "echo '[]'\n")
             (stub / "python3").write_text(
@@ -254,6 +256,7 @@ class LibrarianCardTests(unittest.TestCase):
                 os.utime(lstamp, (old, old))
             env = {"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": str(d), "CALLS": str(calls),
                    "PR_HEADS": pr_heads, "CREATE_RC": str(create_rc),
+                   "GH_RC": str(gh_rc), "LIB_CARDS": lib_cards, "LIST_RC": str(list_rc),
                    "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
                    "RALPH_REVIEW_ALLOW": "o/r"}
             if docs_repo is not None:
@@ -287,6 +290,56 @@ class LibrarianCardTests(unittest.TestCase):
     def test_docs_repo_unset_creates_no_card(self):
         created, _ = self.run_pass(docs_repo=None, stamp=None)
         self.assertEqual([], created)
+
+    def test_a_failed_pr_query_skips_the_poll_instead_of_reading_as_no_overlap(self):
+        created, stamped = self.run_pass(stamp=None, gh_rc=1)
+        self.assertEqual([], created, "a guard that could not be read must not create a card")
+        self.assertFalse(stamped)
+
+    def test_a_failed_board_query_skips_the_poll(self):
+        created, stamped = self.run_pass(stamp=None, list_rc=1)
+        self.assertEqual([], created)
+        self.assertFalse(stamped)
+
+    def test_a_queued_or_running_librarian_card_blocks_a_second_one(self):
+        for status in ("ready", "running", "blocked", "todo"):
+            with self.subTest(status=status):
+                created, _ = self.run_pass(
+                    stamp=None, lib_cards='[{"id": "t_1", "status": "%s"}]' % status)
+                self.assertEqual([], created, "a card with no PR yet is still a run in flight")
+
+    def test_a_finished_librarian_card_does_not_block_the_next_week(self):
+        created, stamped = self.run_pass(
+            stamp="week-old", lib_cards='[{"id": "t_1", "status": "done"}]')
+        self.assertEqual(1, len(created))
+        self.assertTrue(stamped)
+
+    def test_the_pr_query_reads_past_the_default_thirty(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = pathlib.Path(d) / "gh.log"
+            stub = pathlib.Path(d) / "bin"
+            stub.mkdir()
+            (stub / "gh").write_text(
+                "#!/bin/sh\n"
+                'case "$*" in "pr list "*) echo "$*" >> "%s"; exit 0;; esac\nexit 0\n' % log)
+            (stub / "docker").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = inspect ] && { echo false; exit 0; }\n'
+                "echo '[]'\n")
+            (stub / "python3").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = -c ] && exec /usr/bin/python3 "$@"\nexit 0\n')
+            (stub / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
+            for f in stub.iterdir():
+                f.chmod(0o755)
+            work = pathlib.Path(d) / "work"
+            work.mkdir()
+            subprocess.run(["bash", str(SCRIPT)],
+                           env={"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": d,
+                                "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
+                                "RALPH_REVIEW_ALLOW": "o/r", "RALPH_DOCS_REPO": "owner/docs"},
+                           capture_output=True, text=True, timeout=30)
+            self.assertIn("--limit 100", log.read_text(), "the default 30 can miss an open librarian PR")
 
     def test_failed_create_leaves_stamp_untouched(self):
         created, stamped = self.run_pass(stamp=None, create_rc=1)
