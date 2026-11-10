@@ -57,6 +57,12 @@ NAME_RE = re.compile(r"[a-z][a-z0-9_-]*")
 
 
 def load(path: str) -> dict:
+    # No overlay at all (the checkout, or just mcp.json, removed) is the same
+    # as an empty grant: every server this script previously marked must
+    # still come down, not be skipped because there is nothing to read
+    # (#134 review).
+    if not path or not pathlib.Path(path).is_file():
+        return {}
     servers = json.loads(pathlib.Path(path).read_text())
     if not isinstance(servers, dict):
         raise SystemExit("mcp.json: must be a JSON object")
@@ -76,6 +82,18 @@ def load(path: str) -> dict:
         config = spec.get("config", {})
         if not isinstance(config, dict):
             raise SystemExit(f"mcp.json: {name}: config must be an object")
+        # Output is one directive per line, read with bash `read -r`; a value
+        # with an embedded newline would print as more than one line and be
+        # read back as extra, unintended directives (#134 review). No real
+        # MCP server setting (a URL, a port, a flag) needs one.
+        for key, value in config.items():
+            if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", key):
+                raise SystemExit(f"mcp.json: {name}: config key {key!r} must be a plain identifier")
+            if isinstance(value, str) and "\n" in value:
+                raise SystemExit(f"mcp.json: {name}.{key}: config values may not contain a newline")
+        for tool in tools:
+            if "\n" in tool:
+                raise SystemExit(f"mcp.json: {name}: a tool name may not contain a newline")
     return servers
 
 

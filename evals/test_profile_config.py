@@ -446,6 +446,15 @@ class VoiceTests(unittest.TestCase):
         for gone in ("mcp_servers:\n", "OVERLAY_TAG", "wmc.py --knowledge", "wmc.py --overlay"):
             self.assertNotIn(gone, install)
 
+    def test_named_mcp_set_runs_even_with_no_overlay_configured(self):
+        """#134 review: an early return on an empty OVERLAY_MCP skipped
+        cleanup of a server marked by a since-removed overlay. The cleanup
+        pass must run unconditionally; overlay-grants.py decides what (if
+        anything) needs unsetting."""
+        install = (ROOT / "bootstrap" / "install").read_text()
+        body = install[install.index("named_mcp_set() {"):install.index('OVERLAY_MCP" "$base" "$current"')]
+        self.assertNotIn('[ -n "$OVERLAY_MCP" ] || return 0', body)
+
     def test_default_and_named_profiles_both_get_knowledge_and_overlay_calls(self):
         install = (ROOT / "bootstrap" / "install").read_text()
         self.assertIn('knowledge_set "-p $name"', install)

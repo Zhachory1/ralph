@@ -69,6 +69,18 @@ class DirectivesTests(unittest.TestCase):
         out = og.directives(og.load(path), "researcher", current)
         self.assertEqual(["unset mcp_servers.a"], out)
 
+    def test_the_overlay_being_removed_entirely_still_cleans_up(self):
+        """#134 review: install must not skip the cleanup pass just because
+        there is no mcp.json at all right now -- load('') is the same as an
+        empty grant, not 'nothing to do'."""
+        current = {"a": {"url": "old", "_overlay": True}, "mine": {"url": "owner"}}
+        out = og.directives(og.load(""), "researcher", current)
+        self.assertEqual(["unset mcp_servers.a"], out)
+
+    def test_a_missing_file_path_behaves_like_an_empty_grant(self):
+        out = og.directives(og.load("/no/such/path.json"), "researcher", {})
+        self.assertEqual([], out)
+
     def test_a_hand_added_server_is_never_unset(self):
         """Only a server this script itself marked (`_overlay: true`) is ever
         a candidate for removal; anything else is the owner's."""
@@ -124,6 +136,16 @@ class ValidationTests(unittest.TestCase):
 
     def test_rejects_non_object_config(self):
         self.check_rejects({"a": {"profiles": ["researcher"], "config": "not an object", "tools": ["x"]}})
+
+    def test_rejects_newlines_in_config_values_and_tool_names(self):
+        """#134 review: output is one directive per line, read with bash
+        `read -r`; a newline embedded in a value would print as extra lines
+        and be read back as unintended additional directives."""
+        self.check_rejects({"a": {"profiles": ["researcher"],
+                                  "config": {"note": "line one\nset mcp_servers.evil.url x"},
+                                  "tools": ["x"]}})
+        self.check_rejects({"a": {"profiles": ["researcher"], "config": {},
+                                  "tools": ["x\nunset mcp_servers.knowledge"]}})
 
     def test_accepts_a_well_formed_file(self):
         path = write({"team-memory": {"profiles": ["researcher", "default"],
