@@ -9,9 +9,16 @@ Three replies, each at most once per request:
 The destination always comes from the staged intake evidence for the request's
 operation id, never from agent-written text. Uses the host's encrypted Google
 Chat credential through gchat.py; no credential reaches Hermes or a card.
+
+Per-thread ceilings (CEILINGS) bound how many times one request's thread can be
+messaged; a breach blocks the card and alerts (block_and_alert()) instead of
+failing silently. A thread lock (thread_lock()) serializes the count and the
+send for every operation sharing a thread.
 """
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -19,6 +26,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -26,11 +35,34 @@ import chat_evidence
 
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
+URL = re.compile(r"https?://[^\s<>\"')\]]+")
+GITHUB_PULL = re.compile(r"\Ahttps://github\.com/([\w.-]+)/([\w.-]+)/pull/\d+/?\Z")
+GITHUB_REPO = re.compile(r"\Ahttps://github\.com/([\w.-]+)/([\w.-]+)/?\Z")
+TRACKER_ISSUE_PATH = re.compile(r"/issues/\d+\b")
+BARE_TRACKER_ISSUE = re.compile(r"(?<![\w#])#\d+\b")
+# Known provider token shapes, plus a generic "key/token/password/secret: value"
+# assignment -- the content bound is a refusal rule, not a scanner that proves
+# a string is a real credential (SOUL.md:29, dd-chat.md:488-492).
+CREDENTIAL = re.compile(
+    r"\bgh[oprsu]_[A-Za-z0-9]{20,}\b"
+    r"|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
+    r"|\bsk-[A-Za-z0-9]{20,}\b"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\bxox[baprs]-[A-Za-z0-9-]{10,}\b"
+    r"|\bAIza[0-9A-Za-z_-]{35}\b"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,}",
+    re.IGNORECASE,
+)
 MARKERS = {"ack": ".receipt-sent", "reply": ".reply-sent", "clarify": ".clarify-sent",
            "decline": ".decline-sent", "final": ".final-sent"}
 # `reply_kind` picks one of these three reply markers; an unrecognized or absent
 # `reply_kind` falls back to the legacy "reply" marker.
 REPLY_MARKERS = {"clarify": "clarify", "decline": "decline", "answer": "reply"}
+# Per-thread ceilings (dd-chat.md Sec4.4): at most this many sent markers of each
+# kind, counted across one request's whole thread. `reply` (a plain, uncapped
+# answer) is deliberately absent.
+CEILINGS = {"clarify": 2, "decline": 1, "ack": 1, "final": 1}
 MAX_TEXT = 4000
 # A long reply is split into at most this many messages, in order.
 MAX_PARTS = 5
@@ -41,13 +73,22 @@ class Refused(ValueError):
 
 
 def command(argv):
-    return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    """Run one command. A timeout is a failed result (124), never an exception:
+    a hung `gchat.py send` or `docker exec` must fail its own operation and let
+    the scan carry on with the next, not abort the whole pass. A send that timed
+    out after leaving is safe to retry: every part keeps fixed ids, so the Chat
+    API dedupes it."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", "timed out after 60s")
 
 
 def instance_config(path):
     values = {}
     for line in path.read_text().splitlines():
-        if line.startswith(("RALPH_INSTANCE=", "RALPH_WORKSPACES=", "CHAT_ROUTE_SPACES=")):
+        if line.startswith(("RALPH_INSTANCE=", "RALPH_WORKSPACES=", "CHAT_ROUTE_SPACES=",
+                             "RALPH_TRACKER_HOST=")):
             key, value = line.split("=", 1)
             values[key] = value.strip().strip("'\"")
     instance = values["RALPH_INSTANCE"]
@@ -56,7 +97,7 @@ def instance_config(path):
             or len(spaces) > 8 or any(not SPACE.fullmatch(space) for space in spaces):
         raise ValueError("invalid Chat pilot configuration")
     root = (path.parent / values["RALPH_WORKSPACES"] / "chat-inbox").resolve()
-    return instance + "-hermes-1", root, spaces
+    return instance + "-hermes-1", root, spaces, values.get("RALPH_TRACKER_HOST") or None
 
 
 def operation_of(task):
@@ -68,12 +109,12 @@ def operation_of(task):
 
 
 def destination(root, op_id, allowed_spaces):
-    """The original space and thread, read only from staged intake evidence."""
+    """The original space, thread and staged item, read only from staged
+    intake evidence, never from agent text."""
     item = chat_evidence.read_item(root, op_id)
-    space = item["space"]
-    if space not in allowed_spaces:
+    if item["space"] not in allowed_spaces:
         raise Refused("Chat destination or sender is not authorized")
-    return space, item["thread"]
+    return item
 
 
 def decision_of(detail):
@@ -112,6 +153,71 @@ def parts(body):
     return [c for c in chunks if c.strip()]
 
 
+def has_tracker_reference(body, tracker_host):
+    """A work-tracker reference (R1, prd.md:594-595): the instance's tracker
+    host when RALPH_TRACKER_HOST is set, an `/issues/<n>` path, or a bare
+    `#<n>`. The path and bare-issue patterns are host-agnostic by design: the
+    bound is a refusal rule, not a scanner that proves a string names this
+    request's own tracker item."""
+    if tracker_host and tracker_host in body:
+        return True
+    return bool(TRACKER_ISSUE_PATH.search(body) or BARE_TRACKER_ISSUE.search(body))
+
+
+def has_credential(body):
+    return bool(CREDENTIAL.search(body))
+
+
+def github_repo_is_public(owner, repo):
+    """One unauthenticated read: GET https://api.github.com/repos/<owner>/<repo>.
+    No token is sent, so the sender gains no repository credential; a non-200
+    (including an HTTPError for a private or missing repository) means "not
+    reachable", which refuses (R19, prd.md:597-598)."""
+    url = "https://api.github.com/repos/%s/%s" % (owner, repo)
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ralph-chat-reply"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                return False
+            data = json.loads(response.read())
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("private") is False
+
+
+def reachable(url):
+    """A URL qualifies only if provably public: a GitHub pull request or
+    repository URL, checked live against the unauthenticated API above.
+    Everything else never qualifies (R19, prd.md:597-598)."""
+    match = GITHUB_PULL.match(url) or GITHUB_REPO.match(url)
+    if not match:
+        return False
+    return github_repo_is_public(match.group(1), match.group(2))
+
+
+def refuse_unsendable(body, tracker_host):
+    """Run before any send of agent text -- `ack`, every `reply_kind`,
+    `final` (§4.5, dd-chat.md:475-511). A reply can quote a private
+    repository the requester cannot open, so this is a refusal in the
+    sender, not a trim. **The honest limit:** prose cannot be proven to come
+    from this request -- this catches references and links, not a sentence
+    that paraphrases a private document; that residual risk is accepted, not
+    designed away (D2)."""
+    if has_tracker_reference(body, tracker_host):
+        raise Refused("reply text names the work tracker")
+    if has_credential(body):
+        raise Refused("reply text looks like it carries a credential")
+    for url in URL.findall(body):
+        # A link at the end of a sentence carries the sentence's punctuation:
+        # "see https://github.com/o/r/pull/1." must be checked as the link, not
+        # refused for a trailing dot. Only these characters, and only at the end.
+        url = url.rstrip(".,;:!?")
+        if not reachable(url):
+            raise Refused("reply text links to something the requester cannot already open")
+    return body
+
+
 def post(space, thread, body, kind, op_id):
     """Each part keeps fixed ids across retries, so the Chat API dedupes a
     part that already went out and a retry resumes where it failed. Part 1
@@ -147,8 +253,86 @@ def sent(root, op_id, kind):
     return (root / op_id / MARKERS[kind]).is_file()
 
 
-def handle(container, root, allowed_spaces, board, task_id):
+@contextlib.contextmanager
+def thread_lock(root, thread):
+    """An exclusive flock on a file named for the thread (dd-chat.md:453-468),
+    so two operations in the same thread never count or send at once. Per
+    thread, not per operation: several messages in one thread are separate
+    operations, and operation-scoped locks would never see each other."""
+    locks = root / ".locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(thread.encode()).hexdigest()
+    fd = os.open(locks / f"{digest}.lock", os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def thread_count(root, op_id, item, kind):
+    """Sent `kind` markers across this operation and every `prior_operations`
+    directory in its staged item -- never held markers, so a reply held by the
+    send switch cannot spend a ceiling."""
+    return sum(1 for op in (op_id, *item.get("prior_operations", []))
+               if (root / op / MARKERS[kind]).is_file())
+
+
+def notify(text):
+    """Best effort: an alert that fails to send must not stop the hold
+    (maintain-pr:303-305)."""
+    url = os.environ.get("RALPH_NOTIFY_URL") or os.environ.get("GCHAT_WEBHOOK_URL")
+    if not url:
+        print(f"notify (no webhook set): {text}", file=sys.stderr)
+        return
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, data=json.dumps({"text": text}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=15).close()
+    except Exception as exc:  # noqa: BLE001 -- best effort by design
+        print(f"notify failed: {exc}", file=sys.stderr)
+
+
+def block_and_alert(container, board, task_id, root, op_id, kind, reason, block=True):
+    """Tell the owner once per operation and kind, guarded by an
+    `.alerted-<kind>` sentinel (dd-chat.md:513-537).
+
+    `block=True` is for a REFUSAL: the card is blocked, so it leaves the
+    sender's `--status done` listing and is not tried again. `block=False` is
+    for a RETRYABLE failure (return 1): the card must stay `done`, because that
+    listing is exactly what the next scan retries from, and blocking it would
+    end the retry the alert is reporting. The design says both fire on a retry;
+    they cannot both hold, so a retry alerts and a refusal blocks and alerts.
+
+    The sentinel is written only after the action it guards has happened. A
+    block that failed leaves no sentinel, so the next scan tries it again;
+    writing the sentinel first would turn one failed `docker exec` into a card
+    that is never blocked and never reported."""
+    sentinel = root / op_id / f".alerted-{kind}"
+    if sentinel.exists():
+        return
+    if block:
+        blocked = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
+                           "--board", board, "block", task_id, reason])
+        if blocked.returncode:
+            print(f"could not block Chat card {task_id}: {blocked.stderr.strip()[:300]}",
+                  file=sys.stderr)
+            return
+    notify(f"Ralph chat {kind} for {task_id} ({op_id}): {reason}")
+    try:
+        fd = os.open(sentinel, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+    except FileExistsError:
+        pass
+    except OSError:
+        print(f"could not record Chat alert sentinel for {op_id}/{kind}", file=sys.stderr)
+
+
+def handle(container, root, allowed_spaces, board, task_id, tracker_host=None):
     """0 done or nothing to send, 1 retryable failure, 2 refused."""
+    op_id = kind = None
     try:
         shown = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
                          "--board", board, "show", task_id, "--json"])
@@ -167,51 +351,79 @@ def handle(container, root, allowed_spaces, board, task_id):
             if task["workspace_path"] != "/workspaces/chat-inbox/" + op_id:
                 raise Refused("Chat workspace differs from operation")
             if choice == "route":
-                kind, body = "ack", text(metadata.get("ack"))
+                kind = "ack"
+                body = refuse_unsendable(text(metadata.get("ack")), tracker_host)
             elif choice == "reply":
                 kind = REPLY_MARKERS.get(metadata.get("reply_kind"), "reply")
-                body = text(metadata["body"])
+                body = refuse_unsendable(text(metadata["body"]), tracker_host)
             else:
                 return 0
         else:
             if choice != "send":
                 return 0
-            kind, body = "final", text(metadata["body"])
+            kind = "final"
+            body = refuse_unsendable(text(metadata["body"]), tracker_host)
             if not sent(root, op_id, "ack"):
                 raise Refused("final response before the request was acknowledged")
-        if sent(root, op_id, kind):
-            return 0
-        space, thread = destination(root, op_id, allowed_spaces)
+        item = destination(root, op_id, allowed_spaces)
     except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
         reason = str(error) if isinstance(error, (Refused, chat_evidence.Invalid)) \
             else "invalid bound decision or destination"
         print(f"refused Chat {task_id}: {reason}", file=sys.stderr)
+        if op_id and kind:
+            block_and_alert(container, board, task_id, root, op_id, kind, reason)
         return 2
 
-    if kind == "ack":
-        routed = command(["docker", "exec", "-u", "hermes", container, "python3",
-                          "/ralph/bootstrap/chat-route", "--task", task_id,
-                          "--work-root", "/workspaces/chat-inbox"])
-        if routed.returncode or not routed.stdout.startswith("routed: t_"):
-            print("cannot confirm orchestrator card; acknowledgement not sent", file=sys.stderr)
+    space, thread = item["space"], item["thread"]
+    with thread_lock(root, thread):
+        if sent(root, op_id, kind):
+            return 0
+        if kind in CEILINGS and thread_count(root, op_id, item, kind) >= CEILINGS[kind]:
+            reason = f"{kind} ceiling reached for this thread"
+            if kind == "ack":
+                # R6: held for the next scan, not refused -- the request keeps
+                # waiting rather than being told it cannot be acknowledged.
+                print(f"Chat {kind} held for {task_id}: {reason}", file=sys.stderr)
+                block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                                block=False)
+                return 1
+            print(f"refused Chat {task_id}: {reason}", file=sys.stderr)
+            block_and_alert(container, board, task_id, root, op_id, kind, reason)
+            return 2
+
+        if kind == "ack":
+            routed = command(["docker", "exec", "-u", "hermes", container, "python3",
+                              "/ralph/bootstrap/chat-route", "--task", task_id,
+                              "--work-root", "/workspaces/chat-inbox"])
+            if routed.returncode or not routed.stdout.startswith("routed: t_"):
+                reason = "cannot confirm orchestrator card; acknowledgement not sent"
+                print(reason, file=sys.stderr)
+                block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                                block=False)
+                return 1
+        if not post(space, thread, body, kind, op_id):
+            reason = f"Chat {kind} failed for {task_id}; retry reuses the same ids"
+            print(reason, file=sys.stderr)
+            block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                            block=False)
             return 1
-    if not post(space, thread, body, kind, op_id):
-        print(f"Chat {kind} failed for {task_id}; retry reuses the same ids", file=sys.stderr)
-        return 1
-    try:
-        mark(root, op_id, kind)
-    except FileExistsError:
-        pass
-    except OSError:
-        print(f"Chat {kind} sent but not recorded; retry is safe", file=sys.stderr)
-        return 1
-    print(f"Chat {kind} sent for {task_id}")
-    return 0
+        try:
+            mark(root, op_id, kind)
+        except FileExistsError:
+            pass
+        except OSError:
+            reason = f"Chat {kind} sent but not recorded; retry is safe"
+            print(reason, file=sys.stderr)
+            block_and_alert(container, board, task_id, root, op_id, kind, reason,
+                            block=False)
+            return 1
+        print(f"Chat {kind} sent for {task_id}")
+        return 0
 
 
 def scan(instance_env):
     try:
-        container, root, allowed_spaces = instance_config(instance_env)
+        container, root, allowed_spaces, tracker_host = instance_config(instance_env)
     except (OSError, ValueError, KeyError):
         print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
@@ -239,7 +451,7 @@ def scan(instance_env):
             if board == "queues" and (sent(root, op_id, "ack") or sent(root, op_id, "reply")
                                        or sent(root, op_id, "clarify") or sent(root, op_id, "decline")):
                 continue
-            if handle(container, root, allowed_spaces, board, task["id"]) == 1:
+            if handle(container, root, allowed_spaces, board, task["id"], tracker_host) == 1:
                 status = 1
     return status
 
@@ -256,8 +468,8 @@ def main():
         parser.error("choose exactly one of --task or --scan")
     if args.scan:
         return scan(args.instance_env)
-    container, root, allowed_spaces = instance_config(args.instance_env)
-    return handle(container, root, allowed_spaces, args.board, args.task)
+    container, root, allowed_spaces, tracker_host = instance_config(args.instance_env)
+    return handle(container, root, allowed_spaces, args.board, args.task, tracker_host)
 
 
 if __name__ == "__main__":
