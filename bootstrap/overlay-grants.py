@@ -12,8 +12,17 @@ many review rounds chasing indentation, quoting and comment-placement bugs in
 its own regex-based entry splitter; none of those bugs can exist here, because
 there is no text to parse.
 
-    overlay-grants.py --check mcp.json            # validate only, exit nonzero on error
-    overlay-grants.py mcp.json <profile-base-name> # print "unset" / "set" lines
+    overlay-grants.py --check mcp.json                     # validate only, exit nonzero on error
+    overlay-grants.py mcp.json <profile> <current-json>    # print "unset" / "set" lines
+
+<current-json> is the profile's own mcp_servers, as `hermes config get
+mcp_servers --json` already prints it ("{}" if the key is absent). Each
+server this script ever granted carries its own `_overlay: true` -- a plain
+JSON field written and read by hermes config, not a text marker -- so a name
+removed from mcp.json entirely (not merely unassigned from this profile) is
+still found and unset: it is any key in <current-json> with `_overlay: true`
+that the current mcp.json no longer grants this profile. A hand-added server
+never carries that field and is never touched in either direction.
 
 mcp.json maps a server name to:
     profiles  non-empty list of profile base names ("default" = the WebUI
@@ -70,17 +79,33 @@ def load(path: str) -> dict:
     return servers
 
 
-def directives(servers: dict, profile: str) -> list[str]:
+def directives(servers: dict, profile: str, current: dict) -> list[str]:
+    granted = {name for name, spec in servers.items() if profile in spec["profiles"]}
     out = []
-    for name, spec in servers.items():
+    # Anything this script granted before (marked _overlay: true) that the
+    # current file no longer grants: unset, even if the name is gone from
+    # mcp.json entirely, not merely dropped from this profile's list.
+    for name, cur in current.items():
+        if isinstance(cur, dict) and cur.get("_overlay") is True and name not in granted:
+            out.append(f"unset mcp_servers.{name}")
+    # Every currently granted name, so a changed config/tools value replaces
+    # the old one instead of merging with it.
+    for name in granted:
         out.append(f"unset mcp_servers.{name}")
-    for name, spec in servers.items():
-        if profile not in spec["profiles"]:
-            continue
+    for name in granted:
+        spec = servers[name]
         for key, value in spec.get("config", {}).items():
-            out.append(f"set mcp_servers.{name}.{key} {json.dumps(value)}")
+            # `hermes config set` stores a string argument literally: it does
+            # not decode it as JSON first, so json.dumps-ing a string value
+            # (which wraps it in quote characters) stored those quote
+            # characters as part of the string itself. A string is passed as
+            # is; only a non-string value is dumped, since a shell argument
+            # has no other way to carry a number, bool, list or null.
+            rendered = value if isinstance(value, str) else json.dumps(value)
+            out.append(f"set mcp_servers.{name}.{key} {rendered}")
         out.append(f"set mcp_servers.{name}.enabled true")
         out.append(f"set mcp_servers.{name}.tools.include {json.dumps(spec['tools'])}")
+        out.append(f"set mcp_servers.{name}._overlay true")
     return out
 
 
@@ -88,5 +113,6 @@ if __name__ == "__main__":
     if sys.argv[1] == "--check":
         load(sys.argv[2])
         raise SystemExit(0)
-    for line in directives(load(sys.argv[1]), sys.argv[2]):
+    current = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+    for line in directives(load(sys.argv[1]), sys.argv[2], current):
         print(line)

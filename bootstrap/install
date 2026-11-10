@@ -164,9 +164,15 @@ if [ -f /ralph/private-mcp/mcp.json ]; then
     python3 "$(dirname "$0")/overlay-grants.py" --check "$OVERLAY_MCP"
 fi
 named_mcp_set() {  # named_mcp_set <hermes -p flags or empty> <profile base name>
-    local args="$1" base="$2"
+    local args="$1" base="$2" current
     [ -n "$OVERLAY_MCP" ] || return 0
-    python3 "$(dirname "$0")/overlay-grants.py" "$OVERLAY_MCP" "$base" | while read -r verb key value; do
+    # The profile's own mcp_servers, so a server mcp.json no longer grants
+    # anyone (removed from the file entirely, not just from this profile's
+    # list) is still found and unset: it is this profile's responsibility to
+    # notice its own overlay-marked servers, not overlay-grants.py's, since
+    # that script has no state and never should (#134 review).
+    current=$(hermes $args config get mcp_servers --json 2>/dev/null || echo '{}')
+    python3 "$(dirname "$0")/overlay-grants.py" "$OVERLAY_MCP" "$base" "$current" | while read -r verb key value; do
         if [ "$verb" = unset ]; then
             hermes $args config unset "$key" >/dev/null 2>&1 || true
         else

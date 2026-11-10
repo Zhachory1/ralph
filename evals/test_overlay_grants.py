@@ -34,30 +34,68 @@ class DirectivesTests(unittest.TestCase):
     def test_grants_only_the_named_profile(self):
         path = write({"team-memory": {"profiles": ["researcher"], "config": {"url": "u"},
                                        "tools": ["recall"]}})
-        granted = og.directives(og.load(path), "researcher")
-        self.assertIn("set mcp_servers.team-memory.url \"u\"", granted)
+        granted = og.directives(og.load(path), "researcher", {})
+        self.assertIn("set mcp_servers.team-memory.url u", granted)
         self.assertIn("set mcp_servers.team-memory.enabled true", granted)
         self.assertIn('set mcp_servers.team-memory.tools.include ["recall"]', granted)
-        self.assertNotIn("set mcp_servers.team-memory.url \"u\"",
-                         og.directives(og.load(path), "builder"))
+        self.assertIn("set mcp_servers.team-memory._overlay true", granted)
+        self.assertNotIn("set mcp_servers.team-memory.url u",
+                         og.directives(og.load(path), "builder", {}))
 
-    def test_every_grant_is_unset_before_any_is_set(self):
-        """A profile the overlay doesn't currently grant this server to must
-        still have it unset, so a revoked grant actually disappears."""
-        path = write({"a": {"profiles": ["researcher"], "config": {}, "tools": ["x"]},
-                      "b": {"profiles": ["builder"], "config": {}, "tools": ["y"]}})
-        out = og.directives(og.load(path), "researcher")
-        self.assertEqual(["unset mcp_servers.a", "unset mcp_servers.b"], out[:2])
-        self.assertNotIn("set mcp_servers.b.enabled true", out)
+    def test_a_currently_granted_server_is_unset_before_being_reset(self):
+        """A changed config/tools value replaces the old one rather than
+        merging with it: unset comes before set for every granted name."""
+        path = write({"a": {"profiles": ["researcher"], "config": {}, "tools": ["x"]}})
+        out = og.directives(og.load(path), "researcher", {})
+        self.assertEqual("unset mcp_servers.a", out[0])
+        self.assertLess(out.index("unset mcp_servers.a"), out.index("set mcp_servers.a.enabled true"))
+
+    def test_a_server_no_longer_granted_to_this_profile_is_unset(self):
+        """The overlay still grants it to someone else, just not this
+        profile: this profile's own marked copy must still come down."""
+        path = write({"a": {"profiles": ["builder"], "config": {}, "tools": ["x"]}})
+        current = {"a": {"url": "old", "_overlay": True}}
+        out = og.directives(og.load(path), "researcher", current)
+        self.assertIn("unset mcp_servers.a", out)
+        self.assertNotIn("set mcp_servers.a.enabled true", out)
+
+    def test_a_server_deleted_from_mcp_json_entirely_is_still_unset(self):
+        """#134 review: a server removed from mcp.json -- not merely dropped
+        from one profile's list, but gone from the file -- never appears in
+        `servers.items()`, so nothing about it would be emitted without
+        checking the profile's own currently-marked servers too."""
+        path = write({})  # mcp.json now has nothing in it
+        current = {"a": {"url": "old", "_overlay": True}}
+        out = og.directives(og.load(path), "researcher", current)
+        self.assertEqual(["unset mcp_servers.a"], out)
+
+    def test_a_hand_added_server_is_never_unset(self):
+        """Only a server this script itself marked (`_overlay: true`) is ever
+        a candidate for removal; anything else is the owner's."""
+        path = write({})
+        current = {"mine": {"url": "http://owner"}}  # no _overlay key
+        out = og.directives(og.load(path), "researcher", current)
+        self.assertEqual([], out)
 
     def test_config_values_round_trip_through_json(self):
         """Non-string config values (numbers, booleans) stay typed; install's
         `hermes config set` receives valid JSON either way."""
         path = write({"a": {"profiles": ["researcher"], "config": {"port": 8181, "secure": True},
                             "tools": ["x"]}})
-        out = og.directives(og.load(path), "researcher")
+        out = og.directives(og.load(path), "researcher", {})
         self.assertIn("set mcp_servers.a.port 8181", out)
         self.assertIn("set mcp_servers.a.secure true", out)
+
+    def test_string_config_values_are_not_double_quoted(self):
+        """Found live: `hermes config set` stores a string argument literally
+        rather than decoding it as JSON first, so json.dumps-ing a URL wrapped
+        it in quote characters that then became part of the stored string."""
+        path = write({"a": {"profiles": ["researcher"],
+                            "config": {"url": "https://example.com/mcp/team/"},
+                            "tools": ["x"]}})
+        out = og.directives(og.load(path), "researcher", {})
+        self.assertIn("set mcp_servers.a.url https://example.com/mcp/team/", out)
+        self.assertNotIn('set mcp_servers.a.url "https://example.com/mcp/team/"', out)
 
 
 class ValidationTests(unittest.TestCase):
