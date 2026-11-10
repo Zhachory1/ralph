@@ -800,7 +800,11 @@ class VoiceTests(unittest.TestCase):
         """#134 review: merge_mcp_servers had its own fixed two/three-space
         assumption, separate from set_overlay_global's; a one-space entry was
         dropped entirely (its header never matched a hardcoded two-space
-        prefix at all, so nothing of it survived)."""
+        prefix at all, so nothing of it survived). Also pins that the merged
+        result actually parses: an earlier pass here checked only substrings
+        and missed that two differently-indented entries under one mapping
+        is invalid YAML (#134 review, next round)."""
+        import yaml
         src = ("mcp_servers:\n lens-tools:\n   command: x\n"
                "model:\n  default: m\n"
                "mcp_servers:\n  knowledge:\n    url: http://k\n")
@@ -810,8 +814,27 @@ class VoiceTests(unittest.TestCase):
             d_path.write_text("other: 1\n")
             wpc.main(str(s_path), str(d_path))
             text = d_path.read_text()
-        self.assertIn("command: x", text)
-        self.assertIn("knowledge:", text)
+        out = yaml.safe_load(text)
+        self.assertEqual("x", out["mcp_servers"]["lens-tools"]["command"])
+        self.assertEqual("http://k", out["mcp_servers"]["knowledge"]["url"])
+
+    def test_merging_blocks_with_different_entry_widths_normalizes_them(self):
+        """#134 review: a profile's own entry at one space and the appended
+        knowledge block's entry at two spaces, joined under one `mcp_servers:`
+        header, left siblings at mismatched indents -- a PyYAML ParserError,
+        not merely cosmetic."""
+        import yaml
+        src = ("mcp_servers:\n lens-tools:\n   command: x\n   enabled: true\n"
+               "model:\n  default: m\n"
+               "mcp_servers:\n  knowledge:\n    url: http://k\n")
+        with tempfile.TemporaryDirectory() as d:
+            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
+            s_path.write_text(src)
+            d_path.write_text("other: 1\n")
+            wpc.main(str(s_path), str(d_path))
+            out = yaml.safe_load(d_path.read_text())  # raises on invalid YAML
+        self.assertEqual({"command": "x", "enabled": True}, out["mcp_servers"]["lens-tools"])
+        self.assertEqual("http://k", out["mcp_servers"]["knowledge"]["url"])
 
     def test_a_grant_sharing_a_name_with_a_nested_property_never_touches_it(self):
         """#134 review: a server literally named e.g. \"url\" matched -- and

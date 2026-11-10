@@ -137,6 +137,26 @@ def _split_top_level_entries(entries: str) -> list[str]:
 
 
 
+def _reindent(entry: str, width: int) -> str:
+    """Shift a whole entry (header plus body) so its header starts at `width`
+    spaces, preserving every line's indent relative to the header (#134
+    review: merging blocks whose own entries used different widths put
+    siblings at mismatched indents under one mapping -- invalid YAML)."""
+    lines = entry.splitlines(keepends=True)
+    if not lines:
+        return entry
+    old_width = len(lines[0]) - len(lines[0].lstrip(" "))
+    delta = width - old_width
+    out = []
+    for line in lines:
+        if not line.strip():
+            out.append(line)
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        out.append(" " * max(0, indent + delta) + line.lstrip(" "))
+    return "".join(out)
+
+
 def merge_mcp_servers(src: str) -> str:
     """Fold every top-level `mcp_servers:` block in the source into one.
 
@@ -163,6 +183,7 @@ def merge_mcp_servers(src: str) -> str:
             key = entry.splitlines()[0].split(":", 1)[0].strip().strip('"').strip("'")
             if key not in seen:
                 seen.add(key)
+                entry = _reindent(entry, 2)  # one width for every sibling (#134 review)
                 kept.append(entry if entry.endswith("\n") else entry + "\n")
     entries = "".join(kept)
     for m in reversed(blocks):
