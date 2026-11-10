@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """Make the work tracker match the state of a chat operation.
 
-This pull request ships the first of two entry points
-(dd-tracker.md Sec3.1); `--settle` is the follow-up, named on the card this
-PR implements.
-
   --record <op>   called by the sender before it sends the acknowledgement,
                   in the branch that already holds it until chat-route
                   confirms an orchestrator card. Finds or creates the item
                   for the thread and sets `In progress`.
 
-With no credential file (`RALPH_TRACKER_CREDS`), `--record` prints "tracker
-not configured", writes nothing and exits 0: the gate is satisfied and the
-sender's shipped path runs unchanged (dd-tracker.md Sec3.2).
+  --settle        called by the sender once at the top of each scan.
+                  Walks the chat-inbox operations on disk: a clarification
+                  marker with no `.tracker-waiting` writes the pending
+                  record and sets `Waiting on requester`; a final marker
+                  with no `.tracker-closed` sets `Resolved` (a non-empty
+                  outcome) or `Closed` (none), then removes the operation's
+                  `evidence/` directory and keeps every marker file
+                  (dd-tracker.md Sec3.1, Sec4).
+
+With no credential file (`RALPH_TRACKER_CREDS`), both entry points print
+"tracker not configured", write nothing and exit 0: the gate is satisfied and
+the sender's shipped path runs unchanged (dd-tracker.md Sec3.2).
+
+A `TrackerError` on one `--settle` operation prints `settle-failed: <op_id>`
+on stderr; the walk continues to the operations after it, and the command
+exits 1 at the end (dd-tracker.md Sec3.4) -- this is the line a later pull
+request alerts on.
 
 Every tracker write is routed through `bootstrap/tracker.py`; no business
 logic here builds its own HTTP client. Reading a kanban card is routed
@@ -25,6 +35,7 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -35,6 +46,14 @@ import tracker as tracker_client
 
 TRACKER_CREDS_ENV = "RALPH_TRACKER_CREDS"
 RECORDED = ".tracker-recorded"
+WAITING = ".tracker-waiting"
+CLOSED = ".tracker-closed"
+# The sender's own marker names for a clarifying question and a final reply
+# (chat-reply:57-58), pinned here rather than imported: `--settle` reads them,
+# it does not send them, and this script may never hold the chat credential
+# that sending requires.
+CLARIFY_SENT = ".clarify-sent"
+FINAL_SENT = ".final-sent"
 # The subset of KINDS (chat-route.py) this half turns into a tracker item
 # kind value. Anything else (the deployed sender's pre-PR behaviour, with no
 # `kind` at all) is recorded with no kind rather than refused.
@@ -110,6 +129,36 @@ def converge(client, canonical, newer):
         client.relate(dup["id"], canonical["id"])
 
 
+def resolve_or_create(client, item, status, card=None):
+    """Find-or-create the item for `item["thread"]`, running dd-tracker.md
+    Sec3.3's convergence guard either way, and return the canonical id.
+    Shared by every write that must land on exactly one item: `--record`,
+    `--settle`'s pending-clarification write and its close all resolve the
+    item the same way before touching it (dd-tracker.md Sec3.3, "both entry
+    points resolve the item by thread key at the start of every call").
+
+    `card` supplies the kind and the restatement for a fresh create only --
+    an item this call finds rather than creates is left for the caller to
+    update, exactly as `--record` already shipped it."""
+    card = card or {}
+    thread = item["thread"]
+    canonical, newer = client.find(thread)
+    if canonical is None:
+        message = item["messages"][-1]["text"]
+        fields = {"thread": thread, "subject": message[:255], "description": message,
+                  "status": status}
+        if item.get("sender"):
+            fields["requester"] = item["sender"]
+        if card.get("kind") in KINDS:
+            fields["kind"] = card["kind"]
+        if card.get("ack"):
+            fields["restatement"] = card["ack"]
+        client.create(fields)
+        canonical, newer = client.find(thread)
+    converge(client, canonical, newer)
+    return canonical["id"]
+
+
 def record(client, root, op_id):
     """`--record <op>` (dd-tracker.md Sec3.1, Sec3.3). Resolves the item by
     thread key at the start of every call and treats a prior
@@ -120,24 +169,76 @@ def record(client, root, op_id):
     except chat_evidence.Invalid as error:
         print("refused tracker-sync --record %s: %s" % (op_id, error), file=sys.stderr)
         return 2
-    thread = item["thread"]
-    canonical, newer = client.find(thread)
-    if canonical is None:
-        card = find_card("queues", op_id) or {}
-        message = item["messages"][-1]["text"]
-        fields = {"thread": thread, "subject": message[:255], "description": message,
-                  "status": "In progress"}
-        if item.get("sender"):
-            fields["requester"] = item["sender"]
-        if card.get("kind") in KINDS:
-            fields["kind"] = card["kind"]
-        if card.get("ack"):
-            fields["restatement"] = card["ack"]
-        client.create(fields)
-        canonical, newer = client.find(thread)
-    converge(client, canonical, newer)
-    write_marker(root / op_id / RECORDED, str(canonical["id"]))
+    card = find_card("queues", op_id) or {}
+    canonical_id = resolve_or_create(client, item, "In progress", card)
+    write_marker(root / op_id / RECORDED, str(canonical_id))
     return 0
+
+
+def pending(client, root, op_id, item):
+    """A clarification marker and no `.tracker-waiting` (dd-tracker.md
+    Sec3.1, Sec4): resolve or create the item for the thread and set
+    `Waiting on requester` -- set always, not only on a fresh create, so a
+    thread `--record` already moved to `In progress` is pulled back to
+    `Waiting on requester` once a clarifying question is the thing that
+    actually went out."""
+    card = find_card("queues", op_id) or {}
+    canonical_id = resolve_or_create(client, item, "Waiting on requester", card)
+    client.update(canonical_id, {"status": "Waiting on requester"})
+    write_marker(root / op_id / WAITING, str(canonical_id))
+
+
+def close(client, root, op_id, item):
+    """A final marker and no `.tracker-closed` (dd-tracker.md Sec3.1, Sec4):
+    resolve or create the item, set `Resolved` with a non-empty outcome from
+    the report card on the `ralph` board, else `Closed`, then remove the
+    operation's `evidence/` directory and keep every marker file, so the
+    chat producer's `prior_operations` still counts this operation."""
+    card = find_card("queues", op_id) or {}
+    report = find_card("ralph", op_id) or {}
+    outcome = report.get("body")
+    outcome = outcome.strip() if isinstance(outcome, str) else ""
+    status = "Resolved" if outcome else "Closed"
+    canonical_id = resolve_or_create(client, item, status, card)
+    fields = {"status": status}
+    if outcome:
+        fields["outcome"] = outcome
+    client.update(canonical_id, fields)
+    shutil.rmtree(root / op_id / "evidence", ignore_errors=True)
+    write_marker(root / op_id / CLOSED, str(canonical_id))
+
+
+def settle(client, root):
+    """`--settle` (dd-tracker.md Sec3.1, Sec3.3). Walks `root/*/` on disk,
+    not the sender's `list --status done` loop, which stops looking at an
+    operation once its reply marker exists (`chat-reply:239-242`). One
+    failing operation does not end the walk: a `TrackerError` prints
+    `settle-failed: <op_id>` and the walk continues, so a later operation is
+    never hidden behind an earlier failure (dd-tracker.md Sec3.4)."""
+    status = 0
+    for workspace in sorted(p for p in root.iterdir() if p.is_dir()):
+        op_id = workspace.name
+        if not chat_evidence.OP_ID.fullmatch(op_id):
+            continue
+        needs_pending = (workspace / CLARIFY_SENT).is_file() and not (workspace / WAITING).is_file()
+        needs_close = (workspace / FINAL_SENT).is_file() and not (workspace / CLOSED).is_file()
+        if not (needs_pending or needs_close):
+            continue
+        try:
+            item = chat_evidence.read_item(root, op_id)
+        except chat_evidence.Invalid as error:
+            print("refused tracker-sync --settle %s: %s" % (op_id, error), file=sys.stderr)
+            continue
+        try:
+            if needs_pending:
+                pending(client, root, op_id, item)
+            if needs_close:
+                close(client, root, op_id, item)
+        except tracker_client.TrackerError as error:
+            print(str(error), file=sys.stderr)
+            print("settle-failed: %s" % op_id, file=sys.stderr)
+            status = 1
+    return status
 
 
 def load_client(creds_path):
@@ -148,7 +249,9 @@ def load_client(creds_path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--record", metavar="OP", required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--record", metavar="OP")
+    group.add_argument("--settle", action="store_true")
     parser.add_argument("--work-root", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
 
@@ -156,6 +259,8 @@ def main(argv=None):
     if client is None:
         print("tracker not configured")
         return 0
+    if args.settle:
+        return settle(client, args.work_root)
     return record(client, args.work_root, args.record)
 
 

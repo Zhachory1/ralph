@@ -3,9 +3,11 @@ stateful fake tracker and a temporary work root. No test here opens a
 socket, reads a credential, or reaches a real tracker.
 """
 
+import contextlib
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -30,7 +32,9 @@ def load_script():
 # here, rather than loading a second copy, is what makes `isinstance` checks
 # against `tracker.TrackerError` agree between the two (two separately loaded
 # copies of one file are two different classes of the same name).
-tracker = load_script().tracker_client
+_LOADED = load_script()
+tracker = _LOADED.tracker_client
+chat_evidence = _LOADED.chat_evidence
 
 STATUS_NAMES = ("New", "In progress", "Waiting on requester", "Resolved", "Duplicate", "Closed",
                 "Rejected")
@@ -187,8 +191,27 @@ class TrackerSyncTests(unittest.TestCase):
             "metadata": {"decision": "route", "body": "do the thing", "ack": ack, "kind": kind},
         }
 
+    def report_card(self, op, body="", task_id=None):
+        """The report card on the `ralph` board whose decision `send` carries
+        the final reply's outcome (dd-tracker.md Sec5, the final `body`)."""
+        task_id = task_id or ("t_report_" + op[-6:])
+        self.cards[("ralph", task_id)] = {
+            "task": {"id": task_id, "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": "operation_id: %s\n" % op},
+            "metadata": {"decision": "send", "body": body},
+        }
+
+    def touch(self, op, marker_name):
+        (self.root / op / marker_name).touch()
+
     def recorded_id(self, op):
         return (self.root / op / self.module.RECORDED).read_text()
+
+    def waiting_id(self, op):
+        return (self.root / op / self.module.WAITING).read_text()
+
+    def closed_id(self, op):
+        return (self.root / op / self.module.CLOSED).read_text()
 
     # --- not configured -----------------------------------------------------
 
@@ -198,6 +221,16 @@ class TrackerSyncTests(unittest.TestCase):
             rc = self.module.main(["--record", "chat-" + "0" * 64,
                                    "--work-root", str(self.root)])
         self.assertEqual(rc, 0)
+
+    def test_settle_not_configured_prints_and_exits_zero_and_writes_nothing(self):
+        op = self.stage()
+        self.intake_card(op)
+        self.touch(op, self.module.CLARIFY_SENT)
+        creds = pathlib.Path(self.tmp.name) / "missing-creds.json"
+        with unittest.mock.patch.dict(os.environ, {self.module.TRACKER_CREDS_ENV: str(creds)}):
+            rc = self.module.main(["--settle", "--work-root", str(self.root)])
+        self.assertEqual(rc, 0)
+        self.assertFalse((self.root / op / self.module.WAITING).exists())
 
     # --- --record -------------------------------------------------------------
 
@@ -310,6 +343,210 @@ class TrackerSyncTests(unittest.TestCase):
         with self.assertRaises(tracker.TrackerError):
             client.create({"thread": "t", "subject": "x", "description": "x"})
         self.assertEqual(opener.calls, 1)
+
+    # --- --settle: pending clarification (E15-E18) ---------------------------
+
+    def test_clarification_marker_yields_pending_record_once_and_sets_waiting(self):
+        """E15-E18: the pending record lands once and sets Waiting on
+        requester; a second settle pass writes nothing more -- nothing here
+        sweeps or expires it."""
+        op = self.stage(text="what do you mean?")
+        self.intake_card(op, kind="question")
+        self.touch(op, self.module.CLARIFY_SENT)
+        client = self.client()
+        rc = self.module.settle(client, self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.backend.issues), 1)
+        issue = next(iter(self.backend.issues.values()))
+        self.assertEqual(issue["status"], "Waiting on requester")
+        self.assertEqual(self.waiting_id(op), str(issue["id"]))
+
+        before, marker_before = dict(self.backend.issues), self.waiting_id(op)
+        rc = self.module.settle(client, self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.backend.issues, before)
+        self.assertEqual(self.waiting_id(op), marker_before)
+
+    # --- --settle: close (E8, E10, E11) ---------------------------------------
+
+    def test_close_sets_resolved_or_closed_depending_on_the_outcome(self):
+        for n, (outcome, expected) in enumerate((("fixed it", "Resolved"), ("", "Closed")), 1):
+            with self.subTest(outcome=outcome):
+                op = self.stage(n=n, thread_name="resolved" if outcome else "closed")
+                self.intake_card(op)
+                self.touch(op, self.module.FINAL_SENT)
+                self.report_card(op, body=outcome)
+                client = self.client()
+                rc = self.module.settle(client, self.root)
+                self.assertEqual(rc, 0)
+                issue = self.backend.issues[int(self.closed_id(op))]
+                self.assertEqual(issue["status"], expected)
+                self.assertEqual(issue.get("outcome", ""), outcome)
+
+    def test_close_runs_once_and_an_already_closed_item_stays_retryable(self):
+        """A second settle pass over an operation `--settle` already closed
+        writes nothing more and raises nothing -- E8, E10's idempotence,
+        proved against the walk rather than against `close()` in isolation,
+        because `close()` itself has already removed the `evidence/`
+        directory its own input depends on by the time a second call could
+        happen."""
+        op = self.stage()
+        self.intake_card(op)
+        self.touch(op, self.module.FINAL_SENT)
+        self.report_card(op, body="done")
+        client = self.client()
+        self.module.settle(client, self.root)
+        before, marker_before = dict(self.backend.issues), self.closed_id(op)
+
+        rc = self.module.settle(client, self.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.backend.issues, before)
+        self.assertEqual(self.closed_id(op), marker_before)
+
+    # --- --settle: convergence, from the loser's side -------------------------
+
+    def test_losers_own_operation_settles_against_canonical_on_close(self):
+        op1 = self.stage(n=1)
+        op2 = self.stage(n=2, prior=(op1,))
+        self.intake_card(op1)
+        self.intake_card(op2)
+        client = self.client()
+        thread = "spaces/example/threads/first"
+        first = client.create({"thread": thread, "subject": "a", "description": "a"})
+        second = client.create({"thread": thread, "subject": "b", "description": "b"})
+        self.module.write_marker(self.root / op1 / self.module.RECORDED, str(first["id"]))
+        self.module.write_marker(self.root / op2 / self.module.RECORDED, str(second["id"]))
+        canonical_id = min(first["id"], second["id"])
+        loser_id = max(first["id"], second["id"])
+        loser_op = op1 if first["id"] != canonical_id else op2
+        winner_op = op2 if loser_op == op1 else op1
+        # Converge from the winner's side, as the --record test does.
+        self.module.record(client, self.root, winner_op)
+
+        self.touch(loser_op, self.module.FINAL_SENT)
+        self.report_card(loser_op, body="wrapped up")
+        rc = self.module.settle(client, self.root)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.backend.issues[canonical_id]["status"], "Resolved")
+        self.assertEqual(self.backend.issues[loser_id]["status"], "Duplicate")
+
+    # --- --settle: evidence removal --------------------------------------------
+
+    def test_close_removes_evidence_keeps_markers_and_leaves_the_operation_dir(self):
+        op = self.stage()
+        self.intake_card(op)
+        self.touch(op, self.module.FINAL_SENT)
+        self.report_card(op, body="done")
+        client = self.client()
+        self.module.settle(client, self.root)
+        op_dir = self.root / op
+        self.assertTrue(op_dir.is_dir())
+        self.assertFalse((op_dir / "evidence").exists())
+        self.assertTrue((op_dir / self.module.FINAL_SENT).is_file())
+        self.assertTrue((op_dir / self.module.CLOSED).is_file())
+
+    # --- --settle: a refused operation is skipped, others still settle --------
+
+    def test_an_item_the_shared_reader_refuses_is_skipped_others_still_settle(self):
+        op1 = self.stage(n=1)
+        op2 = self.stage(n=2, prior=(op1,))
+        self.intake_card(op1)
+        self.intake_card(op2)
+        self.touch(op1, self.module.FINAL_SENT)
+        self.touch(op2, self.module.FINAL_SENT)
+        self.report_card(op1, body="one")
+        self.report_card(op2, body="two")
+        (self.root / op1 / "evidence" / "item.json").write_text("not json")
+        client = self.client()
+        rc = self.module.settle(client, self.root)
+        self.assertEqual(rc, 0)
+        self.assertFalse((self.root / op1 / self.module.CLOSED).exists())
+        self.assertTrue((self.root / op2 / self.module.CLOSED).exists())
+
+    # --- --settle: one tracker failure does not end the walk -------------------
+
+    def test_tracker_failure_on_one_operation_prints_settle_failed_and_continues(self):
+        op1 = self.stage(n=1, thread_name="one", text="first ask")
+        op2 = self.stage(n=2, thread_name="two", text="second ask")
+        self.intake_card(op1)
+        self.intake_card(op2)
+        client = self.client()
+        issue1 = client.create({"thread": "spaces/example/threads/one",
+                                "subject": "a", "description": "a"})
+        issue2 = client.create({"thread": "spaces/example/threads/two",
+                                "subject": "b", "description": "b"})
+        self.module.write_marker(self.root / op1 / self.module.RECORDED, str(issue1["id"]))
+        self.module.write_marker(self.root / op2 / self.module.RECORDED, str(issue2["id"]))
+        self.touch(op1, self.module.FINAL_SENT)
+        self.touch(op2, self.module.FINAL_SENT)
+        self.report_card(op1, body="")
+        self.report_card(op2, body="all done")
+
+        real_update = client.update
+
+        def failing_update(issue_id, fields):
+            if issue_id == issue1["id"]:
+                raise tracker.TrackerError("tracker exploded")
+            return real_update(issue_id, fields)
+
+        client.update = failing_update
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            rc = self.module.settle(client, self.root)
+
+        self.assertEqual(rc, 1)
+        self.assertIn("settle-failed: %s" % op1, stderr.getvalue())
+        self.assertFalse((self.root / op1 / self.module.CLOSED).exists())
+        self.assertTrue((self.root / op2 / self.module.CLOSED).exists())
+        self.assertEqual(self.backend.issues[issue2["id"]]["status"], "Resolved")
+
+    def test_dropped_connection_on_a_settle_write_fails_once_with_no_second_write(self):
+        """Isolates the write: `find` (a GET) succeeds against the real fake
+        backend, so `close()` reaches its `update` call, which is the one
+        this test drops -- once, with no retry (dd-tracker.md, Sec3.2's
+        reliance on `bootstrap/tracker.py`'s own write-is-not-retried rule)."""
+        import urllib.error
+
+        op = self.stage()
+        self.intake_card(op)
+        self.touch(op, self.module.FINAL_SENT)
+        self.report_card(op, body="done")
+        item = chat_evidence.read_item(self.root, op)
+        # Pre-create the item so `close()` only needs the write (`update`),
+        # never a create, once it has found this thread's canonical item.
+        client = self.client()
+        client.create({"thread": item["thread"], "subject": "x", "description": "x"})
+
+        class DropWritesOpener:
+            """GETs answer from the real fake backend; every other method
+            drops the connection once, with no retry, the way a write never
+            is (bootstrap/tracker.py's own rule)."""
+
+            def __init__(self, backend):
+                self.backend = backend
+                self.calls = 0
+
+            def open(self, request, timeout=None):
+                if request.get_method() == "GET":
+                    return self.backend.open(request, timeout=timeout)
+                self.calls += 1
+                raise urllib.error.URLError("reset")
+
+        opener = DropWritesOpener(self.backend)
+        broken_client = tracker.Tracker(make_config(), opener=opener)
+        with self.assertRaises(tracker.TrackerError):
+            self.module.close(broken_client, self.root, op, item)
+        self.assertEqual(opener.calls, 1)
+
+    # --- --settle coexists with --record ---------------------------------------
+
+    def test_record_and_settle_are_mutually_exclusive_and_one_is_required(self):
+        with self.assertRaises(SystemExit):
+            self.module.main(["--work-root", str(self.root)])
+        with self.assertRaises(SystemExit):
+            self.module.main(["--record", "chat-" + "0" * 64, "--settle",
+                              "--work-root", str(self.root)])
 
 
 if __name__ == "__main__":
