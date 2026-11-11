@@ -36,7 +36,7 @@ A new profile is justified by different permissions, resources, or lifecycle —
 | orchestrator | Talk to you, own the board | Write to any repo |
 | author | Write the docs repo | Touch code repos |
 | reviewer | Comment, request changes | Approve, push |
-| builder | Branch, push, open PRs | Merge |
+| builder | Branch, push, open PRs; list Chat space IDs through the sidecar | Merge, read or send Chat messages directly |
 | researcher | Read the web and repositories | Change a repository |
 | analyst | Read the warehouse | Write anywhere |
 | experimenter | Spend compute, under a hard cap | Deploy, write production data |
