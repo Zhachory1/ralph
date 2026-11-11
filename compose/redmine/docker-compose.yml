@@ -1,0 +1,36 @@
+name: ralph-work-issues
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: redmine
+      POSTGRES_USER: redmine
+      POSTGRES_PASSWORD: ${REDMINE_DB_PASSWORD:?set REDMINE_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redmine"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redmine:
+    image: redmine:6.1
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      REDMINE_DB_POSTGRES: db
+      REDMINE_DB_DATABASE: redmine
+      REDMINE_DB_USERNAME: redmine
+      REDMINE_DB_PASSWORD: ${REDMINE_DB_PASSWORD:?set REDMINE_DB_PASSWORD}
+      REDMINE_ADMIN_PASSWORD: ${REDMINE_ADMIN_PASSWORD:?set REDMINE_ADMIN_PASSWORD}
+    volumes:
+      - redmine-files:/usr/src/redmine/files
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redmine-files:
