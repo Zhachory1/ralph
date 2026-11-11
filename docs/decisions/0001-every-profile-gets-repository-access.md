@@ -26,4 +26,4 @@ In practice the boundary kept stopping ordinary work. A Chat request needed fact
 
 ## Not decided here
 
-MCP servers. Profiles do not load `mcp_servers` today, because `bootstrap/write-profile-config.py` does not copy that block. Giving every profile the same MCPs is a separate change.
+MCP servers were not decided by this repository-access decision. Profiles now receive explicit MCP grants through `bootstrap/install` (knowledge, private overlay, and builder Chat-space listing); `bootstrap/write-profile-config.py` still does not copy the `mcp_servers` block.
