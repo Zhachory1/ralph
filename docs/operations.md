@@ -42,6 +42,7 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | Card in `triage` | The notifier releases parked doc gates. For others, release with care (see Hermes `specify_triage_task`); do not use `kanban specify`, which rewrites the card with a model. |
 | `respawn_guarded: active_pr` | `assign <id> none`, then `assign <id> <owner>` |
 | The PR moved on or merged | `archive <id>`; the next pass rebuilds from the current head |
+| Blocked with a `tracker-record` reason | See [Tracker sync](#tracker-sync-chat-requests-and-the-work-tracker) below |
 
 ## Reading logs
 
@@ -77,6 +78,43 @@ Not this card's job -- not any build card's job. None of these is a pull request
 | Container restarting | `docker inspect <instance>-knowledge-1 -f '{{.State.OOMKilled}}'`; a re-ranked query needs more than 2 GB. |
 | A memory write is rejected (409) | The docs repo's default branch requires pull requests; memories are written directly by design. Allow the write or turn the rule off. |
 | Turn it off | Remove `knowledge` from `COMPOSE_PROFILES`, stop the container, re-run `init`: the MCP block and index step go away. |
+
+## Tracker sync (chat requests and the work tracker)
+
+`bootstrap/tracker-sync` (called by `chat-reply`, never scheduled on its own) records
+a chat request in the work tracker before its acknowledgement goes out, and settles
+pending and closed items once per scan, after every reply for that scan is already
+sent. With no key file it prints "tracker not configured" and exits 0: the
+requester-facing path runs unchanged, and nothing below applies.
+
+- **Key file:** `RALPH_TRACKER_CREDS`, in the `tracker-creds` volume, mode `0600` --
+  the base URL, the account's per-user API key, the project identifier, and the
+  thread-key custom field id.
+- **The `tracker-sync` container:** the `chat-sender` sidecar calls it with
+  `docker exec` into `<instance>-tracker-sync-1`, which exists only when
+  `COMPOSE_PROFILES` includes `tracker`. Until you start it, a failed `docker exec`
+  ("no such container", "is not running") is treated as the tracker not being
+  configured: `--record` and `--settle` are skipped and the acknowledgement goes out
+  as it does today. `docker logs <instance>-chat-sender-1` says so on each skipped
+  `--record`. After you create the key file, start the container
+  (`docker compose --profile tracker up -d tracker-sync`) or nothing is recorded.
+- **One-time setup, by hand, on the tracker instance (not an API call):** create
+  Ralph's own account with access to the project, generate its per-user API key,
+  create the thread-key custom field, and create (or map onto stock statuses)
+  `Waiting on requester` and `Duplicate`.
+- **`.alerted-tracker-record`** (in `<chat-inbox>/<operation>/`): a `--record`
+  failure repeated five scans in a row and blocked that operation's intake card.
+  The acknowledgement never went out.
+- **`.alerted-tracker-settle`** (in `<chat-inbox>/<operation>/`): a `--settle` pass
+  failed for that operation. No card is blocked -- by the time `--settle` runs, the
+  reply it is settling is already sent -- so this is alert-only, and
+  `notifier/poller.py` is the backstop if the alert itself is missed.
+- **Clearing a card blocked with a `tracker-record` reason:** fix the tracker, or
+  rename the `RALPH_TRACKER_CREDS` key file to make `tracker-sync` inert again;
+  delete `.alerted-tracker-record` and `.tracker-record-failures` from
+  `<chat-inbox>/<operation>/`; then unblock the intake card. Nothing here is urgent:
+  the request is already an orchestrator card, so what is missing is the
+  acknowledgement, not the work.
 
 ## Glossary
 

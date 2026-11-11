@@ -81,7 +81,7 @@ sequenceDiagram
 
 ## Chat loop
 
-**Entry:** a message in an allowed Chat space. **Exit:** an acknowledgement and a final reply in the same thread, or one reply. **Owners:** the `chat-sender` sidecar (intake producer, then the reply loop), chat-maintainer, orchestrator.
+**Entry:** a message in an allowed Chat space. **Exit:** an acknowledgement and a final reply in the same thread, or one reply. **Owners:** the `chat-sender` sidecar (intake producer, then the reply loop), chat-maintainer, orchestrator, `tracker-sync` (the step between the acknowledgement and the reply: records the item before the acknowledgement, settles pending or closed items once per scan before any reply goes out).
 
 ```mermaid
 sequenceDiagram
