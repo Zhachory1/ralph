@@ -284,8 +284,8 @@ hermes tools disable browser tts vision >/dev/null
 # ralph-default profile). They are merged into skills.disabled, not set over it,
 # so a skill the owner disabled by hand stays disabled (PR #132 review).
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    # Copied here as well as in the profile loop below: this runs first, and a
-    # fresh container has no /tmp/wmc.py yet.
+    # The disabled-skills pass runs before the profile loop, so copy their
+    # shared helper before the first use, including on a fresh container.
     docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
     docker cp "$PROFILES_DIR/default-disabled-skills.txt" "$RALPH_HERMES_CONTAINER:/tmp/default-disabled-skills.txt"
     docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py --disable-skills \
@@ -358,9 +358,6 @@ fi
 
 # Listed once: each hermes call is a docker exec, and this loop runs per profile.
 PROFILE_LIST=$(hermes profile list 2>/dev/null || true)
-if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
-    docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"
-fi
 SRC_TMP=$(mktemp)
 for dir in "$PROFILES_DIR"/*/; do
     [ -d "$dir" ] || continue

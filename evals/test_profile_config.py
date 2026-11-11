@@ -263,11 +263,11 @@ class ChatTokenDietTests(unittest.TestCase):
         """PR #132 review: `config set skills.disabled` overwrote the owner's own list."""
         self.assertNotIn("config set skills.disabled", self.INSTALL)
 
-    def test_install_ships_the_script_to_the_container_before_using_it(self):
-        """The profile loop copies wmc.py late; the skills merge runs first."""
-        used = self.INSTALL.index("/tmp/wmc.py --disable-skills")
-        first_copy = self.INSTALL.index("/tmp/wmc.py")
-        self.assertLess(first_copy, used)
+    def test_install_ships_the_script_once_before_both_uses(self):
+        copy = 'docker cp /ralph/bootstrap/write-profile-config.py "$RALPH_HERMES_CONTAINER:/tmp/wmc.py"'
+        self.assertEqual(1, self.INSTALL.count(copy))
+        self.assertLess(self.INSTALL.index(copy), self.INSTALL.index("/tmp/wmc.py --disable-skills"))
+        self.assertLess(self.INSTALL.index(copy), self.INSTALL.index("python3 /tmp/wmc.py /tmp/src.yaml"))
 
     def test_the_google_workspace_wrappers_are_disabled_but_the_hub_stays(self):
         names = self.names()
