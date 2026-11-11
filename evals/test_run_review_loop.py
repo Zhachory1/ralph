@@ -223,10 +223,10 @@ class LibrarianCardTests(unittest.TestCase):
             work = d / "work"
             work.mkdir()
             calls = d / "calls"
-            # gh: `pr list` answers the stubbed open-pull-request heads.
+            # gh: `api .../pulls` answers the stubbed open-pull-request heads.
             (stub / "gh").write_text(
                 "#!/bin/sh\n"
-                'case "$*" in "pr list "*) printf "%s" "$PR_HEADS"; exit "$GH_RC";; esac\n'
+                'case "$*" in "api --paginate "*"/pulls?"*) printf "%s" "$PR_HEADS"; exit "$GH_RC";; esac\n'
                 "exit 0\n")
             # docker: `inspect` reports the knowledge container not running,
             # so that block does nothing here; `create` is recorded and
@@ -291,6 +291,13 @@ class LibrarianCardTests(unittest.TestCase):
         created, _ = self.run_pass(docs_repo=None, stamp=None)
         self.assertEqual([], created)
 
+    def test_the_card_carries_a_weekly_idempotency_key(self):
+        """The overlap checks are not atomic with the create. The key lets the
+        board return the existing card to a second, concurrent invocation."""
+        created, _ = self.run_pass(stamp=None)
+        self.assertEqual(1, len(created))
+        self.assertRegex(created[0], r"--idempotency-key librarian-weekly-\d{4}-W\d{2}")
+
     def test_a_failed_pr_query_skips_the_poll_instead_of_reading_as_no_overlap(self):
         created, stamped = self.run_pass(stamp=None, gh_rc=1)
         self.assertEqual([], created, "a guard that could not be read must not create a card")
@@ -314,14 +321,14 @@ class LibrarianCardTests(unittest.TestCase):
         self.assertEqual(1, len(created))
         self.assertTrue(stamped)
 
-    def test_the_pr_query_reads_past_the_default_thirty(self):
+    def test_the_pr_query_is_paginated_so_a_busy_repository_cannot_hide_a_run(self):
         with tempfile.TemporaryDirectory() as d:
             log = pathlib.Path(d) / "gh.log"
             stub = pathlib.Path(d) / "bin"
             stub.mkdir()
             (stub / "gh").write_text(
                 "#!/bin/sh\n"
-                'case "$*" in "pr list "*) echo "$*" >> "%s"; exit 0;; esac\nexit 0\n' % log)
+                'case "$*" in "api --paginate "*"/pulls?"*) echo "$*" >> "%s"; exit 0;; esac\nexit 0\n' % log)
             (stub / "docker").write_text(
                 "#!/bin/sh\n"
                 '[ "$1" = inspect ] && { echo false; exit 0; }\n'
@@ -339,7 +346,8 @@ class LibrarianCardTests(unittest.TestCase):
                                 "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
                                 "RALPH_REVIEW_ALLOW": "o/r", "RALPH_DOCS_REPO": "owner/docs"},
                            capture_output=True, text=True, timeout=30)
-            self.assertIn("--limit 100", log.read_text(), "the default 30 can miss an open librarian PR")
+            self.assertIn("--paginate", log.read_text(),
+                          "a fixed first page can miss an open librarian PR")
 
     def test_failed_create_leaves_stamp_untouched(self):
         created, stamped = self.run_pass(stamp=None, create_rc=1)

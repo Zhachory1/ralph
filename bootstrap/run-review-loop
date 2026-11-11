@@ -135,13 +135,16 @@ while true; do
     # card -- no new switch. Never two runs at once: skipped this poll while an
     # open pull request has a librarian/ head, or while a librarian card is
     # still queued, running or blocked. A guard that cannot be read is not
-    # "no overlap": a failed query skips the poll and the next one retries.
+    # "no overlap": a failed query skips the poll and the next one retries. The
+    # checks above are not atomic with the create, so two loops (the service
+    # and a `--once` exec) could both pass them; the idempotency key, one per
+    # ISO week, makes the board return the existing card instead of a second.
     if [ -n "${RALPH_DOCS_REPO:-}" ]; then
         lstamp="$WORK/.librarian-stamp"
         if [ -z "$(find "$lstamp" -mmin -10080 2>/dev/null)" ]; then
             lheads=""; lopen=""
-            if lheads=$(gh pr list --repo "$RALPH_DOCS_REPO" --state open --limit 100 \
-                        --json headRefName --jq '.[].headRefName' 2>/dev/null) \
+            if lheads=$(gh api --paginate "repos/$RALPH_DOCS_REPO/pulls?state=open&per_page=100" \
+                        --jq '.[].head.ref' 2>/dev/null) \
                     && lopen=$(docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" list \
                         --assignee ralph-librarian --json 2>/dev/null \
                     | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d if isinstance(d,list) else d.get("tasks",[]); print(sum(1 for c in t if c.get("status") not in ("done","archived")))'); then
@@ -150,6 +153,7 @@ while true; do
                 elif docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" create \
                         "librarian: weekly pass, $(date -u +%F)" \
                         --assignee ralph-librarian \
+                        --idempotency-key "librarian-weekly-$(date -u +%G-W%V)" \
                         --body "Docs repository: $RALPH_DOCS_REPO"; then
                     touch "$lstamp"
                 else
