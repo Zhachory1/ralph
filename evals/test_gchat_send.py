@@ -2,14 +2,23 @@
 
 import argparse
 import importlib.util
+import os
 import pathlib
 import unittest
+from pathlib import Path
 from unittest import mock
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
-spec = importlib.util.spec_from_file_location("gchat", SCRIPT)
-gchat = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(gchat)
+
+
+def load_gchat():
+    spec = importlib.util.spec_from_file_location("gchat", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+gchat = load_gchat()
 
 
 class ChatSendTests(unittest.TestCase):
@@ -50,6 +59,29 @@ class ChatSendTests(unittest.TestCase):
     def test_strict_send_to_another_space_fails_before_api_call(self):
         with self.assertRaises(ValueError):
             self.send(thread="spaces/other/threads/one")
+
+
+class ConfigDirOverrideTests(unittest.TestCase):
+    """GWS_CFG_DIR lets a second Google identity (e.g. a personal account,
+    separate from the shared work gws-cli one) live in its own directory
+    instead of always resolving to ~/.config/gws-cli. Unset, behavior is
+    unchanged -- every other test in this file imports gchat.py with no
+    override and still resolves the default."""
+
+    def test_unset_resolves_to_the_default_gws_cli_dir(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GWS_CFG_DIR", None)
+            module = load_gchat()
+        self.assertEqual(Path.home() / ".config" / "gws-cli", module.CFG_DIR)
+
+    def test_set_overrides_the_config_dir_and_its_dependents(self):
+        with mock.patch.dict(os.environ, {"GWS_CFG_DIR": "/tmp/gws-cli-personal"}):
+            module = load_gchat()
+        self.assertEqual(Path("/tmp/gws-cli-personal"), module.CFG_DIR)
+        self.assertEqual(Path("/tmp/gws-cli-personal/client_secret.json.enc"), module.CLIENT_ENC)
+        self.assertEqual(Path("/tmp/gws-cli-personal/client_secret.json"), module.CLIENT_PLAIN)
+        self.assertEqual(Path("/tmp/gws-cli-personal/chat_token.json.enc"), module.TOKEN_ENC)
+        self.assertEqual(Path("/tmp/gws-cli-personal/gws_config.json"), module.CONFIG)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ import argparse
 import base64
 import getpass
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -51,7 +52,11 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-CFG_DIR = Path.home() / ".config" / "gws-cli"
+# GWS_CFG_DIR lets a second Google identity (e.g. a personal account kept
+# separate from the shared work one this tool otherwise always resolves to)
+# live in its own directory. Unset, behavior is unchanged.
+CFG_DIR = Path(os.environ["GWS_CFG_DIR"]) if os.environ.get("GWS_CFG_DIR") \
+    else Path.home() / ".config" / "gws-cli"
 CLIENT_ENC = CFG_DIR / "client_secret.json.enc"
 CLIENT_PLAIN = CFG_DIR / "client_secret.json"
 TOKEN_ENC = CFG_DIR / "chat_token.json.enc"
