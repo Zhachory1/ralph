@@ -503,5 +503,27 @@ class VoiceTests(unittest.TestCase):
                 self.assertTrue(s in tracked or f"name: {s}\n    lane: voice" in manifest)
 
 
+class EphemeralSandboxTests(unittest.TestCase):
+    """#162: a sandbox belongs to a session and is removed at close/idle,
+    rather than kept per profile across sessions. Hermes defaults both
+    persistence settings on; install must turn them off in both paths."""
+
+    def test_sandbox_config_sets_both_keys_false(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        block = install[install.index("sandbox_config() {"):install.index("\n}", install.index("sandbox_config() {"))]
+        self.assertIn("terminal.container_persistent false", block)
+        self.assertIn("terminal.persistent_shell false", block)
+        # container_memory is a cap, not persistence; it must stay (owner:
+        # "I really don't want to have smaller containers").
+        self.assertIn("terminal.container_memory", block)
+
+    def test_terminal_block_sets_both_keys_false(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        block = install[install.index("terminal_block() {"):install.index("\n}", install.index("terminal_block() {"))]
+        self.assertIn('echo "  container_persistent: false"', block)
+        self.assertIn('echo "  persistent_shell: false"', block)
+        self.assertIn("container_memory:", block)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

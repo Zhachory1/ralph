@@ -75,7 +75,7 @@ flowchart LR
 | `chat-sender` | `bootstrap/run-chat-sender`: the public Chat producer, then `chat-reply --scan`, every 60 s. On when `COMPOSE_PROFILES` includes `chat` (dd-chat.md Sec4.1, D5). | Its own `chat-creds` volume (the Chat token, empty until `bootstrap/chat-creds-copy`, D8), `/workspaces` at the hermes service's own path, the board through `docker exec`. Never `hermes-home`. |
 | `tracker-sync` | Idle (`sleep infinity`); exec'd into by `chat-sender`, not ticked. On when `COMPOSE_PROFILES` includes `tracker`. Inert: no pull request calls it yet. | Its own `tracker-creds` volume (the tracker key, empty), `/workspaces`, the board through `docker exec`. Never `hermes-home` or `chat-creds`. |
 
-**Agent sandboxes** are Docker containers that Hermes creates per profile (`terminal.backend: docker`, image `ghcr.io/zhachory1/ralph-sandbox`). Every agent command runs in one. A sandbox sees its own `/workspace` and home, plus only these extras:
+**Agent sandboxes** are Docker containers that Hermes creates for terminal sessions (`terminal.backend: docker`, image `ghcr.io/zhachory1/ralph-sandbox`). Ralph sets `container_persistent: false` and `persistent_shell: false`: Hermes removes a session's container when that session closes or goes idle, rather than keeping one running per profile. A sandbox sees its own `/workspace` and home, plus only these extras:
 
 | Mount (read-only) | Profiles |
 |---|---|
