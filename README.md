@@ -41,10 +41,13 @@ A new profile is justified by different permissions, resources, or lifecycle —
 | analyst | Read the warehouse | Write anywhere |
 | experimenter | Spend compute, under a hard cap | Deploy, write production data |
 | auditor | Judge the system | Edit what it judges |
+| librarian | Tidy the docs repo through one PR a week | Delete anything, merge a pull request, or judge quality |
 | watcher | Read observability | Write anything |
 | chat-maintainer | Read staged chat, route, write replies | Hold the chat credential, send directly, create cards |
 
-All ten exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other five are built and unexercised.
+The docs repository's default-branch protection is a prerequisite: an active ruleset with an empty bypass list, so no token — not even the owner's — can push straight to its default branch. That ruleset, not the librarian's push token, is what makes "agents don't merge" hold for the docs repository; protect it before installing the librarian on an instance.
+
+All eleven exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other six are built and unexercised until the librarian's first pull request merges.
 
 ### Invariants live in permissions, not prose
 
@@ -101,7 +104,7 @@ Safety mechanisms come before builder autonomy.
 1. **Core loop** — hand-written orchestrator and author profiles; a notifier polling both `blocked` and `review`; deterministic orchestration tests. No approval-gate or council adapter: the spike found both are native. No `extend` script yet, because a template is easier to get right after writing the same profile a few times. *Done when* a PRD becomes a design-doc PR, you're notified, and the tests pass.
 2. **Safety before autonomy** — kill-switch scripts, per-profile scoped tokens, branch protection, merge commands blocked in the builder's toolset. *Done when* the first kill-switch drill and the sandbox canary's security checks pass.
 3. **Builder and reviewer** — agent PR conventions and scope discipline, with the CI scope check live. *Done when* an approved design doc produces reviewed PRs in a sandbox org, then on one real low-risk feature.
-4. **Cron** — maintenance sweep, morning digest carrying the day's operational metrics, docs gardener, auditor running the weekly trend report. *Done when* a full week runs with no missed or duplicate alerts.
+4. **Cron** — maintenance sweep, morning digest carrying the day's operational metrics, the librarian (#130), auditor running the weekly trend report. *Done when* a full week runs with no missed or duplicate alerts.
 5. **Local search** over the docs repo. *Done when* every profile can find the current design doc for a feature. Built (#121): a QMD service per instance, MCP tools for the searching profiles, memories in the docs repo, hourly refresh.
 6. **Launch plans**, with you advancing every stage.
 7. **Analyst, then experimenter.** Analyst is read-only and low risk; experimenter spends money, so it comes last.
