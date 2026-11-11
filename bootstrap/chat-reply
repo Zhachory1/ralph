@@ -66,6 +66,15 @@ CEILINGS = {"clarify": 2, "decline": 1, "ack": 1, "final": 1}
 MAX_TEXT = 4000
 # A long reply is split into at most this many messages, in order.
 MAX_PARTS = 5
+# A non-zero `--record` below this many consecutive attempts retries next scan,
+# by itself, with no block and no alert (dd-tracker.md:322-333, plan-tracker.md
+# PR 3). Five is one per scan, so five minutes before the quiet failure is made
+# loud.
+TRACKER_RECORD_ATTEMPTS = 5
+TRACKER_RECORD_FAILURES = ".tracker-record-failures"
+# What `docker exec` says, in either wording across versions, for a container
+# that does not exist or is stopped. Matched only on a failed exec.
+TRACKER_CONTAINER_DOWN = re.compile(r"no such container|is not running", re.IGNORECASE)
 
 
 class Refused(ValueError):
@@ -82,6 +91,116 @@ def command(argv):
         return subprocess.run(argv, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(argv, 124, "", "timed out after 60s")
+
+
+def tracker(root, *args):
+    """`bootstrap/tracker-sync`, local or through `docker exec` into
+    RALPH_TRACKER_CONTAINER -- the shape `inbox-producer:29-33` already uses,
+    because the wiring lands before the compose services do (dd-tracker.md
+    Sec2, :216-222). `--work-root` is `/workspaces/chat-inbox` through the
+    container, the same path `chat-route`'s own docker exec call uses; the
+    local fallback passes this sender's own root."""
+    container = os.environ.get("RALPH_TRACKER_CONTAINER")
+    if container:
+        argv = ["docker", "exec", container, "python3", "/ralph/bootstrap/tracker-sync",
+                *args, "--work-root", "/workspaces/chat-inbox"]
+    else:
+        argv = [sys.executable, str(HERE / "tracker-sync"), *args, "--work-root", str(root)]
+    result = command(argv)
+    if container and result.returncode and TRACKER_CONTAINER_DOWN.search(result.stderr or ""):
+        # The chat-sender service names `<instance>-tracker-sync-1` by default, but
+        # that container only exists once the owner starts the `tracker` profile
+        # (D1). Until then every `docker exec` into it fails, and a failed
+        # `--record` holds the acknowledgement: the sidecar would go silent for
+        # every requester the moment it is switched on. A tracker nobody has
+        # started is a tracker that is not configured, so it takes the same exit
+        # as a missing key file: success, nothing recorded.
+        if "--record" in args:
+            print(f"tracker-sync container {container} is not running; "
+                  "treating the tracker as not configured", file=sys.stderr)
+        return subprocess.CompletedProcess(argv, 0, "tracker not configured\n", "")
+    return result
+
+
+def read_record_failures(path):
+    try:
+        return int(path.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def write_record_failures(path, count):
+    """A counter, not a once-only marker: a plain open, not `O_EXCL`, because
+    this step must be able to rewrite itself on every retry (dd-tracker.md
+    Sec3.2, :251-260)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(str(count))
+
+
+def record_item(container, board, task_id, root, op_id):
+    """`tracker-sync --record`, before the acknowledgement, on an `ack` only
+    (dd-tracker.md Sec3.1, plan-tracker.md PR 3). Returns 0 to let `handle()`
+    carry on to `post()` -- recorded, or tracker not configured -- or the
+    value `handle()` must return instead: 1 while a transient failure is
+    still inside the retry budget, 2 once a refusal or the budget itself ends
+    the automatic retry and blocks the card.
+
+    `TRACKER_RECORD_FAILURES` only ever counts a transient (exit 1) failure.
+    A refusal (exit 2) blocks and alerts on its first attempt, with no retry
+    budget spent, so it never touches the counter."""
+    failures = root / op_id / TRACKER_RECORD_FAILURES
+    result = tracker(root, "--record", op_id)
+    if result.returncode == 0:
+        try:
+            failures.unlink()
+        except FileNotFoundError:
+            pass
+        return 0
+    if result.returncode == 2:
+        reason = "tracker refused to record the item; acknowledgement not sent"
+        print(reason, file=sys.stderr)
+        block_and_alert(container, board, task_id, root, op_id, "tracker-record", reason)
+        return 2
+    attempts = read_record_failures(failures) + 1
+    write_record_failures(failures, attempts)
+    if attempts >= TRACKER_RECORD_ATTEMPTS:
+        reason = (f"tracker-sync --record failed {attempts} times in a row; acknowledgement "
+                  "not sent and the card is blocked (see docs/operations.md, Tracker sync)")
+        print(reason, file=sys.stderr)
+        block_and_alert(container, board, task_id, root, op_id, "tracker-record", reason)
+        return 2
+    print(f"tracker-sync --record failed ({attempts}/{TRACKER_RECORD_ATTEMPTS}); "
+          "acknowledgement not sent, retrying next scan", file=sys.stderr)
+    return 1
+
+
+def alert_settle_failures(root, stderr):
+    """A `--settle` failure alerts and blocks nothing (dd-tracker.md Sec3.4,
+    plan-tracker.md PR 3): by the time `--settle` runs, any reply for a
+    settled operation is already out, so there is no card left to block.
+    Guarded by `.alerted-tracker-settle` in the failing operation's own
+    directory, keyed off the `settle-failed: <op_id>` lines `tracker-sync`
+    prints, so a loop reports itself once per operation rather than every
+    scan."""
+    for line in (stderr or "").splitlines():
+        prefix = "settle-failed: "
+        if not line.startswith(prefix):
+            continue
+        op_id = line[len(prefix):].strip()
+        if not OP_ID.fullmatch(op_id):
+            continue
+        sentinel = root / op_id / ".alerted-tracker-settle"
+        if sentinel.exists():
+            continue
+        notify(f"Ralph tracker settle failed for {op_id}")
+        try:
+            fd = os.open(sentinel, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+        except FileExistsError:
+            pass
+        except OSError:
+            print(f"could not record tracker settle alert sentinel for {op_id}", file=sys.stderr)
 
 
 def parse_send_switch(raw):
@@ -450,6 +569,9 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
                 block_and_alert(container, board, task_id, root, op_id, kind, reason,
                                 block=False)
                 return 1
+            record_result = record_item(container, board, task_id, root, op_id)
+            if record_result:
+                return record_result
         if not send_enabled:
             # A held reply is not a failure: it must neither block nor alert
             # as one (§4.8). `mark()` never runs, so the ceilings stay exact.
@@ -490,6 +612,14 @@ def scan(instance_env):
         print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
     status = 0
+    # Once per scan, before any card is handled: everything `--settle` does
+    # happens after a reply has already gone out (dd-tracker.md:240-243), so a
+    # failure here sets the scan's exit status and alerts, and withholds no
+    # reply (plan-tracker.md PR 3).
+    settled = tracker(root, "--settle")
+    if settled.returncode:
+        status = 1
+        alert_settle_failures(root, settled.stderr)
     for board in ("queues", "ralph"):
         listed = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
                           "--board", board, "list", "--assignee", "ralph-chat-maintainer",

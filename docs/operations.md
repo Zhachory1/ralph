@@ -42,6 +42,7 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | Card in `triage` | The notifier releases parked doc gates. For others, release with care (see Hermes `specify_triage_task`); do not use `kanban specify`, which rewrites the card with a model. |
 | `respawn_guarded: active_pr` | `assign <id> none`, then `assign <id> <owner>` |
 | The PR moved on or merged | `archive <id>`; the next pass rebuilds from the current head |
+| Blocked with a `tracker-record` reason | See [Tracker sync](#tracker-sync-chat-requests-and-the-work-tracker) below |
 
 ## Reading logs
 
@@ -49,10 +50,23 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 |---|---|
 | Review discovery, publish, maintenance, cleanup | `docker logs <instance>-review-loop-1` |
 | Approvals, gate alerts, digest | `docker logs <instance>-notifier-1` |
-| Chat reply sender | `~/Library/Logs/ralph-chat-reply-<instance>.{log,err.log}` |
+| Chat sidecar (producer + reply loop) | `docker logs <instance>-chat-sender-1` (before the cutover below: `~/Library/Logs/ralph-chat-reply-<instance>.{log,err.log}`) |
 | A card's run | `docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> show <id> --json` |
 | Disk | `colima ssh -- df -h /` and `du -sh compose/workspaces*/sandboxes` |
 | Knowledge index | `bootstrap/knowledge-status <instance>` (the `RALPH_INSTANCE`, e.g. `ralph-personal`): collections, counts, models, last refresh (`status.json`) |
+
+## Chat sidecar cutover (owner-only)
+
+Not this card's job -- not any build card's job. None of these is a pull request, and nothing schedules them; do them by hand, in order, once chat PR 8 has merged.
+
+1. **Start the sidecar first (`docker compose --profile chat up -d chat-sender`).** The token copy in step 3 `docker exec`s into this container, so it has to be running. With no token it is idle: it reads nothing, sends nothing and alerts nothing, and says so once in `docker logs <instance>-chat-sender-1`.
+2. **Stop the private overlay's `chat_inbox.py` intake cron job.** The sidecar's producer replaces it; two producers would stage the same messages twice. Intake is paused from here until step 3 lands.
+3. **Copy today's Chat token into the sidecar's volume (D8).** Not a browser step, not a second OAuth grant: `bootstrap/chat-creds-copy --instance-env .env.<name>` re-encrypts the token you already have (`~/.config/gws-cli/chat_token.json.enc`) for the `chat-sender` container's own pinned identity and writes it into that container's `chat-creds` volume over `docker exec`/`docker cp`. Your host token is untouched; a second copy now exists that can post as you until you revoke the grant in your Google account. Within one interval the sidecar starts.
+4. **Check that the sidecar sends, then retire the LaunchAgent.** Send yourself a message in a pilot space, confirm `docker logs <instance>-chat-sender-1` shows the scan picking it up and a reply posted in that thread, and only then unload the host `chat-reply` LaunchAgent. Until then both run; the markers live in the shared `chat-inbox` directory and every part is sent with a fixed id, so the Chat API drops a repeat. **Rollback:** the reverse, in reverse order.
+5. **Bring skipped threads back, when you want them (no deadline).** `bootstrap/chat-producer`'s cutover guard prints `guarded <op> <thread>` and stages nothing for a thread Ralph already answered under the overlay's own operation ids; `--allow-unseen-history` lifts it at the cost of at most one duplicate acknowledgement per thread.
+6. **Set the send switch.** `CHAT_SEND` (`compose/.env.example`) defaults **on**, so replies keep going out after the cutover. Set it to `0`/`off` as a stop button and recreate the sidecar to apply it (`docker compose --profile chat up -d chat-sender`): the container reads it when it is created, so editing `.env` alone changes nothing in a running one. The host LaunchAgent, by contrast, re-reads its instance file every scan. See `docs/workflows.md`'s Chat loop.
+7. **Run one threaded reply in a space of your own before the first real send.** The code asks the Chat API for `REPLY_MESSAGE_OR_FAIL`, not for proof that a thread id captured minutes earlier is still the right one; the token holds no delete scope.
+8. **Pick the pilot spaces (`CHAT_ROUTE_SPACES`) knowing Ralph reads every human message in them.** Every one is an operation, an intake card and one model run.
 
 ## Knowledge index
 
@@ -72,6 +86,43 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | Force a run now | Clear the stamp inside the review-loop container, then poll once: `docker exec <instance>-review-loop-1 rm -f /workspaces/review-work/.librarian-stamp`, then `docker exec <instance>-review-loop-1 /ralph/bootstrap/run-review-loop --once`. `/workspaces/review-work` is the container path; on the host the same folder is under `RALPH_WORKSPACES` (`compose/workspaces/review-work` by default), so removing the file there also works. `--once` alone does nothing while the stamp is under seven days old. Needs `RALPH_DOCS_REPO` set, no open pull request with a `librarian/` head, and no librarian card still queued, running or blocked. |
 | A librarian pull request or card is open | Blocks the next weekly card. `run-review-loop` skips creation while a `librarian/*` head is open (it reads every open pull request) or a `ralph-librarian` card is not done, and the run checks the pull request again for itself. If either check cannot be read, it skips that poll and retries on the next. Each card carries a per-week idempotency key, so two loops running at once still produce one card. Merge or close the pull request, or finish the card, to let the next card through. |
 | After the profile and `install` changes merge | Re-run `init` on every instance once the image is pulled, so `ralph-librarian` exists there. No build pull request or card does this; it is an owner-only step. |
+
+## Tracker sync (chat requests and the work tracker)
+
+`bootstrap/tracker-sync` (called by `chat-reply`, never scheduled on its own) records
+a chat request in the work tracker before its acknowledgement goes out, and settles
+pending and closed items once per scan, after every reply for that scan is already
+sent. With no key file it prints "tracker not configured" and exits 0: the
+requester-facing path runs unchanged, and nothing below applies.
+
+- **Key file:** `RALPH_TRACKER_CREDS`, in the `tracker-creds` volume, mode `0600` --
+  the base URL, the account's per-user API key, the project identifier, and the
+  thread-key custom field id.
+- **The `tracker-sync` container:** the `chat-sender` sidecar calls it with
+  `docker exec` into `<instance>-tracker-sync-1`, which exists only when
+  `COMPOSE_PROFILES` includes `tracker`. Until you start it, a failed `docker exec`
+  ("no such container", "is not running") is treated as the tracker not being
+  configured: `--record` and `--settle` are skipped and the acknowledgement goes out
+  as it does today. `docker logs <instance>-chat-sender-1` says so on each skipped
+  `--record`. After you create the key file, start the container
+  (`docker compose --profile tracker up -d tracker-sync`) or nothing is recorded.
+- **One-time setup, by hand, on the tracker instance (not an API call):** create
+  Ralph's own account with access to the project, generate its per-user API key,
+  create the thread-key custom field, and create (or map onto stock statuses)
+  `Waiting on requester` and `Duplicate`.
+- **`.alerted-tracker-record`** (in `<chat-inbox>/<operation>/`): a `--record`
+  failure repeated five scans in a row and blocked that operation's intake card.
+  The acknowledgement never went out.
+- **`.alerted-tracker-settle`** (in `<chat-inbox>/<operation>/`): a `--settle` pass
+  failed for that operation. No card is blocked -- by the time `--settle` runs, the
+  reply it is settling is already sent -- so this is alert-only, and
+  `notifier/poller.py` is the backstop if the alert itself is missed.
+- **Clearing a card blocked with a `tracker-record` reason:** fix the tracker, or
+  rename the `RALPH_TRACKER_CREDS` key file to make `tracker-sync` inert again;
+  delete `.alerted-tracker-record` and `.tracker-record-failures` from
+  `<chat-inbox>/<operation>/`; then unblock the intake card. Nothing here is urgent:
+  the request is already an orchestrator card, so what is missing is the
+  acknowledgement, not the work.
 
 ## Glossary
 

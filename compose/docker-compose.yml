@@ -94,6 +94,9 @@ services:
       # Scheduled jobs from the private overlay. Blank means none; a path that
       # does not exist mounts as an empty directory, which installs nothing.
       - ${RALPH_PRIVATE_JOBS:-./no-private-jobs}:/ralph/private-jobs:ro
+      # MCP servers from the private overlay (#133): its mcp.json names each
+      # server, its tool allowlist and the profiles that get it. Blank: none.
+      - ${RALPH_PRIVATE_MCP:-./no-private-mcp}:/ralph/private-mcp:ro
     restart: "no"
 
   hermes:
@@ -213,6 +216,7 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
+      RALPH_REVIEW_BOARD: ${RALPH_REVIEW_BOARD:-queues}
       RALPH_POLL_SECONDS: ${RALPH_POLL_SECONDS:-900}
       # Local hour the morning digest goes out, once a day.
       RALPH_DIGEST_HOUR: ${RALPH_DIGEST_HOUR:-8}
@@ -301,6 +305,94 @@ services:
       - ../docs:/ralph/docs:ro
       - ../bootstrap:/ralph/bootstrap:ro
     mem_limit: 4g
+    restart: unless-stopped
+
+  # chat-sender: the public producer and the reply loop, beside the agent so
+  # the Chat token lives in its own volume the model's container never mounts
+  # (dd-chat.md Sec4.1, D5). Started only when "chat" is in COMPOSE_PROFILES
+  # -- same gating as knowledge above -- and still inert even started: the
+  # chat-creds volume is empty until bootstrap/chat-creds-copy runs on the
+  # host, once (D8), and _creds_or_die refuses with no token
+  # (gchat.py:146-154).
+  chat-sender:
+    profiles: ["chat"]
+    image: ghcr.io/zhachory1/ralph-notifier:${RALPH_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.notifier
+    depends_on:
+      hermes:
+        condition: service_started
+      socket-proxy:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
+    command: ["/ralph/bootstrap/run-chat-sender"]
+    environment:
+      RALPH_INSTANCE: ${RALPH_INSTANCE:-ralph}
+      RALPH_WORKSPACES: /workspaces
+      CHAT_ROUTE_SPACES: ${CHAT_ROUTE_SPACES:-}
+      CHAT_SEND: ${CHAT_SEND:-on}
+      RALPH_NOTIFY_URL: ${RALPH_NOTIFY_URL:-${GCHAT_WEBHOOK_URL:-}}
+      RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
+      # Named for a later pull request to read (tracker plan assumption 7);
+      # naming it here is not a merge dependency. Defaulted to this compose
+      # project's own tracker-sync container, so that pull request needs no
+      # further configuration on an instance already running this one.
+      RALPH_TRACKER_CONTAINER: ${RALPH_TRACKER_CONTAINER:-${RALPH_INSTANCE:-ralph}-tracker-sync-1}
+      DOCKER_HOST: tcp://socket-proxy:2375
+    env_file:
+      - path: ${RALPH_ENV_FILE:-./.env}
+        required: false
+    volumes:
+      # Read-write: a token refresh rewrites it in place (gchat.py:139-143).
+      - chat-creds:/root/.config/gws-cli
+      - ../bootstrap:/ralph/bootstrap:ro
+      # post() shells out two levels up to skills/ops/google-chat/gchat.py
+      # (chat-reply:128), as init already mounts it (:93 above).
+      - ../skills:/ralph/skills:ro
+      # Same host path as the hermes service, because bootstrap/install finds
+      # the chat-maintainer's read-only evidence mount by inspecting that
+      # container's own /workspaces source.
+      - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
+    restart: unless-stopped
+
+  # tracker-sync: exec'd into by chat-sender, never ticked on its own
+  # (dd-tracker.md Sec2). Its own profile gating, separate from "chat", so a
+  # plain `docker compose up` -- or `--profile chat up` alone -- starts
+  # neither; it carries the tracker key, never the Chat token, and mounts
+  # neither hermes-home nor chat-creds. No pull request calls it yet: with no
+  # key file bootstrap/tracker-sync (tracker plan PR 2) exits 0, "tracker not
+  # configured".
+  tracker-sync:
+    profiles: ["tracker"]
+    image: ghcr.io/zhachory1/ralph-notifier:${RALPH_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.notifier
+    depends_on:
+      hermes:
+        condition: service_started
+      socket-proxy:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
+    # An idle command, not one that exits the way init's does: `docker exec`
+    # needs a running container (dd-tracker.md:216-218).
+    command: ["sleep", "infinity"]
+    environment:
+      # Where the tracker key file lives in its own volume (tracker plan
+      # assumption 1); read by a later pull request, not by this one.
+      RALPH_TRACKER_CREDS: ${RALPH_TRACKER_CREDS:-/var/lib/ralph-tracker/tracker.json}
+      RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
+      DOCKER_HOST: tcp://socket-proxy:2375
+    env_file:
+      - path: ${RALPH_ENV_FILE:-./.env}
+        required: false
+    volumes:
+      - tracker-creds:/var/lib/ralph-tracker
+      - ../bootstrap:/ralph/bootstrap:ro
+      - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
     restart: unless-stopped
 
   # hermes-webui: a chat space for talking with the agents, alongside the
@@ -398,3 +490,9 @@ volumes:
   hermes-webui-state:
   # The knowledge service's docs checkout, QMD index and models (#121).
   knowledge:
+  # The Chat token, re-encrypted for the chat-sender container by
+  # bootstrap/chat-creds-copy (D8). Empty until the owner runs that, once.
+  chat-creds:
+  # The work tracker's own key file (tracker plan D1). Empty until that
+  # plan's own runbook step; no pull request writes to it yet.
+  tracker-creds:

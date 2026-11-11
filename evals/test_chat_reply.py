@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -58,8 +59,14 @@ class ChatReplyTests(unittest.TestCase):
         }
         self.calls = []
         self.reply = load_script()
+        # Tracker-sync defaults to the inert "no key file" shape: exit 0 for
+        # both entry points, nothing recorded and nothing settle-failed.
+        self.record_rc = 0
+        self.settle_rc = 0
+        self.settle_stderr = ""
         # No webhook configured: notify() must print, not reach the network.
-        env_patch = patch.dict(os.environ, {"RALPH_NOTIFY_URL": "", "GCHAT_WEBHOOK_URL": ""})
+        env_patch = patch.dict(os.environ, {"RALPH_NOTIFY_URL": "", "GCHAT_WEBHOOK_URL": "",
+                                             "RALPH_TRACKER_CONTAINER": ""})
         env_patch.start()
         self.addCleanup(env_patch.stop)
 
@@ -96,15 +103,27 @@ class ChatReplyTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, "routed: t_orchestrator\n", "")
         if "block" in argv:
             return subprocess.CompletedProcess(argv, 0, "", "")
+        if any(isinstance(a, str) and a.endswith("tracker-sync") for a in argv):
+            return self.tracker_sync(argv)
         if "send" in argv:
             return subprocess.CompletedProcess(argv, 0, json.dumps({"sent": True}), "")
         raise AssertionError(argv)
+
+    def tracker_sync(self, argv):
+        if "--settle" in argv:
+            return subprocess.CompletedProcess(argv, self.settle_rc, "", self.settle_stderr)
+        return subprocess.CompletedProcess(argv, self.record_rc, "", "")
 
     def sends(self):
         return [a for a in self.calls if "send" in a and "/ralph/bootstrap/chat-route" not in a]
 
     def blocks(self):
         return [a for a in self.calls if "block" in a]
+
+    def tracker_calls(self, flag=None):
+        calls = [a for a in self.calls
+                 if any(isinstance(x, str) and x.endswith("tracker-sync") for x in a)]
+        return [a for a in calls if flag in a] if flag else calls
 
     def handle(self, board, task_id, tracker_host=None):
         with patch.object(self.reply, "command", side_effect=self.command):
@@ -672,6 +691,238 @@ class ChatReplyTests(unittest.TestCase):
                          texts)
         self.assertTrue((self.root / self.op / ".receipt-sent").is_file())
         self.assertTrue((self.root / self.op / ".final-sent").is_file())
+
+
+    # -- PR 3: tracker-sync wiring, and a tracker failure you can see --
+
+    def test_nonzero_record_sends_nothing_and_is_retryable(self):
+        """E1, dd-tracker.md:428: the single most important test in this
+        pull request. `post()` must never run after a failed `--record`."""
+        self.record_rc = 1
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(1, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+        self.assertEqual(0, notify.call_count)
+        self.assertTrue((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).is_file())
+
+    def test_record_runs_after_chat_route_confirms_and_before_post(self):
+        self.assertEqual(0, self.handle("queues", "t_intake"))
+        route_idx = next(i for i, a in enumerate(self.calls)
+                         if "/ralph/bootstrap/chat-route" in a)
+        record_idx = next(i for i, a in enumerate(self.calls)
+                          if any(isinstance(x, str) and x.endswith("tracker-sync") for x in a))
+        send_idx = next(i for i, a in enumerate(self.calls) if "send" in a)
+        self.assertLess(route_idx, record_idx)
+        self.assertLess(record_idx, send_idx)
+
+    def test_decline_ignore_and_reply_never_call_tracker_sync(self):
+        """E3, dd-tracker.md:430: only an `ack` records."""
+        del self.cards[("ralph", "t_final")]
+        scenarios = [
+            ("ignore", {"decision": "ignore", "body": ""}),
+            ("plain-reply", {"decision": "reply", "body": "no."}),
+            ("clarify", {"decision": "reply", "reply_kind": "clarify", "body": "which one?"}),
+            ("decline", {"decision": "reply", "reply_kind": "decline", "body": "no."}),
+        ]
+        for name, metadata in scenarios:
+            with self.subTest(name=name):
+                op = self.make_operation(f"spaces/example/messages/{name}")
+                task_id = f"t_{name}"
+                self.cards[("queues", task_id)] = {
+                    "task": {"id": task_id, "status": "done", "assignee": "ralph-chat-maintainer",
+                             "body": f"operation_id: {op}\n",
+                             "workspace_path": f"/workspaces/chat-inbox/{op}"},
+                    "metadata": metadata}
+                self.assertEqual(0, self.handle("queues", task_id))
+                self.assertEqual([], self.tracker_calls("--record"))
+
+    def test_record_exit_zero_tracker_not_configured_is_inert(self):
+        """The inertness claim, as a test: `--record` succeeding because no
+        key file exists must leave the acknowledgement unchanged."""
+        self.record_rc = 0
+        self.assertEqual(0, self.scan())
+        texts = [a[a.index("send") + 2] for a in self.sends()]
+        self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."],
+                         texts)
+        self.assertEqual([], self.blocks())
+        self.assertFalse((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).exists())
+
+    def test_settle_runs_once_per_scan_before_the_board_loop(self):
+        self.assertEqual(0, self.scan())
+        self.assertTrue(self.calls)
+        first = self.calls[0]
+        self.assertTrue(any(isinstance(a, str) and a.endswith("tracker-sync") for a in first))
+        self.assertIn("--settle", first)
+        self.assertEqual(1, len(self.tracker_calls("--settle")))
+
+    def test_settle_failure_alerts_once_blocks_nothing_and_sends_still_go_out(self):
+        self.settle_rc = 1
+        self.settle_stderr = f"settle-failed: {self.op}\n"
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(1, self.scan())
+            texts = [a[a.index("send") + 2] for a in self.sends()]
+            self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."],
+                             texts)
+            self.assertEqual([], self.blocks())
+            self.assertEqual(1, notify.call_count)
+            self.assertTrue((self.root / self.op / ".alerted-tracker-settle").is_file())
+            # A second scan over the same still-failing operation alerts no second time.
+            self.assertEqual(1, self.scan())
+        self.assertEqual(1, notify.call_count)
+        self.assertEqual([], self.blocks())
+
+    def test_record_retry_blocks_nothing_alerts_nothing_and_retries_next_scan(self):
+        """The test this pull request exists for: asserted on the card
+        listing the second scan makes, not on the counter file."""
+        # The final card is irrelevant to --record and would itself be
+        # refused (no ack yet) and block the `ralph` board card otherwise.
+        del self.cards[("ralph", "t_final")]
+        self.record_rc = 1
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(1, self.scan())
+        self.assertEqual([], self.sends())
+        self.assertEqual([], self.blocks())
+        self.assertEqual(0, notify.call_count)
+        self.assertEqual(1, len(self.tracker_calls("--record")))
+        self.calls.clear()
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(1, self.scan())
+        self.assertTrue(any("list" in a for a in self.calls))
+        self.assertEqual(1, len(self.tracker_calls("--record")))
+        self.assertEqual(0, notify.call_count)
+
+    def test_five_consecutive_record_failures_block_once_alert_once_sixth_no_second_alert(self):
+        self.record_rc = 1
+        with patch.object(self.reply, "notify") as notify:
+            results = [self.handle("queues", "t_intake") for _ in range(5)]
+            self.assertEqual([1, 1, 1, 1, 2], results)
+            self.assertEqual(1, len(self.blocks()))
+            self.assertEqual(1, notify.call_count)
+            self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.assertEqual(1, len(self.blocks()))
+        self.assertEqual(1, notify.call_count)
+
+    def test_four_failures_then_success_clears_counter_and_a_later_failure_starts_at_one(self):
+        failures_path = self.root / self.op / self.reply.TRACKER_RECORD_FAILURES
+        with patch.object(self.reply, "command", side_effect=self.command):
+            self.record_rc = 1
+            for expected in (1, 2, 3, 4):
+                self.assertEqual(1, self.reply.record_item(
+                    "ralph-work-hermes-1", "queues", "t_intake", self.root, self.op))
+                self.assertEqual(expected, int(failures_path.read_text()))
+            self.record_rc = 0
+            self.assertEqual(0, self.reply.record_item(
+                "ralph-work-hermes-1", "queues", "t_intake", self.root, self.op))
+            self.assertFalse(failures_path.exists())
+            self.record_rc = 1
+            self.assertEqual(1, self.reply.record_item(
+                "ralph-work-hermes-1", "queues", "t_intake", self.root, self.op))
+            self.assertEqual(1, int(failures_path.read_text()))
+
+    def test_record_refusal_blocks_and_alerts_on_first_failure_with_no_budget_spent(self):
+        self.record_rc = 2
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(2, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+        self.assertEqual(1, len(self.blocks()))
+        self.assertEqual(1, notify.call_count)
+        self.assertFalse((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).exists())
+
+    def test_no_key_file_record_creates_no_counter_and_never_blocks(self):
+        """The inertness claim on the failure path, as a test."""
+        with patch.object(self.reply, "block_and_alert") as block_and_alert:
+            self.assertEqual(0, self.scan())
+        block_and_alert.assert_not_called()
+        self.assertFalse((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).exists())
+
+    def test_tracker_container_env_var_selects_docker_exec_or_local(self):
+        seen = []
+
+        def fake_command(argv):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with patch.object(self.reply, "command", side_effect=fake_command):
+            self.reply.tracker(self.root, "--record", "chat-abc")
+        self.assertEqual(
+            [sys.executable, str(self.reply.HERE / "tracker-sync"), "--record", "chat-abc",
+             "--work-root", str(self.root)],
+            seen[-1])
+
+        with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-1"}), \
+                patch.object(self.reply, "command", side_effect=fake_command):
+            self.reply.tracker(self.root, "--settle")
+        self.assertEqual(
+            ["docker", "exec", "ralph-tracker-1", "python3", "/ralph/bootstrap/tracker-sync",
+             "--settle", "--work-root", "/workspaces/chat-inbox"],
+            seen[-1])
+
+    def test_a_tracker_container_that_is_not_running_is_the_tracker_not_configured(self):
+        """The sidecar names `<instance>-tracker-sync-1` by default, but that
+        container only exists under the `tracker` profile. A failed docker exec
+        into it must not hold the acknowledgement: it is the inert path."""
+        for message in ("Error response from daemon: No such container: ralph-tracker-sync-1",
+                        "Error response from daemon: container abc123 is not running"):
+            with self.subTest(message=message):
+                self.setUp()
+                self.tracker_sync = lambda argv, message=message: subprocess.CompletedProcess(
+                    argv, 1, "", message)
+                with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-sync-1"}), \
+                        patch.object(self.reply, "notify") as notify:
+                    self.assertEqual(0, self.handle("queues", "t_intake"))
+                self.assertEqual(1, len(self.sends()))
+                self.assertEqual([], self.blocks())
+                self.assertEqual(0, notify.call_count)
+                self.assertFalse((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).exists())
+
+    def test_a_tracker_container_that_is_down_does_not_fail_the_scan(self):
+        self.tracker_sync = lambda argv: subprocess.CompletedProcess(
+            argv, 1, "", "Error response from daemon: No such container: ralph-tracker-sync-1")
+        with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-sync-1"}):
+            self.assertEqual(0, self.scan())
+        self.assertEqual(2, len(self.sends()))      # the acknowledgement and the final reply
+
+    def test_a_real_record_failure_through_the_container_still_holds_the_acknowledgement(self):
+        """Only docker's own 'container is down' message is the inert path. A
+        tracker-sync that ran and failed is a failure."""
+        self.tracker_sync = lambda argv: subprocess.CompletedProcess(
+            argv, 1, "", "Traceback ...\ntracker.TrackerError: tracker returned 500")
+        with patch.dict(os.environ, {"RALPH_TRACKER_CONTAINER": "ralph-tracker-sync-1"}):
+            self.assertEqual(1, self.handle("queues", "t_intake"))
+        self.assertEqual([], self.sends())
+
+    def test_the_fifth_failure_says_the_card_is_blocked_not_that_it_will_retry(self):
+        self.record_rc = 1
+        printed = io.StringIO()
+        with patch.object(self.reply, "notify") as notify, \
+                patch("sys.stderr", printed):
+            for _ in range(self.reply.TRACKER_RECORD_ATTEMPTS):
+                self.handle("queues", "t_intake")
+        alert = notify.call_args[0][0]
+        self.assertIn("blocked", alert)
+        self.assertNotIn("retrying next scan", alert)
+
+    def test_held_ack_still_records_then_holds_but_held_reply_never_records(self):
+        """A held ack (CHAT_SEND off) still records, then holds; a held
+        reply never records."""
+        self.set_send("0")
+        self.assertEqual(0, self.scan())
+        self.assertEqual(1, len(self.tracker_calls("--record")))
+        self.assertTrue((self.root / self.op / ".held-ack").is_file())
+        self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
+
+        del self.cards[("ralph", "t_final")]
+        other = self.make_operation("spaces/example/messages/held-reply")
+        self.cards[("queues", "t_held_reply")] = {
+            "task": {"id": "t_held_reply", "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": f"operation_id: {other}\n",
+                     "workspace_path": f"/workspaces/chat-inbox/{other}"},
+            "metadata": {"decision": "reply", "body": "I can't help with payroll questions."}}
+        self.calls.clear()
+        self.assertEqual(0, self.handle_with_send("queues", "t_held_reply", send_enabled=False))
+        self.assertEqual([], self.tracker_calls("--record"))
+        self.assertTrue((self.root / other / ".held-reply").is_file())
 
 
 if __name__ == "__main__":

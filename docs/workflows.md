@@ -81,17 +81,17 @@ sequenceDiagram
 
 ## Chat loop
 
-**Entry:** a message in an allowed Chat space. **Exit:** an acknowledgement and a final reply in the same thread, or one reply. **Owners:** overlay `chat_inbox.py` (intake), chat-maintainer, orchestrator, host `chat-reply`.
+**Entry:** a message in an allowed Chat space. **Exit:** an acknowledgement and a final reply in the same thread, or one reply. **Owners:** the `chat-sender` sidecar (intake producer, then the reply loop), chat-maintainer, orchestrator, `tracker-sync` (the step between the acknowledgement and the reply: records the item before the acknowledgement, settles pending or closed items once per scan before any reply goes out).
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant I as chat inbox (cron, 2 min)
+    participant P as chat-sender: producer (60 s)
     participant CM as chat-maintainer
     participant O as orchestrator
-    participant R as chat-reply (host, 60 s)
-    User->>I: message
-    I->>CM: staged thread evidence, intake card
+    participant R as chat-sender: reply loop (60 s)
+    User->>P: message
+    P->>CM: staged thread evidence, intake card
     alt accepted
         CM->>R: route + ack text
         R->>User: acknowledgement
@@ -106,8 +106,9 @@ sequenceDiagram
 ```
 
 - The destination always comes from the staged intake, never from model text. Ralph's own messages carry a `client-ralph-*` id and are skipped at intake.
+- Both halves run as one compose service (`chat-sender`, `COMPOSE_PROFILES=chat`), the Chat token in its own volume the agent's container never mounts (dd-chat.md Sec4.1, D5). Before the owner's cutover (`docs/operations.md`), the overlay `chat_inbox.py` cron job and the host LaunchAgent `chat-reply` do the same two jobs instead.
 
-**Failure mode:** *no reply arrives.* Check the LaunchAgent log `~/Library/Logs/ralph-chat-reply-<instance>.err.log` for refusals.
+**Failure mode:** *no reply arrives.* Check `docker logs <instance>-chat-sender-1` for refusals (or, before the cutover, the LaunchAgent log `~/Library/Logs/ralph-chat-reply-<instance>.err.log`).
 
 ## Daily Chat digest
 

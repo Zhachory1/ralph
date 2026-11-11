@@ -171,7 +171,12 @@ class Board:
         self._run("--board", board, "reopen-review", task_id, "--reason", reason)
 
     def complete(self, board: str, task_id: str, summary: str):
-        self._run("--board", board, "complete", task_id, "--summary", summary)
+        # --force: a gate the orchestrator was dispatched on is `running` under
+        # its claim, and a merged PR is the owner's decision either way (#145).
+        self._run("--board", board, "complete", task_id, "--summary", summary, "--force")
+
+    def block(self, board: str, task_id: str, reason: str):
+        self._run("--board", board, "block", task_id, reason)
 
     def pending(self, board: str):
         """Cards waiting on a human.
@@ -194,8 +199,11 @@ class Board:
 
     def waiting(self, board: str):
         """Cards in `ready` or `todo`: where a resumed gate lands."""
+        return self.cards(board, "ready", "todo")
+
+    def cards(self, board: str, *statuses: str):
         cards = []
-        for status in ("ready", "todo"):
+        for status in statuses:
             result = subprocess.run(
                 self._argv(["kanban", "--board", board, "list", "--status", status, "--json"]),
                 capture_output=True, text=True, check=True,
@@ -226,14 +234,17 @@ def parked_by_block_loop(detail: dict) -> bool:
 
 DECISION_NOTES = ("Approved in GitHub.", "Changes requested in GitHub.")
 GATE_TITLES = ("Approve design:", "Approve PRD:", "Approve plan:")
+GATE_ASSIGNEES = ("none", "ralph-orchestrator")
 
 
 def is_approval_gate(detail: dict) -> bool:
     """The orchestrator's approval gates: `Approve PRD:` (#65), `Approve
     design:` (#56) and `Approve plan:` (#119), assigned to nobody. Other unassigned cards are not this
-    notifier's to complete (#110 review)."""
+    notifier's to complete (#110 review). Hermes' create tool requires an
+    assignee, so a gate may carry `none` or the orchestrator itself (#145)."""
     task = detail.get("task") or {}
-    return not task.get("assignee") and (task.get("title") or "").startswith(GATE_TITLES)
+    return (task.get("assignee") or "none") in GATE_ASSIGNEES \
+        and (task.get("title") or "").startswith(GATE_TITLES)
 
 
 def stranded(detail: dict) -> str | None:
@@ -437,6 +448,28 @@ def main(argv=None) -> int:
             board_client.handoff(args.board, task["id"], decision, "blocked")
         resumed += 1
 
+    # A gate is only meant to wait in `blocked`. One left `ready` or `running`
+    # -- dispatched to the orchestrator, or unblocked by hand -- was never
+    # polled, and its merged PR never released the next card (#145).
+    for task in board_client.cards(args.board, "ready", "running"):
+        detail = board_client.show(args.board, task["id"])
+        if not is_approval_gate(detail):
+            continue
+        link = pull_request_for(detail) or pull_request_from_ancestors(board_client, args.board, detail)
+        if not link:
+            continue
+        repo, number = link
+        url = f"https://github.com/{repo}/pull/{number}"
+        if (github.pull_request(repo, number) or {}).get("merged"):
+            if args.dry_run:
+                print(f"{task['id']} <- complete gate ({url} merged)")
+            else:
+                board_client.complete(args.board, task["id"], f"Approved in GitHub: {url} merged.")
+            resumed += 1
+        elif task.get("status") == "ready" and not args.dry_run:
+            # Blocked, it is announced and the merge is seen on a later poll.
+            board_client.block(args.board, task["id"], f"review-required: approve {url}")
+
     for task in board_client.pending(args.board):
         task_id = task["id"]
         detail = board_client.show(args.board, task_id)
@@ -445,7 +478,10 @@ def main(argv=None) -> int:
         if task.get("status") == "triage" and not parked_by_block_loop(detail):
             continue
         link = pull_request_for(detail)
-        if not link:
+        # Only a gate borrows an ancestor's address. A worker card blocked on
+        # something else would take its parent's merged PR as approval and be
+        # resumed on every poll (t_124859f1).
+        if not link and is_approval_gate(detail):
             link = pull_request_from_ancestors(board_client, args.board, detail)
             if link:
                 # The gate card is created before the pull request exists, so

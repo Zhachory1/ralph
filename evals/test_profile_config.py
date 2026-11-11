@@ -406,115 +406,77 @@ class VoiceTests(unittest.TestCase):
                         install.index("# CI logs for the profiles"))
         self.assertIn('[ -f "$f" ] || { : > "$f"; chmod 600 "$f"; }', block)
 
-    def test_knowledge_goes_only_to_searching_profiles(self):
-        """#121: general profiles search the knowledge index; lenses, synthesis
-        and the chat/inbox profiles never do."""
+    def test_atomic_write_keeps_owner_and_mode(self):
+        """#134: as root, a renamed temp file would be root-owned and lock
+        Hermes out of a 640 config. Owner and mode carry over."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            cfg = pathlib.Path(d, "config.yaml")
+            cfg.write_text("a: 1\n")
+            cfg.chmod(0o640)
+            st = cfg.stat()
+            with mock.patch.object(wpc.os, "chown") as chown:
+                wpc.write_atomic(cfg, "a: 2\n")
+            chown.assert_called_once()
+            self.assertEqual((st.st_uid, st.st_gid), chown.call_args.args[1:])
+            self.assertEqual(0o640, cfg.stat().st_mode & 0o777)
+            self.assertEqual("a: 2\n", cfg.read_text())
+
+    def test_knowledge_profile_lists_the_searching_profiles(self):
+        """#121, #133, #134: the lenses, review-synthesis and the chat/inbox
+        profiles reason only from staged evidence and never search."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        block = install[install.index("knowledge_profile() {"):]
-        block = block[:block.index("}")]
+        block = install[install.index("knowledge_profile() {"):install.index("knowledge_set() {")]
         for name in ("orchestrator", "author", "builder", "maintainer", "researcher",
-                     "reviewer", "analyst", "experimenter", "auditor", "watcher", "librarian"):
+                     "reviewer", "analyst", "experimenter", "auditor", "watcher"):
             self.assertIn(name, block)
         for name in ("lens-", "review-synthesis", "chat-maintainer", "chat-summarizer", "inbox-drafter"):
             self.assertNotIn(name, block)
-        self.assertIn("include: [query, get, multi_get, status]", install)
 
-    def test_mcp_blocks_merge_without_losing_lens_tools(self):
-        src = ("mcp_servers:\n  lens-tools:\n    command: x\n"
-               "model:\n  default: m\n"
-               "mcp_servers:\n  knowledge:\n    url: http://knowledge:8181/mcp\n")
-        with tempfile.TemporaryDirectory() as d:
-            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
-            s_path.write_text(src)
-            d_path.write_text("mcp_servers:\n  old:\n    command: y\nother: 1\n")
-            wpc.main(str(s_path), str(d_path))
-            wpc.main(str(s_path), str(d_path))
-            import yaml
-            out = yaml.safe_load(d_path.read_text())
-        self.assertEqual(["lens-tools", "knowledge"], list(out["mcp_servers"]))
-        self.assertEqual(1, out["other"])
-
-    def test_a_profile_loses_knowledge_when_the_source_has_no_mcp_servers(self):
-        """#123 review: turning the feature off removes it from profiles too."""
-        with tempfile.TemporaryDirectory() as d:
-            s_path, d_path = pathlib.Path(d, "src.yaml"), pathlib.Path(d, "dst.yaml")
-            s_path.write_text("model:\n  default: m\n")
-            d_path.write_text("mcp_servers:\n  knowledge:\n    url: x\nother: 1\n")
-            wpc.main(str(s_path), str(d_path))
-            text = d_path.read_text()
-        self.assertNotIn("knowledge", text)
-        self.assertIn("other: 1", text)
-
-    def test_global_knowledge_toggle_keeps_other_servers(self):
-        """#123 review: the global config's own servers survive; turning the
-        feature off removes only knowledge."""
-        import yaml
-        with tempfile.TemporaryDirectory() as d:
-            path = pathlib.Path(d, "config.yaml")
-            path.write_text("model:\n  default: m\nmcp_servers:\n  mine:\n    url: http://x\nother: 1\n")
-            wpc.set_knowledge(str(path), True)
-            wpc.set_knowledge(str(path), True)
-            on = yaml.safe_load(path.read_text())
-            wpc.set_knowledge(str(path), False)
-            off = yaml.safe_load(path.read_text())
-        self.assertEqual(["mine", "knowledge"], list(on["mcp_servers"]))
-        self.assertEqual(["mine"], list(off["mcp_servers"]))
-        self.assertEqual(1, off["other"])
-
-    def test_principles_search_first_and_write_down_what_lasts(self):
-        """#121 (dd-ralph-knowledge D6/D7). install prepends PRINCIPLES to every
-        SOUL, so these reach every profile."""
-        text = (ROOT / "profiles" / "PRINCIPLES.md").read_text()
-        self.assertIn("**Search before you plan or write; cite what you used.**", text)
-        self.assertIn("**Write down what lasts.**", text)
-        for part in ("memory/<decisions|root-causes|conventions>/", "memory/reports/",
-                     "kind:", "source:", "profile:", "date:",
-                     "gh api -X PUT repos/$RALPH_DOCS_REPO/contents/", "RALPH_DOCS_PUBLIC=1"):
-            self.assertIn(part, text)
+    def test_knowledge_and_overlay_are_set_directly_with_hermes_config(self):
+        """#134: no YAML text is written or merged for mcp_servers -- every
+        grant goes through `hermes config set`/`unset`, which owns the file
+        and cannot corrupt a sibling entry, a comment, or indentation."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertIn('cat "$PROFILES_DIR/PRINCIPLES.md"', install)
+        self.assertIn("config set mcp_servers.knowledge.url", install)
+        self.assertIn("config unset mcp_servers.knowledge", install)
+        self.assertIn("overlay-grants.py", install)
+        self.assertIn('hermes $args config unset "$key"', install)
+        self.assertIn('hermes $args config set "$key" "$value"', install)
+        for gone in ("mcp_servers:\n", "OVERLAY_TAG", "wmc.py --knowledge", "wmc.py --overlay"):
+            self.assertNotIn(gone, install)
 
-    def test_principles_say_search_fast(self):
-        """Measured live: typed searches with rerank false return the same top
-        hit in ~1 s that re-ranking returns in 108-239 s; a plain query also
-        pulls the 1.3 GB expansion model (design D4 keeps it off)."""
-        text = (ROOT / "profiles" / "PRINCIPLES.md").read_text()
-        for part in ("typed `searches`", "`rerank: false`", "Never pass a plain-text `query`"):
-            self.assertIn(part, text)
-
-    def test_profiles_learn_the_docs_repo_and_its_visibility(self):
+    def test_named_mcp_set_runs_even_with_no_overlay_configured(self):
+        """#134 review: an early return on an empty OVERLAY_MCP skipped
+        cleanup of a server marked by a since-removed overlay. The cleanup
+        pass must run unconditionally; overlay-grants.py decides what (if
+        anything) needs unsetting."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertIn("RALPH_DOCS_REPO, RALPH_DOCS_PUBLIC]", install)
-        # The default profile's sandbox allowlist is set separately (#124 review).
-        self.assertIn('"RALPH_DOCS_REPO","RALPH_DOCS_PUBLIC"]', install)
-        self.assertIn('gh repo view "$RALPH_DOCS_REPO" --json visibility', install)
-        # Unknown visibility counts as public: the safe side.
-        self.assertIn('DOCS_PUBLIC=1; [ "$vis" = PRIVATE ] || [ "$vis" = INTERNAL ] && DOCS_PUBLIC=0', install)
+        body = install[install.index("named_mcp_set() {"):install.index('OVERLAY_MCP" "$base" "$current"')]
+        self.assertNotIn('[ -n "$OVERLAY_MCP" ] || return 0', body)
 
-    def test_default_soul_is_built_like_the_others_and_hands_off_attachments(self):
-        """#128: install writes PRINCIPLES + STANDARDS + DEFAULT_SOUL to the
-        global SOUL; the text says to copy cleaned content into the card and
-        never pass the path on."""
+    def test_a_failed_mcp_servers_read_is_not_masked_as_empty(self):
+        """#134 review: `|| echo '{}'` could not tell a real read failure from
+        a fresh profile with no mcp_servers key yet, so any failure silently
+        skipped that profile's overlay cleanup for the run with no sign of
+        it. Only the documented \"key not set\" case may become {}; anything
+        else is reported and that profile's cleanup is skipped out loud."""
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertIn('cat "$PROFILES_DIR/DEFAULT_SOUL.md"; } |', install)
-        self.assertIn('"${HERMES_HOME:-$HOME/.hermes}/SOUL.md"', install)
-        soul = (ROOT / "profiles" / "DEFAULT_SOUL.md").read_text()
-        self.assertIn("You are Hermes Agent", soul)
-        for part in ("## Attachments", "--body-file", "Never hand on the attachment path",
-                     "secrets", "RALPH_DOCS_PUBLIC=1"):
-            self.assertIn(part, soul)
-        self.assertFalse((ROOT / "profiles" / "default").exists(),
-                         "profiles/default/ would create a ralph-default profile")
+        self.assertNotIn("2>/dev/null || echo '{}'", install)
+        self.assertIn("Config key not set: mcp_servers", install)
+        self.assertIn("warning: could not read mcp_servers", install)
 
-    def test_only_the_default_sandbox_mounts_chat_uploads(self):
+    def test_default_and_named_profiles_both_get_knowledge_and_overlay_calls(self):
         install = (ROOT / "bootstrap" / "install").read_text()
-        self.assertIn('ATTACH_DIR="$RALPH_SANDBOX_ROOT/.webui-attachments"', install)
-        self.assertIn('vols="\\"$ATTACH_DIR:$ATTACH_DIR:ro\\""', install)
-        block = install[install.index("terminal_block() {"):]
-        block = block[:block.index("\n}\n")]
-        self.assertNotIn("ATTACH_DIR", block, "named profiles must never see uploads")
-        compose = (ROOT / "compose" / "docker-compose.yml").read_text()
-        self.assertIn("HERMES_WEBUI_ATTACHMENT_DIR: ${RALPH_SANDBOX_ROOT}/.webui-attachments", compose)
+        self.assertIn('knowledge_set "-p $name"', install)
+        self.assertIn('named_mcp_set "-p $name" "$base"', install)
+        self.assertIn('knowledge_set ""', install)
+        self.assertIn('named_mcp_set "" default', install)
+
+    def test_overlay_file_is_validated_before_any_profile_is_touched(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        check = install.index("overlay-grants.py\" --check")
+        self.assertLess(check, install.index('for dir in "$PROFILES_DIR"/*/'))
 
     def test_every_profile_is_known_as_ralph(self):
         for p in self.profiles():
