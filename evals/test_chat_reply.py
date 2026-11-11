@@ -101,7 +101,7 @@ class ChatReplyTests(unittest.TestCase):
             }), "")
         if "/ralph/bootstrap/chat-route" in argv:
             return subprocess.CompletedProcess(argv, 0, "routed: t_orchestrator\n", "")
-        if "block" in argv:
+        if "comment" in argv or "archive" in argv:
             return subprocess.CompletedProcess(argv, 0, "", "")
         if any(isinstance(a, str) and a.endswith("tracker-sync") for a in argv):
             return self.tracker_sync(argv)
@@ -118,7 +118,7 @@ class ChatReplyTests(unittest.TestCase):
         return [a for a in self.calls if "send" in a and "/ralph/bootstrap/chat-route" not in a]
 
     def blocks(self):
-        return [a for a in self.calls if "block" in a]
+        return [a for a in self.calls if "archive" in a]
 
     def tracker_calls(self, flag=None):
         calls = [a for a in self.calls
@@ -322,7 +322,7 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual([], self.sends())
         self.assertFalse((self.root / third / ".clarify-sent").is_file())
         self.assertEqual(1, len(self.blocks()))
-        self.assertEqual("t_third", self.blocks()[0][self.blocks()[0].index("block") + 1])
+        self.assertEqual("t_third", self.blocks()[0][self.blocks()[0].index("archive") + 1])
 
     def test_second_decline_in_one_thread_refuses_and_blocks_card(self):
         """A15/R7: at most 1 decline per thread; counts span prior_operations directories."""
@@ -424,7 +424,7 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual([], self.blocks())
         self.assertEqual(1, notify.call_count)
 
-    def test_a_failed_block_leaves_no_sentinel_so_the_next_scan_retries_it(self):
+    def test_a_failed_archive_leaves_no_sentinel_so_the_next_scan_retries_it(self):
         del self.cards[("ralph", "t_final")]
         other = self.make_operation("spaces/example/messages/two")
         (self.root / other / ".decline-sent").touch()
@@ -437,7 +437,7 @@ class ChatReplyTests(unittest.TestCase):
         state = {"fail": True}
 
         def command(argv):
-            if "block" in argv and state["fail"]:
+            if "archive" in argv and state["fail"]:
                 return subprocess.CompletedProcess(argv, 1, "", "docker down")
             return self.command(argv)
 
@@ -453,6 +453,32 @@ class ChatReplyTests(unittest.TestCase):
         self.assertTrue((self.root / third / ".alerted-decline").exists())
         self.assertEqual(1, notify.call_count)
         self.assertEqual(1, len(self.blocks()))
+
+    def test_refusal_on_a_done_card_archives_it_instead_of_blocking(self):
+        """The kanban kernel only transitions running/ready -> blocked
+        (kanban_db.py block_task); every card chat-reply refuses is already
+        done, so `block` always fails there and the card would be
+        rediscovered and re-refused forever. The real tool for taking a done
+        card out of the retry listing is `archive`."""
+        del self.cards[("ralph", "t_final")]
+        other = self.make_operation("spaces/example/messages/two")
+        (self.root / other / ".decline-sent").touch()
+        third = self.make_operation("spaces/example/messages/three", prior=[other])
+        self.cards[("queues", "t_third")] = {
+            "task": {"id": "t_third", "status": "done", "assignee": "ralph-chat-maintainer",
+                     "body": f"operation_id: {third}\n",
+                     "workspace_path": f"/workspaces/chat-inbox/{third}"},
+            "metadata": {"decision": "reply", "reply_kind": "decline", "body": "no."}}
+        with patch.object(self.reply, "notify") as notify:
+            self.assertEqual(2, self.handle("queues", "t_third"))
+        self.assertTrue((self.root / third / ".alerted-decline").exists())
+        self.assertEqual(1, notify.call_count)
+        self.assertFalse(any("block" in a for a in self.calls))
+        self.assertEqual(1, len(self.blocks()))
+        self.assertEqual("t_third", self.blocks()[0][self.blocks()[0].index("archive") + 1])
+        comments = [a for a in self.calls if "comment" in a]
+        self.assertEqual(1, len(comments))
+        self.assertIn("BLOCKED: decline ceiling reached for this thread", comments[0])
 
     def test_a_send_timeout_fails_that_operation_and_does_not_abort_the_scan(self):
         """`command()` turns a timeout into a failed result, so one hung send
