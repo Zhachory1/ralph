@@ -153,6 +153,15 @@ knowledge_set() {
         hermes $1 config unset mcp_servers.knowledge >/dev/null 2>&1 || true
     fi
 }
+# The builder's read-only Chat listing runs in Hermes, then invokes the
+# credentialed sidecar. Never forward the token or Docker access to a sandbox.
+chat_spaces_set() {
+    hermes $1 config set mcp_servers.chat-spaces.command "/opt/hermes/.venv/bin/python3" >/dev/null
+    hermes $1 config set mcp_servers.chat-spaces.args "[/ralph/bootstrap/chat-spaces]" >/dev/null
+    hermes $1 config set mcp_servers.chat-spaces.worker_only true >/dev/null
+    hermes $1 config set mcp_servers.chat-spaces.tools.include "[list_spaces]" >/dev/null
+    hermes $1 config set mcp_servers.chat-spaces.enabled true >/dev/null
+}
 # MCP servers the private overlay grants a profile (#133). overlay-grants.py
 # only reads mcp.json and validates it; it never touches a config file. It
 # prints one "name key value" triple per setting, for named_mcp_set below to
@@ -376,6 +385,7 @@ for dir in "$PROFILES_DIR"/*/; do
         docker exec "$RALPH_HERMES_CONTAINER" python3 /tmp/wmc.py /tmp/src.yaml "$target/config.yaml"
         knowledge_profile "$base" && knowledge_set "-p $name"
         named_mcp_set "-p $name" "$base"
+        if [ "$base" = builder ]; then chat_spaces_set "-p $name"; fi
         continue
     fi
     if [ -f "$dir/SOUL.md" ]; then
@@ -391,6 +401,7 @@ for dir in "$PROFILES_DIR"/*/; do
     # add or remove one key without touching anything else in it.
     knowledge_profile "$base" && knowledge_set "-p $name"
     named_mcp_set "-p $name" "$base"
+    if [ "$base" = builder ]; then chat_spaces_set "-p $name"; fi
 done
 # The default profile's SOUL (the WebUI chat) is the global one, built like
 # every profile's: PRINCIPLES + STANDARDS + its own text (#128). Its own text

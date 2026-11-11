@@ -109,6 +109,7 @@ services:
         condition: service_started
     environment:
       HERMES_HOME: /home/hermes/.hermes
+      RALPH_INSTANCE: ${RALPH_INSTANCE:-ralph}
       # The dashboard: the monitor, and the reason port 9219 is published.
       # Hermes' image starts it only when HERMES_DASHBOARD is truthy, so until
       # this was set the port mapped to nothing and the "monitor" did not

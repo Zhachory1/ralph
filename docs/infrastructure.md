@@ -93,6 +93,7 @@ Every profile's SOUL starts with `profiles/PRINCIPLES.md` and `profiles/STANDARD
 - **Kanban tools:** every general profile and the WebUI `default` profile. The lenses, review-synthesis, chat-maintainer, chat-summarizer and inbox-drafter do not have them, by design.
 - **Knowledge (`mcp_servers.knowledge`: query, get, multi_get, status):** the general profiles and `default`, when the knowledge service runs. Not the lenses, review-synthesis, chat-maintainer, chat-summarizer or inbox-drafter.
 - **Terminal:** every profile, so `gh` works ([0001](decisions/0001-every-profile-gets-repository-access.md)). `git` and `gh` run only in the terminal, never `execute_code` ([0003](decisions/0003-repository-credentials-only-in-the-terminal.md)).
+- **Chat space listing (`mcp_servers.chat-spaces`: `list_spaces`):** builder card workers only. Hermes invokes a fixed read-only command in `chat-sender` through the Docker proxy; only space IDs, names and types return. No Chat token or Docker access enters the worker sandbox. Requires the `chat` compose profile and the sidecar token copy.
 
 ## Credentials
 

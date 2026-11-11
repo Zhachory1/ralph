@@ -55,6 +55,10 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | Disk | `colima ssh -- df -h /` and `du -sh compose/workspaces*/sandboxes` |
 | Knowledge index | `bootstrap/knowledge-status <instance>` (the `RALPH_INSTANCE`, e.g. `ralph-personal`): collections, counts, models, last refresh (`status.json`) |
 
+## Builder Chat space listing
+
+After the `chat-sender` sidecar is running with its token, re-run `init` to grant builder card workers the read-only `list_spaces` MCP tool. It returns bounded space IDs, display names and types; neither Chat credentials nor message content reach the worker. If the sidecar is stopped or has no token, the tool reports an error. The private digest job has its own credential path and does not enable this tool by itself.
+
 ## Chat sidecar cutover (owner-only)
 
 Not this card's job -- not any build card's job. None of these is a pull request, and nothing schedules them; do them by hand, in order, once chat PR 8 has merged.
