@@ -138,12 +138,14 @@ class SandboxScopeTests(unittest.TestCase):
                 self.assertTrue(mount["Source"].endswith(mount["Destination"][len("/workspaces"):]),
                                 mount["Source"])
                 continue
-            # The writable sandbox dirs live under RALPH_SANDBOX_ROOT/<profile>
-            # (#97); Hermes' read-only state dirs under the profile's home.
-            if mount["Destination"] in ("/workspace", "/root"):
-                # RALPH_SANDBOX_ROOT can be any absolute path; the profile's own
-                # dir under it is the scope that matters.
+            # The workspace remains host-backed under this profile's root
+            # (#165); /root is tmpfs for session-scoped containers. Containers
+            # created before the cutover can still have their old home bind.
+            if mount["Destination"] == "/workspace":
                 self.assertIn(f"/{self.profile}/docker/", mount["Source"], mount["Source"])
+            elif mount["Destination"] == "/root":
+                if mount["Type"] != "tmpfs":
+                    self.assertIn(f"/{self.profile}/docker/", mount["Source"], mount["Source"])
             elif self.profile == "default":
                 # The default profile's state sits at the top of HERMES_HOME;
                 # it must still never reach into a named profile's.
