@@ -41,7 +41,7 @@ A new profile is justified by different permissions, resources, or lifecycle —
 | analyst | Read the warehouse | Write anywhere |
 | experimenter | Spend compute, under a hard cap | Deploy, write production data |
 | auditor | Judge the system | Edit what it judges |
-| librarian | Tidy the docs repo through one PR a week | Delete, merge, or judge |
+| librarian | Tidy the docs repo through one PR a week | Delete anything, merge a pull request, or judge quality |
 | watcher | Read observability | Write anything |
 | chat-maintainer | Read staged chat, route, write replies | Hold the chat credential, send directly, create cards |
 

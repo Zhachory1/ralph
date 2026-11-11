@@ -141,7 +141,7 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 **Entry:** a card the review loop creates once a week on `queues`, assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
-- Promotes a document's `status` to `approved` once its newest `prs:` entry has merged, fills what memory front matter it can derive and nothing else, merges duplicate notes and marks superseded ones (each capped at five per run), archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead), rewrites links to anything moved, and regenerates folder indexes.
+- Promotes a document's `status` to `approved` once its newest `prs:` entry has merged and none is still open, fills what memory front matter it can derive and nothing else, merges duplicate notes and marks superseded ones (each capped at five per run), archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead), rewrites links to anything moved, and regenerates folder indexes.
 - One commit per requirement group, then one pull request — or none, if the pass changed nothing.
 
 **Failure modes:**
