@@ -32,6 +32,7 @@ Reads the host token file; never writes it.
 import argparse
 import base64
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -160,6 +161,13 @@ def main():
     args = parser.parse_args()
     try:
         container = instance_name(args.instance_env) + "-chat-sender-1"
+        # gchat._key() (called inside reencrypt) reads the module-level
+        # CONFIG path, which resolves at import time from GWS_CFG_DIR/CFG_DIR
+        # -- not from --host-config. A second identity's directory has its
+        # own gws_config.json with its own encryption_salt, so --host-config
+        # must be what GWS_CFG_DIR is set to before gchat.py is loaded, or
+        # _key() derives the wrong key from the wrong (default) salt.
+        os.environ["GWS_CFG_DIR"] = str(args.host_config)
         gchat = load_gchat()
         config_bytes, token_bytes = reencrypt(gchat, args.host_config,
                                               args.machine_id, args.user)

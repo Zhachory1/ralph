@@ -1,6 +1,7 @@
 """The one-time host->sidecar Chat token copy (chat-creds-copy, D8): a round
 trip through gchat.py's own `_load_creds` path, never a real credential."""
 
+import base64
 import importlib.machinery
 import importlib.util
 import json
@@ -8,6 +9,9 @@ import pathlib
 import tempfile
 import unittest
 from unittest.mock import patch
+
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "chat-creds-copy"
 GCHAT = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
@@ -41,6 +45,15 @@ def load_gchat():
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+def pinned_key_for_test(salt: str, machine_id: str, user: str) -> bytes:
+    """Mirrors gchat.py's `_key()` formula for a test-chosen salt, machine id
+    and user -- never this host's real ones."""
+    fingerprint = f"{machine_id}:{user}:gws-cli".encode()
+    derived = HKDF(algorithm=SHA256(), length=32, salt=salt.encode(),
+                   info=b"token-encryption").derive(fingerprint)
+    return base64.urlsafe_b64encode(derived)
 
 
 class ChatCredsCopyTests(unittest.TestCase):
@@ -151,6 +164,53 @@ class ChatCredsCopyTests(unittest.TestCase):
         # merely unencrypted-but-silent in the returned bytes either.
         self.assertNotIn(FAKE_TOKEN_MARKER.encode(), token_bytes)
         self.assertNotIn(FAKE_TOKEN_MARKER.encode(), config_bytes)
+
+
+class MainUsesHostConfigsOwnSaltTests(unittest.TestCase):
+    """`main()`'s own `--host-config` must be where `gchat._key()` reads its
+    salt from, not wherever CFG_DIR/CONFIG already points in this process --
+    a second identity's directory has its own gws_config.json with its own
+    encryption_salt, different from the default dir's. A token encrypted
+    under that salt must round-trip through `main()` with only --host-config
+    set, the same as a real second-identity run (GWS_CFG_DIR unset)."""
+
+    def setUp(self):
+        self.script = load_script()
+        self.gchat = load_gchat()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.host_config = pathlib.Path(self.tmp.name) / "personal-host"
+        self.host_config.mkdir()
+        self.other_salt = "a-different-salt-than-the-default-dir-has"
+        (self.host_config / "gws_config.json").write_text(
+            json.dumps({"encryption_salt": self.other_salt}))
+        self.machine_id, self.user = "fake-host-machine", "fake-host-user"
+        key = pinned_key_for_test(self.other_salt, self.machine_id, self.user)
+        encrypted = self.gchat.Fernet(key).encrypt(json.dumps(FAKE_INFO).encode())
+        (self.host_config / "chat_token.json.enc").write_bytes(encrypted)
+
+    def test_main_reads_the_salt_from_host_config_not_the_default_cfg_dir(self):
+        """load_gchat() is wrapped, not replaced: main()'s real call still
+        runs (so the GWS_CFG_DIR it sets is what the freshly-loaded module's
+        CONFIG resolves from), but the loaded module's machine id and user
+        are pinned to this test's fakes once it comes back, matching how the
+        token above was encrypted."""
+        real_load_gchat = self.script.load_gchat
+
+        def load_and_pin():
+            module = real_load_gchat()
+            module._machine_id = lambda: self.machine_id
+            return module
+
+        with patch("getpass.getuser", return_value=self.user), \
+                patch.object(self.script, "load_gchat", side_effect=load_and_pin), \
+                patch.object(self.script, "instance_name", return_value="fake"), \
+                patch.object(self.script, "write_into_container") as write, \
+                patch("sys.argv", ["chat-creds-copy", "--instance-env", "/dev/null",
+                                   "--host-config", str(self.host_config)]):
+            rc = self.script.main()
+        self.assertEqual(0, rc)
+        write.assert_called_once()
 
 
 if __name__ == "__main__":
