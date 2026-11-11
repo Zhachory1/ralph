@@ -114,7 +114,7 @@ sandbox_config() {
     # like the researcher (owner decision 2026-11-05), and reads chat uploads
     # read-only at the path hermes-webui hands it (#128). Uploads are the
     # default profile's alone: no other profile's sandbox mounts them.
-    local vols="\"$ATTACH_DIR:$ATTACH_DIR:ro\""
+    local vols="\"$RALPH_SANDBOX_ROOT/default/docker/default/workspace:/workspace\",\"$ATTACH_DIR:$ATTACH_DIR:ro\""
     [ -z "$REPO_CACHE_SRC" ] || vols="\"$REPO_CACHE_SRC:/repo-cache:ro\",$vols"
     hermes $1 config set terminal.docker_volumes "[$vols]" >/dev/null
 }
@@ -213,6 +213,8 @@ terminal_block() {
     echo "  container_persistent: false"
     echo "  persistent_shell: false"
     echo "  sandbox_dir: $RALPH_SANDBOX_ROOT/ralph-$2"
+    # Preserve workspace files across sessions; /root remains temporary.
+    local vols="\"$RALPH_SANDBOX_ROOT/ralph-$2/docker/default/workspace:/workspace\""
     # The instance's repository cache, so a card borrows its objects (git
     # clone --reference) instead of downloading a large repository again.
     # Read-only: a sandbox runs untrusted code and must not corrupt what other
@@ -220,18 +222,18 @@ terminal_block() {
     # this instance has touched, across every org (#79 review). Writing the
     # whole block also drops the mount from a profile that no longer gets it.
     if [ -n "$REPO_CACHE_SRC" ] && repo_cache_profile "$2"; then
-        echo "  docker_volumes: [\"$REPO_CACHE_SRC:/repo-cache:ro\"]"
+        vols="$vols,\"$REPO_CACHE_SRC:/repo-cache:ro\""
     fi
-    # Review and chat cards point at staged evidence under /workspaces in the
-    # hermes container. The profiles that read it do so from their sandbox,
-    # so it is mounted there at the same path, read-only.
-    [ -n "$WORKSPACES_SRC" ] || return 0
-    case "$2" in
-        lens-*|review-synthesis)
-            echo "  docker_volumes: [\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"]" ;;
-        chat-maintainer)
-            echo "  docker_volumes: [\"$WORKSPACES_SRC/chat-inbox:/workspaces/chat-inbox:ro\"]" ;;
-    esac
+    # Review and chat cards read staged evidence through read-only mounts.
+    if [ -n "$WORKSPACES_SRC" ]; then
+        case "$2" in
+            lens-*|review-synthesis)
+                vols="$vols,\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"" ;;
+            chat-maintainer)
+                vols="$vols,\"$WORKSPACES_SRC/chat-inbox:/workspaces/chat-inbox:ro\"" ;;
+        esac
+    fi
+    echo "  docker_volumes: [$vols]"
 }
 # The daemon resolves a bind source on the VM, so the cache is named by the
 # host path behind this instance's /workspaces, never by a path in a container.
@@ -245,6 +247,18 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
         REPO_CACHE_SRC="$ws/repo-cache"
         docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p /workspaces/repo-cache
     fi
+fi
+# Nonpersistent Docker terminals use tmpfs for /workspace unless explicitly
+# mounted. Create host sources first: otherwise the daemon creates missing
+# paths on its VM disk instead of in the host-backed sandbox root (#165).
+workspace_dirs=("$RALPH_SANDBOX_ROOT/default/docker/default/workspace")
+for dir in "$PROFILES_DIR"/*/; do
+    [ -d "$dir" ] && workspace_dirs+=("$RALPH_SANDBOX_ROOT/ralph-$(basename "$dir")/docker/default/workspace")
+done
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p "${workspace_dirs[@]}"
+else
+    mkdir -p "${workspace_dirs[@]}"
 fi
 sandbox_config "" default
 # The default profile is the WebUI chat. It plans and hands off work like the

@@ -513,8 +513,9 @@ class EphemeralSandboxTests(unittest.TestCase):
         block = install[install.index("sandbox_config() {"):install.index("\n}", install.index("sandbox_config() {"))]
         self.assertIn("terminal.container_persistent false", block)
         self.assertIn("terminal.persistent_shell false", block)
-        # container_memory is a cap, not persistence; it must stay (owner:
-        # "I really don't want to have smaller containers").
+        self.assertIn('$RALPH_SANDBOX_ROOT/default/docker/default/workspace:/workspace', block)
+        self.assertIn('$ATTACH_DIR:$ATTACH_DIR:ro', block)
+        self.assertIn('$REPO_CACHE_SRC:/repo-cache:ro', block)
         self.assertIn("terminal.container_memory", block)
 
     def test_terminal_block_sets_both_keys_false(self):
@@ -522,7 +523,45 @@ class EphemeralSandboxTests(unittest.TestCase):
         block = install[install.index("terminal_block() {"):install.index("\n}", install.index("terminal_block() {"))]
         self.assertIn('echo "  container_persistent: false"', block)
         self.assertIn('echo "  persistent_shell: false"', block)
+        self.assertIn('$RALPH_SANDBOX_ROOT/ralph-$2/docker/default/workspace:/workspace', block)
+        self.assertEqual(1, block.count('echo "  docker_volumes:'), "one YAML key for all mounts")
         self.assertIn("container_memory:", block)
+
+    def test_workspace_sources_are_precreated_on_the_host(self):
+        install = (ROOT / "bootstrap" / "install").read_text()
+        self.assertIn('"$RALPH_SANDBOX_ROOT/default/docker/default/workspace"', install)
+        self.assertIn('"$RALPH_SANDBOX_ROOT/ralph-$(basename "$dir")/docker/default/workspace"', install)
+        self.assertIn('docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p "${workspace_dirs[@]}"', install)
+        self.assertLess(install.index('mkdir -p "${workspace_dirs[@]}"'),
+                        install.index('sandbox_config "" default'))
+
+    def test_terminal_block_keeps_each_profiles_mounts(self):
+        import os
+        import subprocess
+        import yaml
+
+        install = (ROOT / "bootstrap" / "install").read_text()
+        funcs = []
+        for name in ("repo_cache_profile", "terminal_block"):
+            start = install.index(f"{name}() {{")
+            funcs.append(install[start:install.index("\n}", start) + 2])
+        env = {**os.environ, "RALPH_SANDBOX_ROOT": "/host/sandboxes",
+               "REPO_CACHE_SRC": "/host/repo-cache", "WORKSPACES_SRC": "/host/workspaces"}
+        for profile, extra in (("builder", "/host/repo-cache:/repo-cache:ro"),
+                               ("lens-mvp", "/host/workspaces/review-work:/workspaces/review-work:ro"),
+                               ("chat-maintainer", "/host/workspaces/chat-inbox:/workspaces/chat-inbox:ro"),
+                               ("analyst", None)):
+            with self.subTest(profile=profile):
+                script = "\n".join(funcs) + f"\nterminal_block unused {profile}\n"
+                rendered = subprocess.run(["bash", "-c", script], env=env,
+                                          capture_output=True, text=True, check=True).stdout
+                terminal = yaml.safe_load(rendered)["terminal"]
+                mounts = terminal["docker_volumes"]
+                self.assertEqual(f"/host/sandboxes/ralph-{profile}/docker/default/workspace:/workspace", mounts[0])
+                self.assertEqual(len(mounts), 1 + bool(extra))
+                if extra:
+                    self.assertIn(extra, mounts)
+                self.assertEqual(1, rendered.count("docker_volumes:"))
 
 
 if __name__ == "__main__":
