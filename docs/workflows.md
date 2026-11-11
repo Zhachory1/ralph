@@ -145,6 +145,6 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 - One commit per requirement group, then one pull request — or none, if the pass changed nothing.
 
 **Failure modes:**
-- *Two runs would overlap:* an open pull request with a `librarian/` head, or a librarian card that is not done, skips the weekly card; the run checks the pull request again for itself. A guard that cannot be read skips the poll and the next one retries. The card's per-week idempotency key stops a repeat poll creating a second card, but it is not an atomic lock, so two loops polling in the same instant can rarely both create one; the run's own pull-request check (step 1) is the second line.
+- *Two runs would overlap:* an open pull request with a `librarian/` head, or a librarian card that is neither done nor archived, skips the weekly card; the run checks the pull request again for itself. A guard that cannot be read skips the poll and the next one retries. The card's per-week idempotency key stops a repeat poll creating a second card, but it is not an atomic lock, so two loops polling in the same instant can rarely both create one; the run's own pull-request check (step 1) is the second line.
 - *A cap bites:* merged pairs, supersede marks, or changed lines. The run stops between steps, never inside one, lists what it deferred in the pull request body, and next week's run picks it up.
 - *Nothing to change:* an empty diff opens no pull request; the card completes saying so.
