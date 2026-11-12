@@ -142,7 +142,12 @@ services:
       TERMINAL_DOCKER_IMAGE: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}
       # Same story as the image above: the env var wins over the config key,
       # so setting only the config leaves the sandbox without these.
-      TERMINAL_DOCKER_FORWARD_ENV: '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN"]'
+      # RALPH_TRACKER_CONTAINER is not a credential -- the tracker-sync
+      # sidecar's own container name, so a profile's sandbox can reach it by
+      # `docker exec` through socket-proxy (bootstrap/tracker-work) without
+      # ever holding the tracker key, which stays in tracker-sync's own
+      # volume.
+      TERMINAL_DOCKER_FORWARD_ENV: '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN","RALPH_TRACKER_CONTAINER"]'
       # Repository work inside the sandbox. This is the only credential that
       # crosses into it; the model key and the chat webhook do not.
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:-}
@@ -161,6 +166,8 @@ services:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
       API_SERVER_KEY: ${RALPH_WEBUI_API_KEY:-}
+      # Not a credential -- see TERMINAL_DOCKER_FORWARD_ENV above.
+      RALPH_TRACKER_CONTAINER: ${RALPH_TRACKER_CONTAINER:-${RALPH_INSTANCE:-ralph}-tracker-sync-1}
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
         required: false
