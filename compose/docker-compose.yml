@@ -136,18 +136,17 @@ services:
       # docs/spikes/sandbox-isolation.md and evals/test_sandbox_isolation.py.
       TERMINAL_ENV: ${RALPH_TERMINAL_ENV:-docker}
       DOCKER_HOST: tcp://socket-proxy:2375
-      # Hermes reads this env var for the sandbox image, and it wins over
-      # the config key, so setting only the config silently keeps the stock
-      # image and the agent finds no git and no gh.
-      TERMINAL_DOCKER_IMAGE: ${RALPH_SANDBOX_IMAGE:-ghcr.io/zhachory1/ralph-sandbox:dev}
-      # Same story as the image above: the env var wins over the config key,
-      # so setting only the config leaves the sandbox without these.
-      # RALPH_TRACKER_CONTAINER is not a credential -- the tracker-sync
-      # sidecar's own container name, so a profile's sandbox can reach it by
-      # `docker exec` through socket-proxy (bootstrap/tracker-work) without
-      # ever holding the tracker key, which stays in tracker-sync's own
-      # volume.
-      TERMINAL_DOCKER_FORWARD_ENV: '["GH_TOKEN","GITHUB_TOKEN","GIT_AUTHOR_NAME","GIT_AUTHOR_EMAIL","GIT_COMMITTER_NAME","GIT_COMMITTER_EMAIL","BUF_TOKEN","BUILDKITE_API_TOKEN","RALPH_TRACKER_CONTAINER"]'
+      # The sandbox image and its forwarded env names are set once, in each
+      # profile's own config.yaml (bootstrap/install's sandbox_config and
+      # terminal_block, which already includes RALPH_TRACKER_CONTAINER) --
+      # not here. Hermes mirrors config.yaml into
+      # TERMINAL_DOCKER_IMAGE/TERMINAL_DOCKER_FORWARD_ENV only when the env
+      # var is not already set ("env always wins when already set",
+      # cli_config_load.py); setting either one here made that mirroring
+      # dead code, so every profile silently got the same shorter,
+      # instance-wide list regardless of what its own config.yaml asked for
+      # -- RALPH_DOCS_REPO/RALPH_DOCS_PUBLIC included, despite being in that
+      # config.yaml list the whole time.
       # Repository work inside the sandbox. This is the only credential that
       # crosses into it; the model key and the chat webhook do not.
       GH_TOKEN: ${RALPH_GITHUB_TOKEN:-}
@@ -166,7 +165,11 @@ services:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
       API_SERVER_KEY: ${RALPH_WEBUI_API_KEY:-}
-      # Not a credential -- see TERMINAL_DOCKER_FORWARD_ENV above.
+      # Not a credential -- the tracker-sync sidecar's own container name, so
+      # a profile's sandbox can reach it through the proxy
+      # (RALPH_TRACKER_CONTAINER in docker_forward_env, bootstrap/install)
+      # without ever holding the tracker key, which stays in tracker-sync's
+      # own volume.
       RALPH_TRACKER_CONTAINER: ${RALPH_TRACKER_CONTAINER:-${RALPH_INSTANCE:-ralph}-tracker-sync-1}
     env_file:
       - path: ${RALPH_ENV_FILE:-./.env}
