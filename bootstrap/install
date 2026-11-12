@@ -330,34 +330,25 @@ else
 fi
 
 hermes kanban init >/dev/null 2>&1 || true
-if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${BOARD}\b"; then
-    hermes kanban boards create "$BOARD" \
-        --name "Ralph" \
-        --description "Feature pipeline: PRD, design docs, PRs" \
-        --default-workdir /workspaces >/dev/null
-    echo "  created board ${BOARD}"
-else
-    echo "  board ${BOARD} already exists"
-fi
+ensure_board() {
+    if hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+$1\b"; then
+        echo "  board $1 already exists"
+    else
+        hermes kanban boards create "$1" --name "$2" --description "$3" \
+            --default-workdir /workspaces >/dev/null
+        echo "  created board $1"
+    fi
+}
 
-# A second board for anything a producer creates automatically, never for
-# anything you write by hand. The embedded dispatcher enumerates every
-# board each tick with no extra config, so this needs no dispatcher
-# wiring; max_in_progress above is a host cap shared across every board,
-# so a second board cannot multiply concurrency. The notifier polls only
-# RALPH_BOARD, so queue cards stay off its radar by construction: a flood
-# of machine-created cards cannot page you, with nothing left to maintain
-# that property.
+# The dispatcher enumerates every board, while max_in_progress still caps the
+# instance across them. Existing boards keep their owner-chosen display names.
 QUEUES_BOARD=${RALPH_QUEUES_BOARD:-queues}
-if ! hermes kanban boards list 2>/dev/null | grep -qE "^[● ]+${QUEUES_BOARD}\b"; then
-    hermes kanban boards create "$QUEUES_BOARD" \
-        --name "Ralph queues" \
-        --description "Producer-created work: PR review, maintenance, inbox. No human cards here." \
-        --default-workdir /workspaces >/dev/null
-    echo "  created board ${QUEUES_BOARD}"
-else
-    echo "  board ${QUEUES_BOARD} already exists"
-fi
+LENS_BOARD=${RALPH_LENS_BOARD:-lenses}
+MAINTAIN_BOARD=${RALPH_MAINTAIN_BOARD:-maintain}
+ensure_board "$BOARD" "Ralph" "Feature pipeline: PRD, design docs, PRs"
+ensure_board "$QUEUES_BOARD" "Intake" "Chat and email intake; history of earlier review and maintenance work"
+ensure_board "$LENS_BOARD" "Lenses" "Review graphs: lens cards and synthesis. No human cards"
+ensure_board "$MAINTAIN_BOARD" "Maintain" "Pull-request maintenance rounds. No human cards"
 
 # Listed once: each hermes call is a docker exec, and this loop runs per profile.
 PROFILE_LIST=$(hermes profile list 2>/dev/null || true)
@@ -501,6 +492,20 @@ if [ -n "$READ_TOKEN" ] && [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
             chmod 600 "$tmp" && mv "$tmp" "$f"
         done'
     echo "  every other profile reads with RALPH_PROFILE_READ_TOKEN"
+fi
+
+# PR 3 will compare synthesis's claimed board with this instance's review
+# board. Write after the token passes so their .env edits leave it intact.
+if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
+    docker exec -i -u hermes -e "LENS_BOARD=$LENS_BOARD" "$RALPH_HERMES_CONTAINER" sh -eu -c '
+        f="${HERMES_HOME:-$HOME/.hermes}/profiles/ralph-review-synthesis/.env"
+        [ -f "$f" ] || { : > "$f"; chmod 600 "$f"; }
+        tmp=$(mktemp "$f.XXXXXX")
+        rc=0; grep -v "^RALPH_LENS_BOARD=" "$f" > "$tmp" || rc=$?
+        [ "$rc" -le 1 ] || { rm -f "$tmp"; echo "cannot read $f" >&2; exit 1; }
+        printf "RALPH_LENS_BOARD=%s\n" "$LENS_BOARD" >> "$tmp"
+        chmod 600 "$tmp" && mv "$tmp" "$f"
+    '
 fi
 
 # Where agents write memories (#121, dd-ralph-knowledge D6): every profile and

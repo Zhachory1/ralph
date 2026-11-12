@@ -75,6 +75,9 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
+      RALPH_QUEUES_BOARD: ${RALPH_QUEUES_BOARD:-queues}
+      RALPH_LENS_BOARD: ${RALPH_LENS_BOARD:-lenses}
+      RALPH_MAINTAIN_BOARD: ${RALPH_MAINTAIN_BOARD:-maintain}
       # Concurrency and sandbox memory, per instance. Instances share one VM,
       # so their RALPH_MAX_IN_PROGRESS values add up.
       RALPH_MAX_IN_PROGRESS: ${RALPH_MAX_IN_PROGRESS:-6}
@@ -110,6 +113,7 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_INSTANCE: ${RALPH_INSTANCE:-ralph}
+      RALPH_LENS_BOARD: ${RALPH_LENS_BOARD:-lenses}
       # The dashboard: the monitor, and the reason port 9219 is published.
       # Hermes' image starts it only when HERMES_DASHBOARD is truthy, so until
       # this was set the port mapped to nothing and the "monitor" did not
@@ -270,6 +274,9 @@ services:
     command: ["/ralph/bootstrap/run-review-loop"]
     environment:
       HERMES_HOME: /home/hermes/.hermes
+      RALPH_QUEUES_BOARD: ${RALPH_QUEUES_BOARD:-queues}
+      RALPH_LENS_BOARD: ${RALPH_LENS_BOARD:-lenses}
+      RALPH_MAINTAIN_BOARD: ${RALPH_MAINTAIN_BOARD:-maintain}
       RALPH_REVIEW_POLL_SECONDS: ${RALPH_REVIEW_POLL_SECONDS:-900}
       # The PR author maintenance acts for; unset disables maintenance.
       RALPH_MAINTAIN_LOGIN: ${RALPH_MAINTAIN_LOGIN:-}
