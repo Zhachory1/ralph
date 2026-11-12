@@ -339,7 +339,9 @@ def feedback(reviews: list[dict], diff_comments=(), issue_comments=()) -> str:
 
 
 def pull_request_for(detail: dict) -> tuple[str, int] | None:
-    haystack = [detail.get("latest_summary") or ""]
+    runs = detail.get("runs") or []
+    haystack = [(runs[-1].get("metadata") or {}).get("pr") or ""] if runs else []
+    haystack += [detail.get("latest_summary") or ""]
     haystack += [(c.get("body") or "") for c in detail.get("comments") or []]
     for text in haystack:
         match = PR_URL.search(text)
@@ -348,28 +350,16 @@ def pull_request_for(detail: dict) -> tuple[str, int] | None:
     return None
 
 
-def pull_request_from_ancestors(board_client, board: str, detail: dict, _seen=None) -> tuple[str, int] | None:
-    """Find the address on the ancestor that actually opened it.
+def pull_request_from_ancestors(board_client, board: str, detail: dict) -> tuple[str, int] | None:
+    """A gate can borrow only its direct document parent's pull request.
 
-    A gate card is created at planning time, before the pull request it gates
-    exists, so the address is never on the gate card itself. It lands on
-    whichever ancestor later completed having opened one. Walk `parents` --
-    a list of task ids, per `show --json` -- one level at a time, until one
-    resolves or the chain runs out. A `seen` set guards against revisiting a
-    parent reachable by more than one path.
+    The gate predates that PR; walking farther back could treat an approved
+    PRD as approval of a still-open design or plan.
     """
-    seen = _seen if _seen is not None else set()
-    for parent_id in detail.get("parents") or []:
-        if parent_id in seen:
-            continue
-        seen.add(parent_id)
-        parent_detail = board_client.show(board, parent_id)
-        link = pull_request_for(parent_detail) or pull_request_from_ancestors(
-            board_client, board, parent_detail, seen
-        )
-        if link:
-            return link
-    return None
+    parents = list(dict.fromkeys(detail.get("parents") or []))
+    if len(parents) != 1:
+        return None
+    return pull_request_for(board_client.show(board, parents[0]))
 
 
 def apply(board_client, board: str, task_id: str, decision: str, text: str, status: str = "blocked") -> None:
@@ -455,7 +445,8 @@ def main(argv=None) -> int:
         detail = board_client.show(args.board, task["id"])
         if not is_approval_gate(detail):
             continue
-        link = pull_request_for(detail) or pull_request_from_ancestors(board_client, args.board, detail)
+        link = (pull_request_from_ancestors(board_client, args.board, detail)
+                if detail.get("parents") else pull_request_for(detail))
         if not link:
             continue
         repo, number = link
@@ -477,19 +468,17 @@ def main(argv=None) -> int:
         # another flow put in triage is not this notifier's to resume.
         if task.get("status") == "triage" and not parked_by_block_loop(detail):
             continue
-        link = pull_request_for(detail)
-        # Only a gate borrows an ancestor's address. A worker card blocked on
-        # something else would take its parent's merged PR as approval and be
-        # resumed on every poll (t_124859f1).
-        if not link and is_approval_gate(detail):
-            link = pull_request_from_ancestors(board_client, args.board, detail)
-            if link:
-                # The gate card is created before the pull request exists, so
-                # there is nobody to paste the address by hand. Write it down
-                # here instead, the same act a human would have done, so the
-                # card carries its own address from now on.
-                repo, number = link
-                board_client.comment(args.board, task_id, f"https://github.com/{repo}/pull/{number}")
+        # A gate uses only its direct document parent's PR. A worker card
+        # blocked on something else must never borrow a parent's merged PR
+        # (t_124859f1), nor may a stale gate comment override its parent.
+        gate_with_parent = is_approval_gate(detail) and detail.get("parents")
+        link = (pull_request_from_ancestors(board_client, args.board, detail)
+                if gate_with_parent else pull_request_for(detail))
+        if gate_with_parent and link:
+            repo, number = link
+            url = f"https://github.com/{repo}/pull/{number}"
+            if not any(url in (c.get("body") or "") for c in detail.get("comments") or []):
+                board_client.comment(args.board, task_id, url)
         if not link:
             # The failure this issue is about is silence, not an error: skip
             # this card as before, but say so instead of skipping quietly.

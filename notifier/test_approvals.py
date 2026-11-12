@@ -133,6 +133,23 @@ class PullRequestLinkTests(unittest.TestCase):
         }
         self.assertEqual(("o/r", 7), approvals.pull_request_for(detail))
 
+    def test_finds_pr_url_in_a_completed_run(self):
+        detail = {"latest_summary": "Review complete", "comments": [],
+                  "runs": [{"metadata": {"pr": "https://github.com/o/r/pull/30"}}]}
+        self.assertEqual(("o/r", 30), approvals.pull_request_for(detail))
+
+    def test_a_prior_run_cannot_override_the_latest_pr(self):
+        detail = {"latest_summary": "Opened https://github.com/o/r/pull/31", "comments": [],
+                  "runs": [{"metadata": {"pr": "https://github.com/o/r/pull/27"}},
+                           {"metadata": {}}]}
+        self.assertEqual(("o/r", 31), approvals.pull_request_for(detail))
+
+    def test_a_prior_run_alone_cannot_approve_a_gate(self):
+        detail = {"latest_summary": "Review complete", "comments": [],
+                  "runs": [{"metadata": {"pr": "https://github.com/o/r/pull/27"}},
+                           {"metadata": {}}]}
+        self.assertIsNone(approvals.pull_request_for(detail))
+
     def test_none_when_card_links_no_pr(self):
         """A card with no PR is waiting on something else. Leave it alone."""
         detail = {"latest_summary": "question: which TTL?", "comments": []}
@@ -140,9 +157,8 @@ class PullRequestLinkTests(unittest.TestCase):
 
 
 class PullRequestFromAncestorsTests(unittest.TestCase):
-    """A gate card is created before the pull request it gates exists, so the
-    address is never on the gate card itself. It has to be found on whichever
-    ancestor opened the pull request and later completed."""
+    """A gate must use the document card directly before it, never an older
+    PRD or design whose approval released that card."""
 
     def test_finds_pr_on_the_immediate_parent(self):
         board = mock.Mock()
@@ -156,16 +172,15 @@ class PullRequestFromAncestorsTests(unittest.TestCase):
         )
         board.show.assert_called_once_with("b", "t_parent")
 
-    def test_walks_past_a_parent_with_nothing_to_a_grandparent(self):
+    def test_plan_gate_without_parent_pr_does_not_borrow_older_prd(self):
         board = mock.Mock()
         board.show.side_effect = [
-            {"latest_summary": None, "comments": [], "parents": ["t_grandparent"]},
+            {"latest_summary": None, "comments": [], "parents": ["t_prd_gate"]},
             {"latest_summary": "https://github.com/o/r/pull/4", "comments": []},
         ]
-        detail = {"parents": ["t_parent"]}
-        self.assertEqual(
-            ("o/r", 4), approvals.pull_request_from_ancestors(board, "b", detail)
-        )
+        detail = {"parents": ["t_plan"]}
+        self.assertIsNone(approvals.pull_request_from_ancestors(board, "b", detail))
+        board.show.assert_called_once_with("b", "t_plan")
 
     def test_none_when_no_ancestor_has_a_pull_request(self):
         board = mock.Mock()
@@ -181,12 +196,20 @@ class PullRequestFromAncestorsTests(unittest.TestCase):
         board.show.assert_not_called()
 
     def test_does_not_revisit_a_parent_reachable_twice(self):
-        """Two dependency edges to the same ancestor must not loop forever."""
+        """Duplicate edges to one document still read it once."""
         board = mock.Mock()
         board.show.return_value = {"latest_summary": None, "comments": [], "parents": ["t_shared"]}
         detail = {"parents": ["t_shared", "t_shared"]}
         approvals.pull_request_from_ancestors(board, "b", detail)
         self.assertEqual(1, board.show.call_count)
+
+    def test_multiple_distinct_parents_do_not_choose_an_arbitrary_pr(self):
+        board = mock.Mock()
+        board.show.return_value = {"latest_summary": "https://github.com/o/r/pull/30",
+                                   "comments": []}
+        detail = {"parents": ["t_design", "t_unrelated"]}
+        self.assertIsNone(approvals.pull_request_from_ancestors(board, "b", detail))
+        board.show.assert_not_called()
 
 
 class GateAddressPropagationTests(unittest.TestCase):
@@ -227,6 +250,59 @@ class GateAddressPropagationTests(unittest.TestCase):
         github.reviews.assert_called_once_with("o/r", 9)
         board.comment.assert_any_call("b", "t_gate", "https://github.com/o/r/pull/9")
         board.unblock.assert_called_once_with("b", "t_gate")
+
+    def test_design_gate_waits_for_open_parent_pr_not_merged_prd(self):
+        board = mock.Mock()
+        board.waiting.return_value = []
+        board.cards.return_value = [{"id": "t_gate", "status": "ready"}]
+        board.pending.return_value = []
+
+        def show(_board, task_id):
+            if task_id == "t_gate":
+                return {"task": {"assignee": "none", "title": "Approve design: x"},
+                        "comments": [{"body": "https://github.com/o/r/pull/27"}],
+                        "parents": ["t_design"]}
+            if task_id == "t_design":
+                return {"latest_summary": "Reviewer approved", "comments": [],
+                        "runs": [{"metadata": {"pr": "https://github.com/o/r/pull/30"}}],
+                        "parents": ["t_prd_gate"]}
+            return {"latest_summary": "https://github.com/o/r/pull/27", "comments": []}
+
+        board.show.side_effect = show
+        github = self._github(merged=False)
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+
+        github.pull_request.assert_called_once_with("o/r", 30)
+        board.block.assert_called_once_with(
+            "b", "t_gate", "review-required: approve https://github.com/o/r/pull/30")
+        board.complete.assert_not_called()
+
+    def test_plan_gate_ignores_stale_prd_comment_when_plan_pr_is_open(self):
+        board = mock.Mock()
+        board.waiting.return_value = []
+        board.cards.return_value = []
+        board.pending.return_value = [{"id": "t_gate", "status": "blocked"}]
+
+        def show(_board, task_id):
+            if task_id == "t_gate":
+                return {"task": {"assignee": "none", "title": "Approve plan: x"},
+                        "comments": [{"body": "https://github.com/o/r/pull/27"}],
+                        "parents": ["t_plan"]}
+            return {"latest_summary": "Reviewer approved", "comments": [],
+                    "runs": [{"metadata": {"pr": "https://github.com/o/r/pull/31"}}]}
+
+        board.show.side_effect = show
+        github = self._github(merged=False)
+        with mock.patch.object(approvals, "Board", return_value=board), \
+             mock.patch.object(approvals, "GitHub", return_value=github):
+            approvals.main(["--board", "b"])
+
+        github.pull_request.assert_called_once_with("o/r", 31)
+        board.complete.assert_not_called()
+        board.unblock.assert_not_called()
+        board.comment.assert_called_once_with("b", "t_gate", "https://github.com/o/r/pull/31")
 
     def test_gate_with_nothing_resolvable_is_reported_not_skipped_silently(self):
         board = mock.Mock()
