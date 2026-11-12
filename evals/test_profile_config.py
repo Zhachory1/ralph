@@ -224,6 +224,12 @@ class DeclarationTests(unittest.TestCase):
             set(allowed),
         )
 
+    def test_synthesis_profile_resolves_its_expected_board_from_its_own_env(self):
+        import yaml
+        config = yaml.safe_load((ROOT / "profiles" / "review-synthesis" / "config.yaml").read_text())
+        env = config["mcp_servers"]["lens-tools"]["env"]
+        self.assertEqual("${RALPH_LENS_BOARD}", env["LENS_EXPECTED_BOARD"])
+
     def test_the_chat_maintainer_holds_no_chat_credential(self):
         """The Google Chat token lives on the host, like the Gmail token. A
         profile that cannot reach it cannot be talked into using it."""

@@ -33,6 +33,7 @@ mcp_servers:
       LENS_RUN_ID: "${HERMES_KANBAN_RUN_ID}"
       LENS_CLAIM_LOCK: "${HERMES_KANBAN_CLAIM_LOCK}"
       LENS_BOARD: "${HERMES_KANBAN_BOARD}"
+      LENS_EXPECTED_BOARD: "${RALPH_LENS_BOARD}"
       LENS_DB: "${HERMES_KANBAN_DB}"
       LENS_WORKSPACE: "${HERMES_KANBAN_WORKSPACE}"
       LENS_EVIDENCE_ROOT: "${HERMES_KANBAN_WORKSPACE}/evidence"
@@ -41,8 +42,8 @@ mcp_servers:
     tools:
       # kanban_parent_handoffs is the one tool only this profile may call:
       # bootstrap/lens-tools refuses it for any profile other than
-      # ralph-review-synthesis on the queues board, checked server-side, not
-      # by omitting it from another profile's include list alone.
+      # ralph-review-synthesis on the configured review board, checked
+      # server-side, not by omitting it from another profile's include list.
       include: [evidence_read, evidence_search, kanban_show, kanban_parent_handoffs, kanban_heartbeat, kanban_complete, kanban_block]
 skills:
   external_dirs:
