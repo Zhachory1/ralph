@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Make the work tracker match the state of an orchestrator-initiated work item.
+
+  --open <op> --title "..."   called once by the orchestrator when it expands
+                              a request into a card graph. Finds or creates
+                              the item for `op` and sets `In Progress`.
+
+  --update <op> --status "..."  called by any card in that graph's lineage,
+                              on starting or finishing its own part of the
+                              work. Sets the named status; the name must
+                              already exist in the tracker (no status is
+                              created here).
+
+  --close <op>                called once by the orchestrator, only when it
+                              considers the whole graph's work complete. Sets
+                              `Closed`. No other profile is instructed to call
+                              this flag.
+
+`op` is any stable string the caller mints once per unit of work and writes
+into every card's body in that graph (the same role `operation_id` already
+plays for a Chat-sourced request) -- not necessarily a Chat thread, so this
+never reads `chat_evidence` or an on-disk evidence file the way
+`bootstrap/tracker-sync` does for Chat. `--title` is required only on
+`--open`, for a fresh create; an `--open` against an item that already
+exists for `op` is a no-op past resolving it.
+
+With no credential file (`RALPH_TRACKER_CREDS`), every entry point prints
+"tracker not configured", writes nothing and exits 0: the same inertness
+`bootstrap/tracker-sync` and `bootstrap/chat-reply` already carry, so a card
+that calls this with no tracker configured is unaffected either way.
+
+Every tracker write is routed through `bootstrap/tracker.py`; no business
+logic here builds its own HTTP client.
+"""
+
+import argparse
+import os
+import pathlib
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import tracker as tracker_client
+
+TRACKER_CREDS_ENV = "RALPH_TRACKER_CREDS"
+IN_PROGRESS = "In Progress"
+CLOSED = "Closed"
+
+
+def resolve_or_create(client, op_id, title, status):
+    """Find-or-create the item keyed by `op_id`. A found item is left as the
+    caller's later `update`/`close` call will set it; only a fresh create
+    gets `title`/`status` here, the same split `tracker-sync`'s own
+    `resolve_or_create` makes for a Chat operation.
+
+    `--open` runs once per `op_id` in the intended design, so two racing
+    opens landing as two items under the same key is not converged here the
+    way `tracker-sync` folds Chat duplicates: `find`'s oldest-wins rule
+    (tracker.py, dd-tracker.md:291-296) still picks one canonical item for
+    every later `--update`/`--close`, which is the guarantee this needs."""
+    canonical, _newer = client.find(op_id)
+    if canonical is None:
+        client.create({"thread": op_id, "subject": title[:255], "description": title,
+                       "status": status})
+        canonical, _newer = client.find(op_id)
+    return canonical
+
+
+def open_item(client, op_id, title):
+    if not title or not title.strip():
+        print("refused tracker-work --open %s: --title is required" % op_id, file=sys.stderr)
+        return 2
+    resolve_or_create(client, op_id, title, IN_PROGRESS)
+    return 0
+
+
+def update_item(client, op_id, status):
+    canonical, _ = client.find(op_id)
+    if canonical is None:
+        print("tracker-work --update %s: no item open for this operation" % op_id,
+              file=sys.stderr)
+        return 2
+    client.update(canonical["id"], {"status": status})
+    return 0
+
+
+def close_item(client, op_id):
+    canonical, _ = client.find(op_id)
+    if canonical is None:
+        print("tracker-work --close %s: no item open for this operation" % op_id,
+              file=sys.stderr)
+        return 2
+    client.update(canonical["id"], {"status": CLOSED})
+    return 0
+
+
+def load_client(creds_path):
+    config = tracker_client.load(creds_path)
+    return tracker_client.Tracker(config) if config is not None else None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--open", metavar="OP")
+    group.add_argument("--update", metavar="OP")
+    group.add_argument("--close", metavar="OP")
+    parser.add_argument("--title", help="required with --open")
+    parser.add_argument("--status", help="required with --update")
+    args = parser.parse_args(argv)
+
+    client = load_client(os.environ.get(TRACKER_CREDS_ENV, ""))
+    if client is None:
+        print("tracker not configured")
+        return 0
+
+    try:
+        if args.open:
+            return open_item(client, args.open, args.title)
+        if args.update:
+            if not args.status:
+                parser.error("--update requires --status")
+            return update_item(client, args.update, args.status)
+        return close_item(client, args.close)
+    except tracker_client.TrackerError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
