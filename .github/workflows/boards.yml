@@ -1,0 +1,40 @@
+name: boards
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap/install"
+      - "bootstrap/run-review-loop"
+      - "bootstrap/run-notifier"
+      - "bootstrap/lens-tools"
+      - "compose/docker-compose.yml"
+      - "compose/.env.example"
+      - "evals/test_board_*.py"
+      - "evals/test_lens_tools.py"
+      - "evals/test_run_review_loop.py"
+      - "evals/test_profile_config.py"
+      - "notifier/test_approvals.py"
+      - ".github/workflows/boards.yml"
+
+jobs:
+  boards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install YAML parser
+        run: pip install "pyyaml>=6"
+      - name: Board wiring
+        run: |
+          for f in evals/test_board_*.py; do
+            [ -f "$f" ] || continue
+            python3 "$f"
+          done
+      - name: Review loop
+        run: python3 evals/test_run_review_loop.py
+      - name: Profile configuration
+        run: python3 evals/test_profile_config.py
+      - name: Lens tools
+        run: |
+          if [ -f evals/test_lens_tools.py ]; then python3 evals/test_lens_tools.py; fi
+      - name: Notifier
+        run: cd notifier && python3 test_approvals.py
