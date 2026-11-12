@@ -10,7 +10,7 @@ same bridge bootstrap/publish-review and bootstrap/discover-reviews already
 use for the same reason.
 
     RALPH_HERMES_CONTAINER=ralph-hermes-1 \
-      bootstrap/maintain-pr --once --repo owner/name --pr 123 --board queues
+      bootstrap/maintain-pr --once --repo owner/name --pr 123 --board maintain
 
 WHAT THIS DOES NOT CARRY OVER FROM THE FLEET.
 
@@ -323,7 +323,7 @@ def main() -> int:
                     help="required, so this is never invoked expecting a loop")
     ap.add_argument("--repo", required=True)
     ap.add_argument("--pr", required=True, type=int)
-    ap.add_argument("--board", default="queues")
+    ap.add_argument("--board", default="maintain")
     ap.add_argument("--login", default=None,
                     help="GitHub login to exclude as external; defaults to "
                          "whoever gh authenticates as")

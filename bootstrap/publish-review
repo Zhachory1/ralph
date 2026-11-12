@@ -11,7 +11,7 @@ the pattern notifier/poller.py already uses for the same reason -- the
 Hermes image costs 4.5GB to carry for a handful of commands.
 
     RALPH_HERMES_CONTAINER=ralph-hermes-1 \
-      bootstrap/publish-review --task t_xxxxxxxx --board queues
+      bootstrap/publish-review --task t_xxxxxxxx --board lenses
 
 PR 6 is the thing that calls this automatically once a synthesis card
 completes. Posting is OFF BY DEFAULT here too -- pass --post to actually
@@ -224,7 +224,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--task", required=True, help="the synthesis card's id")
-    ap.add_argument("--board", default="queues")
+    ap.add_argument("--board", default="lenses")
     ap.add_argument("--login", default=None,
                     help="asserted GitHub login this script posts as; checked "
                          "against the account gh actually authenticates as, "

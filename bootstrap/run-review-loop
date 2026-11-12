@@ -11,7 +11,12 @@
 
 set -uo pipefail
 
-BOARD=${RALPH_REVIEW_BOARD:-queues}
+LENS_BOARD=${RALPH_LENS_BOARD:-lenses}
+MAINTAIN_BOARD=${RALPH_MAINTAIN_BOARD:-maintain}
+QUEUES_BOARD=${RALPH_QUEUES_BOARD:-queues}
+if [ -n "${RALPH_REVIEW_BOARD:-}" ]; then
+    echo "review loop: ignoring RALPH_REVIEW_BOARD; use RALPH_LENS_BOARD and RALPH_MAINTAIN_BOARD" >&2
+fi
 INTERVAL=${RALPH_REVIEW_POLL_SECONDS:-900}
 CACHE=${RALPH_REPO_CACHE:-/workspaces/repo-cache}
 WORK=${RALPH_REVIEW_WORK:-/workspaces/review-work}
@@ -53,13 +58,14 @@ if [ -n "${RALPH_GITHUB_LOGIN:-}" ]; then
     fi
 fi
 
-echo "ralph review loop: board=${BOARD} every ${INTERVAL}s allowlist=${ALLOW}"
+echo "ralph review loop: lenses=${LENS_BOARD} maintain=${MAINTAIN_BOARD}" \
+     "intake=${QUEUES_BOARD} every ${INTERVAL}s allowlist=${ALLOW}"
 
 while true; do
     # Publish before discovering: a synthesis that finished since the last
     # pass is posted first, so discovery never sees a done-but-unposted
     # review and admits a newer head on top of it.
-    ids=$(docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" list \
+    ids=$(docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$LENS_BOARD" list \
             --assignee ralph-review-synthesis --status done --json 2>/dev/null \
           | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(t["id"]) for t in (d if isinstance(d,list) else d.get("tasks",[]))]' \
           || true)
@@ -70,7 +76,7 @@ while true; do
     # review. Errors (1) are retried. The list lives with the staged evidence.
     for id in $ids; do
         grep -qxF "$id" "$PUBLISHED" 2>/dev/null && continue
-        python3 /ralph/bootstrap/publish-review --task "$id" --board "$BOARD" --post
+        python3 /ralph/bootstrap/publish-review --task "$id" --board "$LENS_BOARD" --post
         rc=$?
         case $rc in
             0|2|3) echo "$id" >> "$PUBLISHED" ;;
@@ -79,7 +85,7 @@ while true; do
     done
 
     python3 /ralph/bootstrap/discover-reviews --allow-file "$ALLOW" \
-        --checkout-root "$CACHE" --work-root "$WORK" --board "$BOARD" --once-for-real \
+        --checkout-root "$CACHE" --work-root "$WORK" --board "$LENS_BOARD" --once-for-real \
         || echo "review loop: discover failed (rc=$?), will retry" >&2
 
     # Maintenance: PRs authored by RALPH_MAINTAIN_LOGIN in allowlisted repos.
@@ -96,7 +102,7 @@ while true; do
             owner=${repo%%/*}
             grep -qxF -e "$repo" -e "$owner/*" "$MAINTAIN_ALLOW" || continue
             python3 /ralph/bootstrap/maintain-pr --once --repo "$repo" --pr "$num" \
-                --board "$BOARD" --login "$RALPH_MAINTAIN_LOGIN" \
+                --board "$MAINTAIN_BOARD" --login "$RALPH_MAINTAIN_LOGIN" \
                 || echo "review loop: maintain $repo#$num returned $?" >&2
         done
     fi
@@ -131,7 +137,7 @@ while true; do
     fi
 
     # Librarian's weekly card (#130, dd-ralph-librarian 2.1, 3.5): one card a
-    # week on $BOARD, assigned to ralph-librarian. No docs repository, no
+    # week on $QUEUES_BOARD, assigned to ralph-librarian. No docs repository, no
     # card -- no new switch. Never two runs at once: skipped this poll while an
     # open pull request has a librarian/ head, or while a librarian card is
     # still queued, running or blocked. A guard that cannot be read is not
@@ -145,12 +151,12 @@ while true; do
             lheads=""; lopen=""
             if lheads=$(gh api --paginate "repos/$RALPH_DOCS_REPO/pulls?state=open&per_page=100" \
                         --jq '.[].head.ref' 2>/dev/null) \
-                    && lopen=$(docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" list \
+                    && lopen=$(docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$QUEUES_BOARD" list \
                         --assignee ralph-librarian --json 2>/dev/null \
                     | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d if isinstance(d,list) else d.get("tasks",[]); print(sum(1 for c in t if c.get("status") not in ("done","archived")))'); then
                 if printf '%s\n' "$lheads" | grep -q '^librarian/' || [ "${lopen:-0}" -gt 0 ]; then
                     :  # a run is still open: this week's card waits
-                elif docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$BOARD" create \
+                elif docker exec "$RALPH_HERMES_CONTAINER" hermes kanban --board "$QUEUES_BOARD" create \
                         "librarian: weekly pass, $(date -u +%F)" \
                         --assignee ralph-librarian \
                         --idempotency-key "librarian-weekly-$(date -u +%G-W%V)" \
