@@ -368,7 +368,7 @@ def main() -> int:
                          "created and fetched on demand; must be the same path "
                          "inside the hermes container")
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
-    ap.add_argument("--board", default="queues")
+    ap.add_argument("--board", default="lenses")
     ap.add_argument("--max-per-run", type=_positive_int, default=10)
     ap.add_argument("--max-age-days", type=_positive_int, default=7)
     ap.add_argument("--once-for-real", action="store_true",

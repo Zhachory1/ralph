@@ -100,6 +100,65 @@ class StartupTests(unittest.TestCase):
 
 
 
+class BoardRoutingTests(unittest.TestCase):
+    def run_pass(self, **overrides):
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            stub = root / "bin"
+            stub.mkdir()
+            calls = root / "calls"
+            docker_calls = root / "docker-calls"
+            (stub / "gh").write_text(
+                "#!/bin/sh\n"
+                '[ "$1 $2" = "search prs" ] && echo "owner/repo 1"\n'
+                "exit 0\n")
+            (stub / "docker").write_text(
+                "#!/bin/sh\n"
+                'echo "$*" >> "$DOCKER_CALLS"\n'
+                '[ "$1" = inspect ] && { echo false; exit 0; }\n'
+                'echo "[{\\"id\\": \\"t_finished\\"}]"\n')
+            (stub / "python3").write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = -c ] && exec /usr/bin/python3 "$@"\n'
+                'echo "$*" >> "$CALLS"\n'
+                "exit 0\n")
+            for f in stub.iterdir():
+                f.chmod(0o755)
+            work = root / "work"
+            work.mkdir()
+            env = {"PATH": f"{stub}:/usr/bin:/bin", "TMPDIR": d,
+                   "CALLS": str(calls), "DOCKER_CALLS": str(docker_calls),
+                   "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_ALLOW": "owner/repo",
+                   "RALPH_MAINTAIN_ALLOW": "owner/repo", "RALPH_MAINTAIN_LOGIN": "author",
+                   "RALPH_REVIEW_WORK": str(work), **overrides}
+            result = subprocess.run(["bash", str(SCRIPT), "--once"], env=env,
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, result.returncode, result.stderr)
+            return (calls.read_text().splitlines() if calls.exists() else [],
+                    docker_calls.read_text().splitlines() if docker_calls.exists() else [],
+                    result)
+
+    def test_default_boards_keep_publish_and_discovery_together(self):
+        calls, docker, _ = self.run_pass()
+        self.assertTrue(any("publish-review" in c and "--board lenses" in c for c in calls))
+        self.assertTrue(any("discover-reviews" in c and "--board lenses" in c for c in calls))
+        self.assertTrue(any("maintain-pr" in c and "--board maintain" in c for c in calls))
+        self.assertTrue(any("ralph-review-synthesis" in c and "--board lenses" in c for c in docker))
+
+    def test_instance_board_names_reach_each_workflow(self):
+        calls, docker, _ = self.run_pass(RALPH_LENS_BOARD="review-alt",
+                                         RALPH_MAINTAIN_BOARD="maintain-alt")
+        self.assertTrue(any("publish-review" in c and "--board review-alt" in c for c in calls))
+        self.assertTrue(any("discover-reviews" in c and "--board review-alt" in c for c in calls))
+        self.assertTrue(any("maintain-pr" in c and "--board maintain-alt" in c for c in calls))
+        self.assertTrue(any("ralph-review-synthesis" in c and "--board review-alt" in c for c in docker))
+
+    def test_old_review_board_setting_is_warned_about_but_ignored(self):
+        calls, docker, result = self.run_pass(RALPH_REVIEW_BOARD="legacy")
+        self.assertIn("RALPH_REVIEW_BOARD", result.stderr)
+        self.assertFalse(any("--board legacy" in c for c in calls + docker))
+
+
 class PublishSkipTests(unittest.TestCase):
     """A done synthesis card with a final publish outcome is not re-checked."""
 
@@ -215,7 +274,7 @@ class LibrarianCardTests(unittest.TestCase):
     """#130, dd-ralph-librarian 2.1, 3.5: the review loop creates the weekly card."""
 
     def run_pass(self, docs_repo="owner/docs", stamp=None, pr_heads="", create_rc=0,
-                 gh_rc=0, lib_cards="[]", list_rc=0):
+                 gh_rc=0, lib_cards="[]", list_rc=0, queues_board="queues"):
         with tempfile.TemporaryDirectory() as d:
             d = pathlib.Path(d)
             stub = d / "bin"
@@ -258,7 +317,7 @@ class LibrarianCardTests(unittest.TestCase):
                    "PR_HEADS": pr_heads, "CREATE_RC": str(create_rc),
                    "GH_RC": str(gh_rc), "LIB_CARDS": lib_cards, "LIST_RC": str(list_rc),
                    "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
-                   "RALPH_REVIEW_ALLOW": "o/r"}
+                   "RALPH_REVIEW_ALLOW": "o/r", "RALPH_QUEUES_BOARD": queues_board}
             if docs_repo is not None:
                 env["RALPH_DOCS_REPO"] = docs_repo
             subprocess.run(["bash", str(SCRIPT)], env=env,
@@ -282,6 +341,11 @@ class LibrarianCardTests(unittest.TestCase):
         created, stamped = self.run_pass(stamp="week-old")
         self.assertEqual(1, len(created))
         self.assertTrue(stamped)
+
+    def test_librarian_uses_the_configured_intake_board(self):
+        created, _ = self.run_pass(queues_board="inbox-alt")
+        self.assertEqual(1, len(created))
+        self.assertIn("--board inbox-alt", created[0])
 
     def test_open_librarian_pr_creates_no_card_regardless_of_stamp(self):
         created, _ = self.run_pass(stamp=None, pr_heads="librarian/2026-11-03\n")

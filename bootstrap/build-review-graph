@@ -9,7 +9,7 @@ lives:
 
     docker compose exec hermes python3 /ralph/bootstrap/build-review-graph \
         --once --repo owner/name --pr 123 \
-        --checkout /some/local/clone/inside/the/container --board queues
+        --checkout /some/local/clone/inside/the/container --board lenses
 
 A lens reads evidence only from inside its own card workspace --
 bootstrap/lens-tools trusts `LENS_EVIDENCE_ROOT=$HERMES_KANBAN_WORKSPACE/evidence`
@@ -108,7 +108,7 @@ def main() -> int:
                     help="an existing local clone with both SHAs reachable, "
                          "on the same filesystem this script runs on")
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
-    ap.add_argument("--board", default="queues")
+    ap.add_argument("--board", default="lenses")
     ap.add_argument("--pr-text", type=pathlib.Path, help="passed through to stage-review-evidence")
     ap.add_argument("--checks", type=pathlib.Path, help="passed through to stage-review-evidence")
     ap.add_argument("--threads", type=pathlib.Path, help="passed through to stage-review-evidence")
