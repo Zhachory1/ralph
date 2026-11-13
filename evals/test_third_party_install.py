@@ -94,6 +94,37 @@ class InstallTests(unittest.TestCase):
         self.assertIn("refusing to overwrite", r.stdout + r.stderr)
         self.assertIn("committed work", (t / "SKILL.md").read_text())
 
+    def test_existing_unstamped_skill_is_preserved_without_git_metadata(self):
+        """init mounts skills/ but not .git; a name collision must still fail closed."""
+        mounted = self.d / "init-mount"
+        (mounted / "bootstrap").mkdir(parents=True)
+        (mounted / "skills" / "write" / "thing").mkdir(parents=True)
+        script = mounted / "bootstrap" / SCRIPT.name
+        script.write_text(SCRIPT.read_text())
+        target = mounted / "skills" / "write" / "thing" / "SKILL.md"
+        target.write_text("first-party skill\n")
+
+        result = subprocess.run([sys.executable, str(script), "--manifest",
+                                 str(self.manifest())], capture_output=True,
+                                text=True, cwd=mounted)
+        self.assertIn("refusing to overwrite", result.stdout + result.stderr)
+        self.assertEqual("first-party skill\n", target.read_text())
+
+    def test_same_pin_is_idempotent_without_git_metadata(self):
+        mounted = self.d / "init-mount"
+        (mounted / "bootstrap").mkdir(parents=True)
+        (mounted / "skills" / "write").mkdir(parents=True)
+        script = mounted / "bootstrap" / SCRIPT.name
+        script.write_text(SCRIPT.read_text())
+        manifest = str(self.manifest())
+        args = [sys.executable, str(script), "--manifest", manifest]
+
+        first = subprocess.run(args, capture_output=True, text=True, cwd=mounted)
+        second = subprocess.run(args, capture_output=True, text=True, cwd=mounted)
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertEqual(0, second.returncode, second.stderr)
+        self.assertIn("already at", second.stdout)
+
     def test_a_branch_is_not_a_pin(self):
         r = self.run_it(self.manifest(commit="main"))
         self.assertEqual(2, r.returncode)

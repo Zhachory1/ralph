@@ -93,7 +93,9 @@ services:
       - hermes-home:/home/hermes/.hermes
       - ../profiles:/ralph/profiles:ro
       - ../bootstrap:/ralph/bootstrap:ro
-      - ../skills:/ralph/skills:ro
+      # Trusted one-shot init needs the whole skills tree writable for pinned installs.
+      # The installer refuses tracked-name collisions; agent mounts stay read-only.
+      - ../skills:/ralph/skills
       # Scheduled jobs from the private overlay. Blank means none; a path that
       # does not exist mounts as an empty directory, which installs nothing.
       - ${RALPH_PRIVATE_JOBS:-./no-private-jobs}:/ralph/private-jobs:ro

@@ -66,7 +66,7 @@ flowchart LR
 | Container | Runs | Can touch |
 |---|---|---|
 | `socket-proxy` | Docker API filter | Containers, exec, images. Not volumes, not `info`. |
-| `init` | `bootstrap/install`, then exits | Writes profiles, SOULs, configs and tokens into the hermes volume. Starts after `hermes` (it configures hermes through the CLI there); `hermes-webui` waits for it to finish. Run it by hand after a change. |
+| `init` | `bootstrap/install`, then exits | Writes profiles, SOULs, configs and tokens into the hermes volume, and installs pinned third-party skills into the gitignored `skills/` checkout. Only this trusted one-shot service mounts `/ralph/skills` writable; Hermes and `chat-sender` mount it read-only. Starts after `hermes`; `hermes-webui` waits for it. Run it by hand after a change. |
 | `hermes` | Gateway, Kanban dispatcher, cron scheduler | The board database, every profile's home, the Docker API through the proxy. |
 | `hermes-webui` | Chat UI on `127.0.0.1:$RALPH_WEBUI_PORT` | Same hermes home; runs profiles in-process, with commands in the sandbox. |
 | `notifier` | `bootstrap/run-notifier`: approvals, gate alerts, morning digest | GitHub with `RALPH_GITHUB_TOKEN`, the board through `docker exec`, the Chat webhook. |
