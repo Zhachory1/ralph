@@ -557,7 +557,7 @@ class EphemeralSandboxTests(unittest.TestCase):
         for profile, extras in (("builder", ["/host/repo-cache:/repo-cache:ro"]),
                                ("lens-mvp", ["/host/workspaces/review-work:/workspaces/review-work:ro"]),
                                ("chat-maintainer", ["/host/workspaces/chat-inbox:/workspaces/chat-inbox:ro"]),
-                               ("review-workflow", ["/host/repo-cache:/repo-cache:ro",
+                               ("review-workflow", ["/host/repo-cache:/workspaces/repo-cache:ro",
                                                     "/host/workspaces/review-work:/workspaces/review-work",
                                                     "/host/bootstrap:/ralph/bootstrap:ro"]),
                                ("analyst", [])):

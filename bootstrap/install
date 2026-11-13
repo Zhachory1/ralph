@@ -129,7 +129,7 @@ sandbox_config() {
 # touched (#79 review).
 repo_cache_profile() {
     case "$1" in
-        builder|maintainer|author|researcher|review-workflow) return 0 ;;
+        builder|maintainer|author|researcher) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -245,7 +245,13 @@ terminal_block() {
             lens-*|review-synthesis)
                 vols="$vols,\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"" ;;
             review-workflow)
+                # discover-reviews hands it a --checkout path it already
+                # resolved under /workspaces/repo-cache (REPO_CACHE_SRC's
+                # own container-side name, not repo_cache_profile()'s
+                # /repo-cache -- a different mount point other profiles
+                # share, at a path this card's own body never names).
                 vols="$vols,\"$WORKSPACES_SRC/review-work:/workspaces/review-work\""
+                [ -z "$REPO_CACHE_SRC" ] || vols="$vols,\"$REPO_CACHE_SRC:/workspaces/repo-cache:ro\""
                 [ -z "$BOOTSTRAP_SRC" ] || vols="$vols,\"$BOOTSTRAP_SRC:/ralph/bootstrap:ro\"" ;;
             chat-maintainer)
                 vols="$vols,\"$WORKSPACES_SRC/chat-inbox:/workspaces/chat-inbox:ro\"" ;;

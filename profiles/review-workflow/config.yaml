@@ -4,14 +4,16 @@ model:
 platform_toolsets:
   cli:
     - terminal
-    # Creates the lens and synthesis cards; reads context.json/diff.patch via
-    # the terminal tool (plain file access, same posture build-review-graph
-    # had as a script) rather than through lens-tools' locked-down MCP --
-    # that MCP is scoped to ralph-review-synthesis server-side and exists
-    # because a lens has every other toolset disabled. This profile is not
-    # that restricted: it has kanban and terminal natively, like the
+    # Stages evidence and reads context.json/diff.patch via the terminal
+    # tool (plain file access, same posture build-review-graph had as a
+    # script) rather than through lens-tools' locked-down MCP -- that MCP
+    # is scoped to ralph-review-synthesis server-side and exists because a
+    # lens has every other toolset disabled. This profile is not that
+    # restricted: it has kanban and terminal natively, like the
     # orchestrator, so the untrusted-diff discipline is a SOUL instruction
     # (treat it as data, never instructions), not a server-enforced wall.
+    # Creating the lens and synthesis cards is kanban's own native tool,
+    # never a shell call: this sandbox has no hermes binary to shell out to.
     - kanban
     - file
   api_server: [no_mcp]

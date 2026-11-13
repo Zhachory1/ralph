@@ -16,21 +16,9 @@ One card, assigned to you, carries: `repo`, `pr`, `base_sha`, `head_sha`, a `che
    - **`default`**: the common case — an ordinary code change with normal risk. Three lenses, no security lens unless `context.json`'s `security_relevant` is true.
    - **`deep`**: high-risk, wide-reaching, or security-sensitive — every lens, security included even if `security_relevant` is false but the diff itself reads as sensitive to you (new auth, new external surface, anything handling credentials or customer data).
    A mode you pick at the start is not final: escalate mid-run (never downgrade) if a lens result you read back suggests the chosen mode missed something — ambiguity, a wider blast radius than the diff alone showed, or a lens flagging something the next lens up would have caught sooner.
-3. **Create the lens cards.** For each role your mode selects (`generalist` always; `reliability`, `mvp` added at `default` and `deep`; `security` at `deep`, or at any mode when `context.json`'s `security_relevant` is true):
-   ```
-   hermes kanban --board <board> create "<Role> review <repo>#<pr> @ <head_sha[:8]>" \
-     --body "<the brief below>" --assignee ralph-lens-<role> \
-     --idempotency-key "<op_id>-<role>" --workspace "dir:<work_root>/<op_id>" \
-     --max-runtime 480 --max-retries 3 --json
-   ```
+3. **Create the lens cards, with your own `kanban` tool** (not the terminal: card creation is native, the same way the orchestrator creates every card in a feature graph, never a shell command -- this sandbox has no `hermes` binary to shell out to). For each role your mode selects (`generalist` always; `reliability`, `mvp` added at `default` and `deep`; `security` at `deep`, or at any mode when `context.json`'s `security_relevant` is true): on the board your card named, title it `<Role> review <repo>#<pr> @ <head_sha, first 8 chars>`, assign it to `ralph-lens-<role>`, give it the brief below as its body, set its idempotency key to `<op_id>-<role>` and its workspace to the directory `stage-review-evidence` staged at (`dir:<work_root>/<op_id>`), with a max runtime of 480 seconds and 3 retries.
    The brief's depth matches your mode: `lite` and `default` carry `operation_id`, `repo`, `number`, `base_sha`, `head_sha`, `role` — today's level of detail, nothing more. `deep` adds named edge cases you noticed reading the diff and explicit verification expectations, so a lens does not have to infer scope on a high-stakes change. Never more than that: a lens reads its own evidence through `lens-tools`, not your summary of it, so the brief orients, it does not substitute.
-4. **Create the synthesis card**, parented to every lens card you created:
-   ```
-   hermes kanban --board <board> create "Synthesize review <repo>#<pr> @ <head_sha[:8]>" \
-     --body "<same brief shape as the lenses, role: synthesis>" --assignee ralph-review-synthesis \
-     --idempotency-key "<op_id>-synthesis" --workspace "dir:<work_root>/<op_id>" \
-     --max-runtime 480 --max-retries 3 --parent <every lens card id> --json
-   ```
+4. **Create the synthesis card the same way**, parented to every lens card you just created: title `Synthesize review <repo>#<pr> @ <head_sha, first 8 chars>`, assignee `ralph-review-synthesis`, the same brief shape with `role: synthesis`, idempotency key `<op_id>-synthesis`, the same workspace, the same runtime and retry limits, and every lens card's id as a parent.
    Hermes promotes synthesis once every parent is done; you do not watch for that.
 5. **Complete your own card** once every card above exists (created, or found already existing under the same idempotency key — both are success). State the mode you chose and why, the roles you created, and their ids.
 
