@@ -289,6 +289,30 @@ def _synthesis_cards(board: str, repo: str, number: int) -> list[dict] | None:
     return [c for c in cards if c.get("title", "").startswith(prefix)]
 
 
+def intake_in_flight(board: str, repo: str, number: int, head_sha: str) -> bool | None:
+    """Whether this head's own review-workflow intake card already exists
+    and is not blocked. review_graphs() sees only synthesis cards -- an
+    intake that has not yet built one is invisible to it (review council,
+    three lenses: a repeat discovery pass re-finding a ready/running intake
+    by its stable idempotency key must not spend a fresh admission slot
+    just because no synthesis card exists to say otherwise). None means the
+    board could not be read, treated as not-in-flight so a transient read
+    failure does not block an otherwise-eligible head forever."""
+    r = subprocess.run(hermes_argv("kanban", "--board", board, "list", "--archived",
+                                   "--assignee", "ralph-review-workflow", "--json"),
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    try:
+        cards = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+    cards = cards if isinstance(cards, list) else cards.get("tasks", [])
+    title = f"Review {repo}#{number} @ {head_sha[:8]}"
+    return any(c.get("title") == title and c.get("status") not in ("blocked", "archived")
+              for c in cards)
+
+
 def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
     """Heads (8-char prefixes) this PR already has a review graph for, and
     whether one is still running. None means the board could not be read,
@@ -479,6 +503,17 @@ def main() -> int:
             continue
         if running:
             print(f"  wait {repo}#{number}: a review is still running")
+            continue
+        # review_graphs() cannot see this: an intake that has not yet built
+        # a synthesis card is invisible to it. A ready or running intake
+        # already exists for this exact head -- review-workflow just has
+        # not finished yet -- so re-attempting the handoff would spend
+        # another admission slot on work that is already in flight, not
+        # new (review council, three lenses, same defect twice: the first
+        # fix only caught a blocked intake, not a healthy one still running).
+        in_flight = intake_in_flight(args.board, repo, number, head_sha)
+        if in_flight:
+            print(f"  wait {repo}#{number}: its review-workflow handoff is already in flight")
             continue
         print(f"  {repo}#{number} @ {head_sha[:8]}")
 

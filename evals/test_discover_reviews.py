@@ -225,6 +225,52 @@ class ReviewGraphsStatusTests(unittest.TestCase):
         self.assertTrue(self.graphs(("aaaaaaaa", "blocked"), ("bbbbbbbb", "running"))[1])
 
 
+class IntakeInFlightTests(unittest.TestCase):
+    """The real intake_in_flight, against a fake board. review_graphs()'s
+    own blind spot: an intake that has not yet built a synthesis card is
+    invisible to it, so this is the only thing that can see one."""
+
+    def in_flight(self, *cards):
+        import json
+        loader = importlib.machinery.SourceFileLoader("dr_real3", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("dr_real3", loader)
+        real = importlib.util.module_from_spec(spec)
+        loader.exec_module(real)
+        board = json.dumps([
+            {"title": f"Review o/r#7 @ {sha}", "status": status} for sha, status in cards])
+        done = mock.Mock(returncode=0, stdout=board)
+        with mock.patch.object(real.subprocess, "run", return_value=done):
+            return real.intake_in_flight("queues", "o/r", 7, "aaaaaaaa" + "a" * 32)
+
+    def test_a_ready_intake_for_this_head_is_in_flight(self):
+        self.assertTrue(self.in_flight(("aaaaaaaa", "ready")))
+
+    def test_a_running_intake_for_this_head_is_in_flight(self):
+        self.assertTrue(self.in_flight(("aaaaaaaa", "running")))
+
+    def test_a_blocked_intake_is_not_in_flight(self):
+        """Must still reach the handoff call, so blocked reporting runs."""
+        self.assertFalse(self.in_flight(("aaaaaaaa", "blocked")))
+
+    def test_an_archived_intake_is_not_in_flight(self):
+        self.assertFalse(self.in_flight(("aaaaaaaa", "archived")))
+
+    def test_no_matching_card_is_not_in_flight(self):
+        self.assertFalse(self.in_flight(("bbbbbbbb", "ready")))
+
+    def test_no_cards_at_all_is_not_in_flight(self):
+        self.assertFalse(self.in_flight())
+
+    def test_an_unreadable_board_returns_none(self):
+        import json
+        loader = importlib.machinery.SourceFileLoader("dr_real4", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("dr_real4", loader)
+        real = importlib.util.module_from_spec(spec)
+        loader.exec_module(real)
+        with mock.patch.object(real.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+            self.assertIsNone(real.intake_in_flight("queues", "o/r", 7, "a" * 40))
+
+
 def load_real_discover():
     loader = importlib.machinery.SourceFileLoader("dr_real2", str(SCRIPT))
     spec = importlib.util.spec_from_loader("dr_real2", loader)
@@ -416,6 +462,78 @@ class BlockedHandoffCardTests(unittest.TestCase):
     def test_a_blocked_handoff_card_does_not_fail_discovery(self):
         rc, _, _ = self.run_main("blocked")
         self.assertEqual(0, rc)
+
+
+class InFlightIntakeTests(unittest.TestCase):
+    """review council, round 5: review_graphs() sees only synthesis cards --
+    a ready or running intake that has not built one yet is invisible to
+    it, so re-attempting the handoff on every later pass spent a fresh
+    admission slot on work already in flight, not new. The real fix checks
+    the board for this exact head's own intake card BEFORE attempting the
+    handoff at all, the same pattern review_graphs() already uses for
+    synthesis cards."""
+
+    def run_main(self, existing_intake_status, max_per_run=1):
+        import sys
+        import json as json_mod
+
+        def fake_run(argv, **kw):
+            if "list" in argv and "ralph-review-workflow" in argv:
+                if existing_intake_status is None:
+                    return mock.Mock(returncode=0, stdout="[]", stderr="")
+                return mock.Mock(returncode=0, stdout=json_mod.dumps([
+                    {"title": "Review a/repo#1 @ 11111111", "status": existing_intake_status}]),
+                    stderr="")
+            if is_handoff(argv):
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"id": "t_handoff"}), stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"task": {"status": "ready"}}),
+                                 stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(discover_reviews, "search_assigned_prs",
+                                  return_value=[fake_pr("a/repo", n) for n in (1, 2)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
+                mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch("subprocess.run", side_effect=fake_run) as run:
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
+            with mock.patch.object(sys, "argv", argv):
+                discover_reviews.main()
+        return run.call_args_list
+
+    def test_a_ready_in_flight_intake_is_not_re_handed_off(self):
+        """a/repo#1 already has a ready intake; max_per_run=1 means the slot
+        must go to a/repo#2 instead, not be wasted re-attempting #1."""
+        calls = self.run_main("ready", max_per_run=1)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(1, len(handoffs))
+        self.assertEqual("a/repo", body_field(handoffs[0].args[0], "repo"))
+        self.assertEqual("2", body_field(handoffs[0].args[0], "pr"))
+
+    def test_a_running_in_flight_intake_is_not_re_handed_off(self):
+        calls = self.run_main("running", max_per_run=1)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(1, len(handoffs))
+        self.assertEqual("2", body_field(handoffs[0].args[0], "pr"))
+
+    def test_a_blocked_intake_is_not_treated_as_in_flight(self):
+        """A blocked intake must still reach the handoff call, so the
+        existing blocked-status reporting and no-slot-spent behavior
+        (BlockedHandoffCardTests) still runs."""
+        calls = self.run_main("blocked", max_per_run=2)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(2, len(handoffs), "both PRs reach the handoff call")
+
+    def test_no_existing_intake_reaches_the_handoff_call_normally(self):
+        calls = self.run_main(None, max_per_run=2)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(2, len(handoffs))
 
 
 class PerRunCapTests(unittest.TestCase):
