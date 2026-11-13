@@ -42,6 +42,17 @@ class ComposeFileTests(unittest.TestCase):
         self.assertIn("chat-sender", COMPOSE["services"])
         self.assertIn("tracker-sync", COMPOSE["services"])
 
+    def test_only_init_can_write_shipped_skills(self):
+        init = COMPOSE["services"]["init"]["volumes"]
+        hermes = COMPOSE["services"]["hermes"]["volumes"]
+        sender = COMPOSE["services"]["chat-sender"]["volumes"]
+        self.assertIn("../skills:/ralph/skills", init)
+        self.assertNotIn("../skills:/ralph/skills:ro", init)
+        self.assertIn("../skills:/ralph/skills:ro", hermes)
+        self.assertNotIn("../skills:/ralph/skills", hermes)
+        self.assertIn("../skills:/ralph/skills:ro", sender)
+        self.assertNotIn("../skills:/ralph/skills", sender)
+
     def test_chat_sender_and_tracker_sync_are_profile_gated(self):
         """A plain `docker compose up` must start neither."""
         self.assertEqual(["chat"], COMPOSE["services"]["chat-sender"]["profiles"])

@@ -134,11 +134,17 @@ def install(entry: dict, check: bool) -> tuple[str, str]:
             f"manifest. One of the two is wrong; refusing to overwrite the commit."
         )
 
-    if installed_commit(target) == commit:
+    installed = installed_commit(target)
+    # init mounts skills/ without .git, so git cannot identify a tracked
+    # collision there. An unstamped existing directory is not ours to replace.
+    if target.exists() and installed is None:
+        return "failed", f"{lane}/{name} exists without an install stamp; refusing to overwrite"
+
+    if installed == commit:
         return "ok", f"{lane}/{name} already at {commit[:8]}"
 
     if check:
-        have = installed_commit(target) or "nothing"
+        have = installed or "nothing"
         return "would-change", f"{lane}/{name}: {have[:8] if have != 'nothing' else have} -> {commit[:8]}"
 
     with tempfile.TemporaryDirectory() as tmp:
