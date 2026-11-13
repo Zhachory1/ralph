@@ -512,6 +512,9 @@ def main() -> int:
         # new (review council, three lenses, same defect twice: the first
         # fix only caught a blocked intake, not a healthy one still running).
         in_flight = intake_in_flight(args.board, repo, number, head_sha)
+        if in_flight is None:
+            print(f"  skip {repo}#{number}: could not read its intake cards", file=sys.stderr)
+            continue
         if in_flight:
             print(f"  wait {repo}#{number}: its review-workflow handoff is already in flight")
             continue
@@ -590,6 +593,17 @@ def main() -> int:
             print(f"  {handoff_id} ({repo}#{number} @ {head_sha[:8]}) is blocked, "
                  "not retried automatically", file=sys.stderr)
             continue
+        if handoff_status is None:
+            # The post-create show failed or was unreadable. intake_in_flight
+            # already ruled out the one case that must not spend a slot (a
+            # ready/running card found, not created); past that gate, the
+            # handoff create itself still ran and is the thing the per-run
+            # cap bounds, whether or not this follow-up read could confirm
+            # the result -- so this reports the gap and still spends the
+            # slot below, rather than letting an unreadable show disable the
+            # cap entirely by never incrementing it.
+            print(f"  could not read {handoff_id}'s status for {repo}#{number} @ {head_sha[:8]}",
+                 file=sys.stderr)
         # A slot is spent only by a graph actually built: a failed checkout
         # or build does not starve later PRs.
         slots += 1

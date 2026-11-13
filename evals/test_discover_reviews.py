@@ -31,6 +31,13 @@ def setUpModule():
     patcher = mock.patch.object(discover_reviews, "review_graphs", return_value=(set(), False))
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
+    # Same reasoning, for the newer board-read helper: a test that does not
+    # care about an in-flight intake should not have to know this function
+    # exists, the same way most tests never had to know review_graphs()
+    # exists either.
+    intake_patcher = mock.patch.object(discover_reviews, "intake_in_flight", return_value=False)
+    intake_patcher.start()
+    unittest.addModuleCleanup(intake_patcher.stop)
 
 
 def fake_pr(repo, number, title="x"):
@@ -464,6 +471,48 @@ class BlockedHandoffCardTests(unittest.TestCase):
         self.assertEqual(0, rc)
 
 
+class UnreadableHandoffStatusTests(unittest.TestCase):
+    """review council, round 6: handoff_status is None (the post-create show
+    failed or was unreadable) must still spend a per-run slot, unlike a
+    confirmed blocked or in-flight card -- the handoff create itself already
+    ran, and the cap bounds attempts, not confirmed outcomes. Not spending
+    a slot here let every eligible PR bypass --max-per-run entirely, since
+    slots never incremented for any PR whose follow-up read failed."""
+
+    def run_main(self, max_per_run):
+        import sys
+        import json as json_mod
+
+        def fake_run(argv, **kw):
+            if is_handoff(argv):
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"id": "t_handoff"}), stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0, stdout="not json", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(discover_reviews, "search_assigned_prs",
+                                  return_value=[fake_pr("a/repo", n) for n in range(1, 6)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
+                mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch.object(discover_reviews, "stale_blocked_synthesis", return_value=[]), \
+                mock.patch("subprocess.run", side_effect=fake_run) as run:
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
+            with mock.patch.object(sys, "argv", argv):
+                discover_reviews.main()
+        return handoff_calls(run.call_args_list)
+
+    def test_an_unreadable_status_still_spends_a_slot_and_the_cap_still_binds(self):
+        """5 eligible PRs, cap of 2: exactly 2 handoffs, not 5."""
+        calls = self.run_main(max_per_run=2)
+        self.assertEqual(2, len(calls))
+
+
 class InFlightIntakeTests(unittest.TestCase):
     """review council, round 5: review_graphs() sees only synthesis cards --
     a ready or running intake that has not built one yet is invisible to
@@ -471,7 +520,18 @@ class InFlightIntakeTests(unittest.TestCase):
     admission slot on work already in flight, not new. The real fix checks
     the board for this exact head's own intake card BEFORE attempting the
     handoff at all, the same pattern review_graphs() already uses for
-    synthesis cards."""
+    synthesis cards.
+
+    Unlike most tests in this file, these exercise the real
+    intake_in_flight against a fake board -- setUpModule()'s module-wide
+    stub is lifted for the duration of each one, by loading a second,
+    unstubbed copy of the script and patching that function in."""
+
+    def setUp(self):
+        real = load_real_discover()
+        patcher = mock.patch.object(discover_reviews, "intake_in_flight", real.intake_in_flight)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_main(self, existing_intake_status, max_per_run=1):
         import sys
