@@ -6,24 +6,128 @@
 
 set -euo pipefail
 
-# Every board a feature can run on: work-instance features start from review
-# and maintenance cards on the review board, so their gates live there (#145).
-BOARDS=$(printf '%s\n' "${RALPH_BOARD:-ralph}" "${RALPH_REVIEW_BOARD:-queues}" | awk 'NF && !seen[$0]++')
 INTERVAL=${RALPH_POLL_SECONDS:-900}
 STATE=${RALPH_STATE_FILE:-/var/lib/ralph/notifier-state.json}
 DIGEST_HOUR=${RALPH_DIGEST_HOUR:-8}
 DIGEST_STAMP=${RALPH_DIGEST_STAMP:-/var/lib/ralph/digest-sent}
+CACHE=${STATE%/*}/notifier-boards.json
+umask 077
 
-echo "ralph notifier: boards=$(echo $BOARDS) every ${INTERVAL}s"
+[ -z "${RALPH_REVIEW_BOARD:-}" ] || echo "notifier: ignoring RALPH_REVIEW_BOARD for routing" >&2
+
+board_slugs() {
+    python3 -c '
+import json, re, sys
+try:
+    boards = json.load(sys.stdin)
+    if not isinstance(boards, list):
+        raise ValueError("board list is not an array")
+    slugs = []
+    for board in boards:
+        if not isinstance(board, dict) or not isinstance(board.get("archived", False), bool):
+            raise ValueError("invalid board entry")
+        slug = board.get("slug")
+        if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", slug):
+            raise ValueError("invalid board slug")
+        if not board.get("archived", False):
+            slugs.append(slug)
+    if len(slugs) != len(set(slugs)) or not slugs:
+        raise ValueError("duplicate or empty board list")
+    print("\n".join(sorted(slugs)))
+except (ValueError, TypeError, json.JSONDecodeError) as exc:
+    print(f"notifier: unreadable board list: {exc}", file=sys.stderr)
+    sys.exit(1)
+'
+}
+
+migrate_state() {
+    python3 - "$STATE" "$DIGEST_STAMP" "${RALPH_BOARD:-ralph}" "${RALPH_REVIEW_BOARD:-queues}" <<'PY'
+import fcntl, json, os, sys
+from pathlib import Path
+
+state, stamp = (Path(sys.argv[1]), Path(sys.argv[2]))
+first, second = sys.argv[3:]
+if state.parent != stamp.parent:
+    sys.exit("notifier: alert state and digest stamp must share a volume")
+base = str(state)[:-5] if str(state).endswith(".json") else str(state)
+first_state, second_state = Path(f"{base}-{first}.json"), Path(f"{base}-{second}.json")
+first_digest, second_digest = Path(f"{stamp}-{first}"), Path(f"{stamp}-{second}")
+# The second board's old suffix is the first board's new one; stage it first.
+pairs = ([(first_state, second_state, "queues.state"),
+          (first_digest, second_digest, "queues.digest")] if first != second else [])
+pairs += [(state, first_state, "ralph.state"), (stamp, first_digest, "ralph.digest")]
+lock_fd = os.open(state.parent / ".notifier-board-migration.lock", os.O_CREAT | os.O_RDWR, 0o600)
+with os.fdopen(lock_fd, "r+") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    stage = state.parent / ".notifier-board-migration"
+    stage.mkdir(mode=0o700, exist_ok=True)
+    ready, done = stage / "ready.json", stage / "done"
+    if done.exists():
+        if state.exists() or stamp.exists():
+            sys.exit("notifier: legacy state reappeared after migration")
+        sys.exit(0)
+    if not ready.exists():
+        for old, target, name in pairs:
+            staged = stage / name
+            if os.path.lexists(staged):
+                if os.path.lexists(old):
+                    sys.exit(f"notifier: state collision at {old}")
+                continue
+            if os.path.lexists(target):
+                sys.exit(f"notifier: state collision at {target}")
+            if os.path.lexists(old):
+                os.rename(old, staged)
+        expected = [name for _, _, name in pairs if os.path.lexists(stage / name)]
+        temporary = stage / "ready.tmp"
+        temporary.write_text(json.dumps(expected))
+        os.replace(temporary, ready)
+    expected = json.loads(ready.read_text())
+    names = {name for _, _, name in pairs}
+    if not isinstance(expected, list) or len(expected) != len(set(expected)) \
+            or not set(expected) <= names \
+            or any(os.path.lexists(stage / name) and name not in expected for name in names):
+        sys.exit("notifier: invalid migration record")
+    for _, target, name in pairs:
+        if name not in expected:
+            continue
+        staged = stage / name
+        if os.path.lexists(staged):
+            if os.path.lexists(target):
+                sys.exit(f"notifier: state collision at {target}")
+            os.rename(staged, target)
+        elif not os.path.lexists(target):
+            sys.exit(f"notifier: missing migrated state at {target}")
+    done.touch()
+PY
+}
+
+echo "ralph notifier: enumerating boards every ${INTERVAL}s"
 
 while true; do
+    if raw=$(docker exec -u hermes "$RALPH_HERMES_CONTAINER" hermes kanban boards list --json 2>/dev/null) \
+            && BOARDS=$(printf '%s' "$raw" | board_slugs) && [ -n "$BOARDS" ]; then
+        tmp=$(mktemp "$CACHE.XXXXXX")
+        printf '%s\n' "$raw" > "$tmp"
+        mv "$tmp" "$CACHE"
+    elif [ -f "$CACHE" ] && BOARDS=$(board_slugs < "$CACHE") && [ -n "$BOARDS" ]; then
+        echo "notifier: board read failed; using cached list" >&2
+    else
+        echo "notifier: no valid board list; skipping pass" >&2
+        sleep "$INTERVAL"
+        continue
+    fi
+    if ! printf '%s\n' "$BOARDS" | grep -qxF "${RALPH_BOARD:-ralph}" \
+            || ! printf '%s\n' "$BOARDS" | grep -qxF "${RALPH_REVIEW_BOARD:-queues}" \
+            || ! migrate_state; then
+        echo "notifier: board state unavailable; skipping pass" >&2
+        sleep "$INTERVAL"
+        continue
+    fi
     # Decisions first, then alerts: a gate the owner has just decided on is
     # moved before the poller can announce it as still waiting (#64).
-    # The first board keeps the original state file, so an upgrade announces
-    # nothing twice; each other board gets its own, because each run prunes
-    # every gate it did not see.
-    state=$STATE
+    # Each board has its own sent-once history; a poll prunes unseen gates.
     for board in $BOARDS; do
+        state=${STATE%.json}-$board.json
         if [ -n "${GH_TOKEN:-}" ]; then
             python3 /ralph/notifier/approvals.py --board "$board" \
                 || echo "notifier: approval poll failed on $board, will retry" >&2
@@ -35,7 +139,6 @@ while true; do
         else
             echo "notifier: GCHAT_WEBHOOK_URL unset, skipping alerts" >&2
         fi
-        state=${STATE%.json}-$board.json
     done
 
     # The morning digest, once a day. A stamp file rather than a timer, so a
@@ -43,10 +146,9 @@ while true; do
     # gets it on the first poll after waking.
     today=$(date +%Y-%m-%d)
     hour=$(date +%-H)
-    # One stamp per board, the first keeping the original, so a retry does
-    # not resend a board whose digest already went out.
-    stamp=$DIGEST_STAMP
+    # One stamp per board, so a retry never resends a completed digest.
     for board in $BOARDS; do
+        stamp=$DIGEST_STAMP-$board
         if [ -n "${GCHAT_WEBHOOK_URL:-}" ] && [ "$hour" -ge "$DIGEST_HOUR" ] \
            && [ "$(cat "$stamp" 2>/dev/null || true)" != "$today" ]; then
             if python3 /ralph/notifier/digest.py --board "$board"; then
@@ -55,7 +157,6 @@ while true; do
                 echo "notifier: digest failed on $board, will retry" >&2
             fi
         fi
-        stamp=$DIGEST_STAMP-$board
     done
 
     sleep "$INTERVAL"

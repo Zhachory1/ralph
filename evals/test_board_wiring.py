@@ -75,8 +75,8 @@ class BoardComposeTests(unittest.TestCase):
     def test_hermes_receives_the_synthesis_board_name(self):
         self.assertIn("RALPH_LENS_BOARD", COMPOSE["services"]["hermes"]["environment"])
 
-    def test_notifier_keeps_its_old_board_setting_until_cutover(self):
-        self.assertIn("RALPH_REVIEW_BOARD", COMPOSE["services"]["notifier"]["environment"])
+    def test_notifier_no_longer_gets_the_old_review_board_setting(self):
+        self.assertNotIn("RALPH_REVIEW_BOARD", COMPOSE["services"]["notifier"]["environment"])
 
     def test_example_lists_all_four_board_defaults(self):
         for setting in ("RALPH_BOARD=ralph", "RALPH_QUEUES_BOARD=queues",
