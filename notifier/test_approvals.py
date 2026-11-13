@@ -705,46 +705,148 @@ class NotifierOrderTests(unittest.TestCase):
 
 
 class BoardsTests(unittest.TestCase):
-    """#145: work-instance features run on the review board (`queues`), and
-    the notifier only polled RALPH_BOARD, so their gates were never seen."""
+    """Every live board has separate gate and digest state, including on upgrade."""
 
-    def run_notifier(self, **env):
+    def run_notifier(self, boards=None, initial=None, fail_list=False, staged=None, **env):
         import os
         import subprocess
         import tempfile
         script = pathlib.Path(__file__).resolve().parent.parent / "bootstrap" / "run-notifier"
         with tempfile.TemporaryDirectory() as d:
-            d = pathlib.Path(d)
-            (d / "python3").write_text('#!/bin/sh\necho "$*" >> "$CALLS"\n')
-            (d / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
-            for f in d.iterdir():
+            root = pathlib.Path(d)
+            calls = root / "calls"
+            boards = boards if boards is not None else ["queues", "ralph"]
+            boards_json = json.dumps([{"slug": b, "archived": b == "ralph-evals"} for b in boards])
+            for name, value in (initial or {}).items():
+                (root / name).write_text(value)
+            if staged:
+                stage = root / ".notifier-board-migration"
+                stage.mkdir()
+                for name, value in staged.items():
+                    (stage / name).write_text(value)
+            (root / "python3").write_text(
+                '#!/bin/sh\n'
+                '[ "$1" = -c ] && exec /usr/bin/python3 "$@"\n'
+                '[ "$1" = - ] && exec /usr/bin/python3 "$@"\n'
+                'echo "$*" >> "$CALLS"\n')
+            (root / "docker").write_text(
+                '#!/bin/sh\n'
+                '[ "$FAIL_LIST" = 1 ] && exit 1\n'
+                'printf "%s\\n" "$BOARDS_JSON"\n')
+            (root / "sleep").write_text("#!/bin/sh\nkill $PPID\n")
+            for f in (root / "python3", root / "docker", root / "sleep"):
                 f.chmod(0o755)
-            calls = d / "calls"
-            subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30,
-                           env={"PATH": f"{d}:/usr/bin:/bin", "CALLS": str(calls),
-                                "GH_TOKEN": "x", "GCHAT_WEBHOOK_URL": "x",
-                                "RALPH_DIGEST_HOUR": "0", "RALPH_STATE_FILE": "/s/state.json",
-                                "RALPH_DIGEST_STAMP": str(d / "stamp"), **env})
-            return calls.read_text().splitlines()
+            result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=30,
+                                    env={"PATH": f"{root}:/usr/bin:/bin", "CALLS": str(calls),
+                                         "BOARDS_JSON": boards_json, "FAIL_LIST": "1" if fail_list else "0",
+                                         "RALPH_HERMES_CONTAINER": "x", "GH_TOKEN": "x",
+                                         "GCHAT_WEBHOOK_URL": "x", "RALPH_DIGEST_HOUR": "0",
+                                         "RALPH_STATE_FILE": str(root / "notifier-state.json"),
+                                         "RALPH_DIGEST_STAMP": str(root / "digest-sent"), **env})
+            files = {f.name: f.read_text() for f in root.iterdir() if f.is_file() and
+                     f.name not in {"python3", "docker", "sleep", "calls"}}
+            return result, calls.read_text().splitlines() if calls.exists() else [], files
 
-    def test_every_board_is_polled(self):
-        calls = self.run_notifier(RALPH_BOARD="ralph", RALPH_REVIEW_BOARD="queues")
+    def test_every_nonarchived_board_is_polled_once_in_slug_order(self):
+        _, calls, _ = self.run_notifier(boards=["queues", "ralph-evals", "maintain", "ralph", "default", "lenses"])
         for script in ("approvals.py", "poller.py", "digest.py"):
-            for board in ("ralph", "queues"):
-                self.assertTrue(any(script in c and f"--board {board}" in c for c in calls),
-                                f"{script} --board {board} not run: {calls}")
+            entries = [c for c in calls if script in c]
+            self.assertEqual(["default", "lenses", "maintain", "queues", "ralph"],
+                             [c.split("--board ")[1].split()[0] for c in entries])
 
     def test_each_board_announces_from_its_own_state(self):
-        """One shared file: each board's prune would drop the other's gates,
-        and every gate would be announced again on every pass."""
-        calls = [c for c in self.run_notifier(RALPH_BOARD="ralph", RALPH_REVIEW_BOARD="queues")
-                 if "poller.py" in c]
-        self.assertIn("--state /s/state.json", calls[0])
-        self.assertEqual(2, len({c.split("--state ")[1] for c in calls}))
+        _, calls, _ = self.run_notifier()
+        states = [c.split("--state ")[1] for c in calls if "poller.py" in c]
+        self.assertEqual(2, len(set(states)))
+        self.assertTrue(states[0].endswith("notifier-state-queues.json"))
+        self.assertTrue(states[1].endswith("notifier-state-ralph.json"))
 
-    def test_one_board_is_polled_once(self):
-        calls = self.run_notifier(RALPH_BOARD="queues", RALPH_REVIEW_BOARD="queues")
+    def test_one_enumerated_board_is_polled_once(self):
+        _, calls, _ = self.run_notifier(boards=["queues"], RALPH_BOARD="queues",
+                                        RALPH_REVIEW_BOARD="queues")
         self.assertEqual(1, sum("approvals.py" in c for c in calls))
+
+    def test_existing_alert_and_digest_state_follow_their_original_boards(self):
+        original = {"notifier-state.json": "ralph alerts", "notifier-state-ralph.json": "queues alerts",
+                    "digest-sent": "ralph digest", "digest-sent-ralph": "queues digest"}
+        _, calls, files = self.run_notifier(initial=original, RALPH_DIGEST_HOUR="99")
+        self.assertEqual("ralph alerts", files["notifier-state-ralph.json"])
+        self.assertEqual("queues alerts", files["notifier-state-queues.json"])
+        self.assertEqual("ralph digest", files["digest-sent-ralph"])
+        self.assertEqual("queues digest", files["digest-sent-queues"])
+        self.assertNotIn("notifier-state.json", files)
+        self.assertNotIn("digest-sent", files)
+        self.assertEqual(2, sum("poller.py" in c for c in calls))
+
+    def test_collision_refuses_without_overwriting_state(self):
+        original = {"notifier-state.json": "ralph alerts", "notifier-state-ralph.json": "queues alerts",
+                    "notifier-state-queues.json": "other alerts"}
+        result, calls, files = self.run_notifier(initial=original)
+        self.assertEqual([], calls)
+        self.assertIn("state collision", result.stderr)
+        for name, content in original.items():
+            self.assertEqual(content, files[name])
+
+    def test_partial_move_resumes_from_staged_files(self):
+        staged = {"ready.json": json.dumps(["queues.state", "queues.digest",
+                                              "ralph.state", "ralph.digest"]),
+                  "ralph.state": "ralph alerts", "ralph.digest": "ralph digest",
+                  "queues.digest": "queues digest"}
+        initial = {"notifier-state-queues.json": "queues alerts"}
+        _, calls, files = self.run_notifier(initial=initial, staged=staged,
+                                            RALPH_DIGEST_HOUR="99")
+        self.assertEqual("ralph alerts", files["notifier-state-ralph.json"])
+        self.assertEqual("queues alerts", files["notifier-state-queues.json"])
+        self.assertEqual("ralph digest", files["digest-sent-ralph"])
+        self.assertEqual("queues digest", files["digest-sent-queues"])
+        self.assertEqual(2, sum("poller.py" in c for c in calls))
+
+    def test_partial_staging_resumes_before_the_ready_marker(self):
+        staged = {"queues.state": "queues alerts"}
+        initial = {"notifier-state.json": "ralph alerts", "digest-sent": "ralph digest",
+                   "digest-sent-ralph": "queues digest"}
+        _, calls, files = self.run_notifier(initial=initial, staged=staged,
+                                            RALPH_DIGEST_HOUR="99")
+        self.assertEqual("ralph alerts", files["notifier-state-ralph.json"])
+        self.assertEqual("queues alerts", files["notifier-state-queues.json"])
+        self.assertEqual("ralph digest", files["digest-sent-ralph"])
+        self.assertEqual("queues digest", files["digest-sent-queues"])
+        self.assertEqual(2, sum("poller.py" in c for c in calls))
+
+    def test_restart_does_not_reinterpret_migrated_state(self):
+        initial = {"notifier-state-ralph.json": "ralph alerts",
+                   "notifier-state-queues.json": "queues alerts",
+                   "digest-sent-ralph": "ralph digest", "digest-sent-queues": "queues digest"}
+        staged = {"ready.json": json.dumps(["queues.state", "queues.digest",
+                                             "ralph.state", "ralph.digest"]), "done": ""}
+        _, calls, files = self.run_notifier(initial=initial, staged=staged,
+                                            RALPH_DIGEST_HOUR="99")
+        for name, content in initial.items():
+            self.assertEqual(content, files[name])
+        self.assertEqual(2, sum("poller.py" in c for c in calls))
+
+    def test_incomplete_ready_record_cannot_discard_staged_state(self):
+        result, calls, files = self.run_notifier(staged={"ready.json": "[]",
+                                                         "ralph.state": "unmigrated alerts"})
+        self.assertEqual([], calls)
+        self.assertIn("invalid migration record", result.stderr)
+        self.assertNotIn("notifier-state-ralph.json", files)
+
+    def test_failed_board_read_without_cache_skips_all_polls(self):
+        _, calls, files = self.run_notifier(fail_list=True, initial={"notifier-state.json": "still here"})
+        self.assertEqual([], calls)
+        self.assertEqual("still here", files["notifier-state.json"])
+        self.assertNotIn("notifier-boards.json", files)
+
+    def test_failed_board_read_uses_cached_board_list(self):
+        cached = json.dumps([{"slug": b, "archived": False} for b in ("ralph", "queues", "extra")])
+        _, calls, _ = self.run_notifier(fail_list=True, initial={"notifier-boards.json": cached})
+        self.assertEqual(1, sum("approvals.py --board extra" in c for c in calls))
+
+    def test_incomplete_cached_board_list_skips_the_pass(self):
+        cached = json.dumps([{"slug": "lenses", "archived": False}])
+        _, calls, _ = self.run_notifier(fail_list=True, initial={"notifier-boards.json": cached})
+        self.assertEqual([], calls)
 
 
 class GateOwnershipTests(unittest.TestCase):
