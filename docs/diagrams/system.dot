@@ -42,7 +42,9 @@ digraph ralph {
       label="2. Plan"; style="rounded"; color="#4E8F48";
       orch  [label="orchestrator\ncard graph on board 'ralph'", fillcolor="#DFF0DA"];
       board_r [label="Kanban board: ralph\nfeature work", shape=cylinder, fillcolor="#F4F4F4"];
-      board_q [label="Kanban board: queues\nreviews, maintenance, chat", shape=cylinder, fillcolor="#F4F4F4"];
+      board_q [label="Kanban board: queues\nIntake + older cards", shape=cylinder, fillcolor="#F4F4F4"];
+      board_lenses [label="Kanban board: lenses\nreview graphs", shape=cylinder, fillcolor="#F4F4F4"];
+      board_maintain [label="Kanban board: maintain\nPR maintenance", shape=cylinder, fillcolor="#F4F4F4"];
       dispatch [label="Hermes dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
     }
 
@@ -125,8 +127,8 @@ digraph ralph {
   gh_in -> discover; gh_in -> maintain; gh_in -> approvals;
 
   /* plan */
-  orch -> board_r; discover -> board_q; maintain -> board_q; cm -> board_q [style=dotted];
-  board_r -> dispatch; board_q -> dispatch;
+  orch -> board_r; discover -> board_lenses; maintain -> board_maintain; cm -> board_q [style=dotted];
+  board_r -> dispatch; board_q -> dispatch; board_lenses -> dispatch; board_maintain -> dispatch;
   approvals -> g_prd [label="merge completes"]; approvals -> g_dd [label="merge completes"];
   approvals -> author [label="dd-changes: feedback,\nresume same author"];
 
@@ -146,7 +148,8 @@ digraph ralph {
   maintainer -> gh_out [label="push, resolve threads"];
   builder -> gh_out [label="PRs"]; author -> gh_out [label="doc PRs"];
   cm -> chatreply [label="ack / reply / send"]; chatreply -> gchat_out;
-  board_r -> poller [style=dotted]; poller -> notify;
+  board_r -> poller [style=dotted]; board_q -> poller [style=dotted];
+  board_lenses -> poller [style=dotted]; board_maintain -> poller [style=dotted]; poller -> notify;
 
   /* System -> Tools: one edge per relationship, cluster to cluster */
   dispatch -> hermes   [style=dotted, label="runs on", lhead=cluster_runtime];

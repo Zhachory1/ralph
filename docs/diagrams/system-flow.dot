@@ -19,7 +19,9 @@ digraph systemflow {
   subgraph cluster_plan { label="2. Plan"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
     orch     [label="orchestrator\nplans card graph", fillcolor="#DFF0DA"];
     board_r  [label="board: ralph", shape=cylinder, fillcolor="#F4F4F4"];
-    board_q  [label="board: queues", shape=cylinder, fillcolor="#F4F4F4"];
+    board_q  [label="board: queues\nIntake + older cards", shape=cylinder, fillcolor="#F4F4F4"];
+    board_lenses [label="board: lenses\nreview graphs", shape=cylinder, fillcolor="#F4F4F4"];
+    board_maintain [label="board: maintain\nPR maintenance", shape=cylinder, fillcolor="#F4F4F4"];
     dispatch [label="dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
   }
   subgraph cluster_work { label="3. Work (each in its own sandbox)"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
@@ -50,8 +52,9 @@ digraph systemflow {
 
   in_chat -> inbox -> cm; in_web -> orch; in_pr -> discover; in_pr -> maintain; in_dec -> approvals;
   cm -> orch [label="route + ack"]; cm -> reply [label="ack / reply / send"];
-  orch -> board_r; discover -> board_q; maintain -> board_q;
-  board_r -> dispatch; board_q -> dispatch;
+  cm -> board_q [style=dotted]; orch -> board_r;
+  discover -> board_lenses; maintain -> board_maintain;
+  board_r -> dispatch; board_q -> dispatch; board_lenses -> dispatch; board_maintain -> dispatch;
   dispatch -> author; dispatch -> builder; dispatch -> maintainer; dispatch -> researcher;
   dispatch -> lenses; dispatch -> reviewer;
   author -> g_prd [label="PRD merged"]; g_prd -> orch [label="releases design card"];
@@ -63,7 +66,8 @@ digraph systemflow {
   builder -> reviewer; lenses -> synth -> publish;
   orch -> knowledge [style=dotted, dir=both]; author -> knowledge [style=dotted, dir=both, label="search, cite,\nwrite memories"];
   researcher -> knowledge [style=dotted, dir=both]; maintainer -> knowledge [style=dotted, dir=both];
-  board_r -> poller [style=dotted];
+  board_r -> poller [style=dotted]; board_q -> poller [style=dotted];
+  board_lenses -> poller [style=dotted]; board_maintain -> poller [style=dotted];
   dedup -> discover [style=dotted, arrowhead=none]; breaker -> maintain [style=dotted, arrowhead=none];
   guards -> approvals [style=dotted, arrowhead=none];
 
