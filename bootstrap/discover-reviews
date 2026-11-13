@@ -514,11 +514,14 @@ def main() -> int:
         # exhausted its retries on, or a human blocked, is returned here
         # unchanged every pass: surfaced once per pass so it is not read as
         # a fresh admission, not retried automatically (unblocking a stuck
-        # graph is the same human call as unblocking any other card).
+        # graph is the same human call as unblocking any other card), and
+        # treated exactly like a failed handoff below -- no slot spent, no
+        # stale card archived, because no new graph actually got built.
         try:
             handoff_id = json.loads(r.stdout).get("id")
         except (ValueError, AttributeError):
             handoff_id = None
+        handoff_status = None
         if handoff_id:
             shown = subprocess.run(
                 hermes_argv("kanban", "--board", args.board, "show", handoff_id, "--json"),
@@ -527,10 +530,11 @@ def main() -> int:
                 handoff_status = json.loads(shown.stdout)["task"]["status"]
             except (ValueError, KeyError, TypeError):
                 handoff_status = None
-            if handoff_status == "blocked":
-                print(f"  {handoff_id} ({repo}#{number} @ {head_sha[:8]}) is blocked, "
-                     "not retried automatically", file=sys.stderr)
         print(r.stdout, end="")
+        if handoff_status == "blocked":
+            print(f"  {handoff_id} ({repo}#{number} @ {head_sha[:8]}) is blocked, "
+                 "not retried automatically", file=sys.stderr)
+            continue
         # A slot is spent only by a graph actually built: a failed checkout
         # or build does not starve later PRs.
         slots += 1

@@ -328,14 +328,17 @@ class ArchiveOnAdmissionTests(unittest.TestCase):
 
 
 class BlockedHandoffCardTests(unittest.TestCase):
-    """review council: --idempotency-key is stable per head, so a second
-    discovery pass for a still-open PR gets the SAME card id back whatever
-    its current status -- create succeeding says nothing about whether that
-    card is making progress. A card review-workflow exhausted its retries
-    on, or a human blocked, must be surfaced, not silently read as a fresh
-    admission."""
+    """review council, two rounds against this PR itself: --idempotency-key
+    is stable per head, so a second discovery pass for a still-open PR gets
+    the SAME card id back whatever its current status -- create succeeding
+    says nothing about whether that card is making progress. A card
+    review-workflow exhausted its retries on, or a human blocked, must be
+    surfaced, must not spend a per-run admission slot (a repeatedly-blocked
+    PR would otherwise starve eligible ones of the cap), and must not
+    trigger archiving the PR's own older blocked synthesis cards (no new
+    graph exists yet to fall back on if the stale ones are gone)."""
 
-    def run_main(self, handoff_status):
+    def run_main(self, handoff_status, max_per_run=10):
         import sys
         import json as json_mod
 
@@ -347,21 +350,23 @@ class BlockedHandoffCardTests(unittest.TestCase):
                                  stdout=json_mod.dumps({"task": {"status": handoff_status}}), stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
+        stale_mock = mock.Mock(return_value=[])
         with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(discover_reviews, "search_assigned_prs", return_value=[fake_pr("a/repo", 1)]), \
+                mock.patch.object(discover_reviews, "search_assigned_prs",
+                                  return_value=[fake_pr("a/repo", n) for n in (1, 2)]), \
                 mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
                 mock.patch.object(discover_reviews, "pr_text", return_value=""), \
                 mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
                 mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
                 mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
-                mock.patch.object(discover_reviews, "stale_blocked_synthesis", return_value=[]), \
+                mock.patch.object(discover_reviews, "stale_blocked_synthesis", stale_mock), \
                 mock.patch("subprocess.run", side_effect=fake_run) as run:
             argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
-                    "--work-root", d, "--once-for-real"]
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
                 rc = discover_reviews.main()
-        return rc, run.call_args_list
+        return rc, run.call_args_list, stale_mock
 
     def test_a_blocked_handoff_card_is_reported_on_stderr(self):
         with mock.patch("sys.stderr") as stderr:
@@ -376,8 +381,23 @@ class BlockedHandoffCardTests(unittest.TestCase):
             written = "".join(c.args[0] for c in stderr.write.call_args_list)
         self.assertNotIn("blocked", written)
 
+    def test_a_blocked_handoff_does_not_spend_an_admission_slot(self):
+        """Two PRs, max_per_run=1: if the first's blocked handoff spent the
+        slot, the second (eligible) PR would never be reached at all."""
+        _, calls, _ = self.run_main("blocked", max_per_run=1)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(2, len(handoffs), "both PRs must be attempted; neither spent the one slot")
+
+    def test_a_blocked_handoff_does_not_archive_stale_synthesis(self):
+        _, _, stale_mock = self.run_main("blocked")
+        stale_mock.assert_not_called()
+
+    def test_a_ready_handoff_does_archive_stale_synthesis(self):
+        _, _, stale_mock = self.run_main("ready")
+        stale_mock.assert_called()
+
     def test_a_blocked_handoff_card_does_not_fail_discovery(self):
-        rc, _ = self.run_main("blocked")
+        rc, _, _ = self.run_main("blocked")
         self.assertEqual(0, rc)
 
 
