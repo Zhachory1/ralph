@@ -552,11 +552,15 @@ class EphemeralSandboxTests(unittest.TestCase):
             start = install.index(f"{name}() {{")
             funcs.append(install[start:install.index("\n}", start) + 2])
         env = {**os.environ, "RALPH_SANDBOX_ROOT": "/host/sandboxes",
-               "REPO_CACHE_SRC": "/host/repo-cache", "WORKSPACES_SRC": "/host/workspaces"}
-        for profile, extra in (("builder", "/host/repo-cache:/repo-cache:ro"),
-                               ("lens-mvp", "/host/workspaces/review-work:/workspaces/review-work:ro"),
-                               ("chat-maintainer", "/host/workspaces/chat-inbox:/workspaces/chat-inbox:ro"),
-                               ("analyst", None)):
+               "REPO_CACHE_SRC": "/host/repo-cache", "WORKSPACES_SRC": "/host/workspaces",
+               "BOOTSTRAP_SRC": "/host/bootstrap"}
+        for profile, extras in (("builder", ["/host/repo-cache:/repo-cache:ro"]),
+                               ("lens-mvp", ["/host/workspaces/review-work:/workspaces/review-work:ro"]),
+                               ("chat-maintainer", ["/host/workspaces/chat-inbox:/workspaces/chat-inbox:ro"]),
+                               ("review-workflow", ["/host/repo-cache:/repo-cache:ro",
+                                                    "/host/workspaces/review-work:/workspaces/review-work",
+                                                    "/host/bootstrap:/ralph/bootstrap:ro"]),
+                               ("analyst", [])):
             with self.subTest(profile=profile):
                 script = "\n".join(funcs) + f"\nterminal_block unused {profile}\n"
                 rendered = subprocess.run(["bash", "-c", script], env=env,
@@ -564,9 +568,12 @@ class EphemeralSandboxTests(unittest.TestCase):
                 terminal = yaml.safe_load(rendered)["terminal"]
                 mounts = terminal["docker_volumes"]
                 self.assertEqual(f"/host/sandboxes/ralph-{profile}/docker/default/workspace:/workspace", mounts[0])
-                self.assertEqual(len(mounts), 1 + bool(extra))
-                if extra:
+                self.assertEqual(len(mounts), 1 + len(extras))
+                for extra in extras:
                     self.assertIn(extra, mounts)
+                if profile == "review-workflow":
+                    self.assertNotIn("/host/workspaces/review-work:/workspaces/review-work:ro", mounts,
+                                     "review-workflow writes staged evidence; its mount must not be read-only")
                 self.assertEqual(1, rendered.count("docker_volumes:"))
 
 

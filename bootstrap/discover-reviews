@@ -504,10 +504,33 @@ def main() -> int:
                        "--idempotency-key", f"{op_id}-intake",
                        "--max-runtime", "480", "--max-retries", "3", "--json"),
             capture_output=True, text=True)
-        print(r.stdout, end="")
         if r.returncode != 0:
             print(r.stderr, file=sys.stderr)
             continue
+        # A stable idempotency key means a second call for the same head
+        # returns the SAME card id Hermes already has, whatever its current
+        # status -- `create` succeeding (returncode 0) says nothing about
+        # whether that card is making progress. A card review-workflow
+        # exhausted its retries on, or a human blocked, is returned here
+        # unchanged every pass: surfaced once per pass so it is not read as
+        # a fresh admission, not retried automatically (unblocking a stuck
+        # graph is the same human call as unblocking any other card).
+        try:
+            handoff_id = json.loads(r.stdout).get("id")
+        except (ValueError, AttributeError):
+            handoff_id = None
+        if handoff_id:
+            shown = subprocess.run(
+                hermes_argv("kanban", "--board", args.board, "show", handoff_id, "--json"),
+                capture_output=True, text=True)
+            try:
+                handoff_status = json.loads(shown.stdout)["task"]["status"]
+            except (ValueError, KeyError, TypeError):
+                handoff_status = None
+            if handoff_status == "blocked":
+                print(f"  {handoff_id} ({repo}#{number} @ {head_sha[:8]}) is blocked, "
+                     "not retried automatically", file=sys.stderr)
+        print(r.stdout, end="")
         # A slot is spent only by a graph actually built: a failed checkout
         # or build does not starve later PRs.
         slots += 1
