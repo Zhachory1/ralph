@@ -28,11 +28,12 @@ How to stand Ralph up, change it safely, and recover it. Components are describe
 
 ## Recovering stuck cards
 
-List what is stuck and why:
+List what is stuck and why. Use the card's actual board: `ralph` for feature work, `queues` (**Intake**) for Chat, email and older cards, `lenses` for new reviews, or `maintain` for new maintenance:
 
 ```bash
-docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues list --status blocked --json
-docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id> --json   # read the last blocked / gave_up event
+docker exec -u hermes <instance>-hermes-1 hermes kanban boards list
+docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> list --status blocked --json
+docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> show <id> --json   # read the last blocked / gave_up event
 ```
 
 | Reason | Action |
@@ -54,6 +55,12 @@ docker exec -u hermes <instance>-hermes-1 hermes kanban --board queues show <id>
 | A card's run | `docker exec -u hermes <instance>-hermes-1 hermes kanban --board <board> show <id> --json` |
 | Disk | `colima ssh -- df -h /` and `du -sh compose/workspaces*/sandboxes` |
 | Knowledge index | `bootstrap/knowledge-status <instance>` (the `RALPH_INSTANCE`, e.g. `ralph-personal`): collections, counts, models, last refresh (`status.json`) |
+
+## Notifier board state
+
+`run-notifier` enumerates active boards on every pass, including `default` and any test board that is not archived. It caches the last valid board list at `/var/lib/ralph/notifier-boards.json`. A failed read uses that cache; with no valid list, it skips the whole pass and retries later. Alerts use `notifier-state-<board>.json`; digests use `digest-sent-<board>`, both in the notifier-state volume.
+
+On the first cutover run, the notifier preserves older sent-once history: the old `queues` state and digest are misleadingly suffixed `-ralph`, while `ralph` uses bare filenames. It stages the old `queues` files first, then moves the bare files to their per-board names under a lock. The `.notifier-board-migration/ready.json` and `done` markers let a restart finish an interrupted migration. If a target already exists, a marker is invalid, or an old bare file reappears after completion, the notifier logs `board state unavailable` and skips approvals, alerts and digests. Stop the notifier and inspect its state volume before attempting recovery; do not delete or overwrite the files to make the error disappear.
 
 ## Builder Chat space listing
 
@@ -133,7 +140,7 @@ requester-facing path runs unchanged, and nothing below applies.
 | Term | Meaning |
 |---|---|
 | **Card** | A Kanban task assigned to one profile, with a completion condition. |
-| **Board** | `ralph` (feature work, planned by the orchestrator) or `queues` (machine-created: reviews, maintenance, chat intake). |
+| **Board** | `ralph` for feature work; `queues` (displayed **Intake**) for Chat/email intake, librarian and older cards; `lenses` for new review graphs; `maintain` for new PR maintenance rounds. Existing cards are never moved. |
 | **Gate** | A blocked card waiting on the owner. A doc gate opens on merge or `dd-changes`; an `Approve PRD:` / `Approve design:` / `Approve plan:` card opens only on merge. |
 | **Lens** | One review perspective (generalist, reliability, MVP, security); review-synthesis combines them. |
 | **Round** | One maintenance pass on a PR's current feedback. |

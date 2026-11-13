@@ -34,6 +34,7 @@ sequenceDiagram
 - The author grounds the PRD in current code, tools and decisions first. PRD, design and implementation plan are separate pull requests.
 - The plan lists each PR: goal, design section, `<planned_files>`, dependencies, size under 400 lines, test plan, and the build order. Decompose copies it onto build cards without re-splitting.
 - `Approve PRD:`, `Approve design:` and `Approve plan:` cards have no assignee. They open only when the owner **merges** the document PR; an agent review or an open approval does not.
+- The notifier enumerates active boards for approval gates, alerts and the daily digest. It keeps separate sent-once state per board; if enumeration fails, it uses a cached board list or skips the whole pass rather than guessing.
 - `dd-changes` on a document PR returns it to the same author with the feedback; the label is removed once acted on.
 - Before planning or writing, agents search the knowledge index for prior PRDs, designs, decisions and memories, and cite what they used (see [Knowledge](#knowledge-search-and-memories)).
 
@@ -51,7 +52,7 @@ sequenceDiagram
 sequenceDiagram
     participant G as GitHub
     participant L as review-loop
-    participant H as Hermes board (queues)
+    participant H as Hermes board (lenses)
     G->>L: assigned open PRs
     L->>L: skip heads already reviewed or on the board
     L->>H: staged evidence + lens cards + synthesis card
@@ -59,6 +60,7 @@ sequenceDiagram
     L->>G: publish the synthesis verdict at that head
 ```
 
+- New review graphs are created and published on `lenses`. Older graphs stay on `queues` (display name **Intake**); drain and publish them before cutting over. No cards move between boards.
 - One review per head SHA, no round cap; one review graph per PR at a time.
 - The per-pass cap (10) counts only new graphs. Published or finally refused cards are recorded and not re-checked.
 - Lenses and synthesis read only the staged evidence (`/workspaces/review-work`, read-only).
@@ -71,6 +73,7 @@ sequenceDiagram
 
 **Entry:** feedback on a PR authored by `RALPH_MAINTAIN_LOGIN`. **Exit:** pushed fix with threads resolved, or a hold for the owner. **Owner:** maintainer.
 
+- New maintenance cards are created on `maintain`; older rounds remain on `queues` and are not moved. Drain old rounds before cutting over.
 - Feedback is a `CHANGES_REQUESTED` review, an unresolved thread (human or bot), or a failing check at the current head. A COMMENTED summary alone is not feedback.
 - One round per PR at a time. The maintainer pushes, replies in and resolves each thread it fixed, and posts one summary only if it pushed.
 - **Circuit breaker:** after 3 rounds with the same review feedback and only CI changing, the next round is held (blocked) and one Chat alert goes out.
@@ -105,6 +108,7 @@ sequenceDiagram
     end
 ```
 
+- Chat intake stays on `queues` (display name **Intake**), while routed work stays on `ralph`; the board distinguishes the acknowledgement from the final reply. Email intake also stays on `queues`.
 - The destination always comes from the staged intake, never from model text. Ralph's own messages carry a `client-ralph-*` id and are skipped at intake.
 - Both halves run as one compose service (`chat-sender`, `COMPOSE_PROFILES=chat`), the Chat token in its own volume the agent's container never mounts (dd-chat.md Sec4.1, D5). Before the owner's cutover (`docs/operations.md`), the overlay `chat_inbox.py` cron job and the host LaunchAgent `chat-reply` do the same two jobs instead.
 - Builder card workers can call `list_spaces` through a fixed read-only sidecar command to resolve space IDs; they cannot read messages or send Chat through this tool. A missing sidecar or token returns an error, not an empty list.
@@ -139,7 +143,7 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 
 ## Librarian
 
-**Entry:** a card the review loop creates once a week on `queues`, assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
+**Entry:** a card the review loop creates once a week on `queues` (**Intake**), assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
 - Promotes a document from `in review` to `approved` once its newest `prs:` entry has merged and none is still open (`draft` is never promoted). Fills the memory front matter it can derive (`kind` from the folder, `date` and `source` from the file name or first commit, `profile` from that commit's author when it maps to a `ralph-*` profile) and nothing else; what it cannot derive goes in the pull request body. Merges duplicate notes and marks superseded ones, only when a pair passes three gates (same `kind`, a shared concrete anchor, one sentence true of both with no "and"), at most five of each per run. Archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead). Rewrites path links to anything moved, and regenerates folder indexes, leaving the repository's root `README.md` and any `README.md` that carries an `id` or `status` alone.

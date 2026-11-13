@@ -11,7 +11,7 @@ cp .env.example .env     # fill in HERMES_VERSION and your credentials
 docker compose up -d
 ```
 
-That is the whole install. `init` creates the board and the profiles, then exits; `hermes` runs the gateway and dispatcher; `notifier` polls for gates waiting on you.
+That is the whole install. `init` creates the workflow boards and profiles, then exits; `hermes` runs the gateway and dispatcher; `notifier` polls every active board for gates waiting on you.
 
 Check it came up:
 
@@ -51,7 +51,7 @@ docker compose exec hermes hermes auth list
 | --- | --- | --- |
 | `socket-proxy` | Narrows the Docker API the stack may use | Long-running |
 | `hermes` | Gateway and Kanban dispatcher | Long-running |
-| `init` | Creates the board and profiles from `profiles/`, sets board settings | Runs once, exits |
+| `init` | Creates the workflow boards and profiles from `profiles/`, sets board settings | Runs once, exits |
 | `notifier` | Posts gates to chat, turns GitHub decisions into card moves | Long-running loop |
 | `hermes-webui` | Chat space for talking with the agents, alongside the dashboard | Long-running |
 | `review-loop` | Review discovery and publishing, PR maintenance, sandbox cleanup, hourly knowledge refresh | Long-running loop |
@@ -100,7 +100,7 @@ Ralph's state lives in a named Docker volume (`ralph_hermes-home`), never a bind
 Verify for yourself:
 
 ```bash
-docker compose exec hermes hermes kanban boards list   # only default and ralph
+docker compose exec hermes hermes kanban boards list   # default, ralph, queues, lenses, maintain
 hermes kanban boards list                              # your own boards, unchanged
 ```
 
@@ -223,14 +223,16 @@ stack.
 
 Bounds 1-3 are ours and can be wrong. Bound 4 is what makes being wrong survivable, and it lives
 outside this repository: set it with whichever model provider a producer's credential belongs to,
-not here. A tripped cap on one credential stops only the queues billing to it -- Ralph's own nine
+not here. A tripped cap on one credential stops only the review lenses billing to it -- Ralph's own nine
 profiles run on a separate provider and are unaffected.
 
-Producer-created cards live on a second board, `queues` (`$RALPH_QUEUES_BOARD`, created by
-`bootstrap/install`), never on `$RALPH_BOARD`. The notifier polls only `RALPH_BOARD`, so a flood of
-machine-created cards cannot page you -- by construction, not by a filter someone has to maintain.
-`kanban.max_in_progress` is a host-wide cap shared across every board, so the second board cannot
-be used to multiply concurrency.
+Producer-created work has separate boards: review graphs on `lenses` (`RALPH_LENS_BOARD`),
+PR maintenance on `maintain` (`RALPH_MAINTAIN_BOARD`), and Chat/email intake plus the weekly
+librarian card on `queues` (`RALPH_QUEUES_BOARD`, displayed **Intake**). `ralph` holds
+human-facing feature work. Older review and maintenance cards stay on `queues`; none are
+migrated. The notifier enumerates active boards, so a blocked machine-created card can page
+you. `kanban.max_in_progress` remains an instance-wide cap across all boards; adding boards
+does not increase concurrency.
 
 See [`docs`](https://github.com/Zhachory1/docs) project `fleet-into-ralph` for the design this
 implements, including the cost arithmetic behind these defaults.
@@ -246,10 +248,12 @@ good idea on purpose. Ralph's publisher checks for both systems' markers before 
 repository's scope between a `repos:` grant file (the shape a scope-of-attention allowlist already
 uses) and `bootstrap/discover-reviews --allow-file`, never both at once.
 
-The `review-loop` service runs review unattended, every `RALPH_REVIEW_POLL_SECONDS` (default 900).
-Each tick it runs `discover-reviews` against `RALPH_REVIEW_ALLOW` when set, else `workspaces/review-allowlist.txt`, then calls
-`publish-review --post` for every finished synthesis card. An absent or empty allowlist means it
-admits nothing. Clones are cached per repository under `workspaces/repo-cache`, fetched on demand.
+The `review-loop` service runs every `RALPH_REVIEW_POLL_SECONDS` (default 900). It discovers
+review graphs and publishes finished synthesis cards on `lenses`, creates maintenance rounds
+on `maintain`, and keeps the librarian card on `queues`. Review discovery uses
+`RALPH_REVIEW_ALLOW` when set, else `workspaces/review-allowlist.txt`; an absent or empty
+allowlist admits nothing. Clones are cached per repository under `workspaces/repo-cache`,
+fetched on demand.
 `docker compose stop review-loop` stops all of it.
 
 ```sh
@@ -286,7 +290,7 @@ the host and never enters a container. Both scripts run on the host, by hand, fo
        --work-root compose/workspaces/inbox-work --container-work-root /workspaces/inbox-work
    ```
 
-4. Each card is assigned to `ralph-inbox-drafter` on the `queues` board. When one is `done`, turn it
+4. Each card is assigned to `ralph-inbox-drafter` on `queues` (**Intake**). When one is `done`, turn it
    into a draft:
 
    ```sh
