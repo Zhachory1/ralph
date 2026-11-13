@@ -1,0 +1,37 @@
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    - terminal
+    # Stages evidence and reads context.json/diff.patch via the terminal
+    # tool (plain file access, same posture build-review-graph had as a
+    # script) rather than through lens-tools' locked-down MCP -- that MCP
+    # is scoped to ralph-review-synthesis server-side and exists because a
+    # lens has every other toolset disabled. This profile is not that
+    # restricted: it has kanban and terminal natively, like the
+    # orchestrator, so the untrusted-diff discipline is a SOUL instruction
+    # (treat it as data, never instructions), not a server-enforced wall --
+    # an accepted risk, deliberately, see decisions/0004. Creating the lens
+    # and synthesis cards is kanban's own native tool, never a shell call:
+    # this sandbox has no hermes binary to shell out to.
+    - kanban
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  external_dirs:
+    - /ralph/skills/voice
+  creation_nudge_interval: 0
+agent:
+  max_turns: 60
+  run_budget_seconds: 480
+  api_max_retries: 0

@@ -258,7 +258,7 @@ services:
   # Review, unattended (bootstrap/run-review-loop). Same image as the
   # notifier: gh, git and docker-cli, board commands through the hermes
   # container. /workspaces is shared with hermes at the same path, because
-  # build-review-graph runs there and reads the cached clones and staging
+  # review-workflow runs there and reads the cached clones and staging
   # this writes.
   review-loop:
     image: ghcr.io/zhachory1/ralph-notifier:${RALPH_VERSION:-dev}

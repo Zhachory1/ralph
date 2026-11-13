@@ -237,10 +237,22 @@ terminal_block() {
         vols="$vols,\"$REPO_CACHE_SRC:/repo-cache:ro\""
     fi
     # Review and chat cards read staged evidence through read-only mounts.
+    # review-workflow is the one profile that writes there: it runs
+    # stage-review-evidence itself, so its mount is read-write, and it
+    # needs bootstrap/ itself to have that script to run at all.
     if [ -n "$WORKSPACES_SRC" ]; then
         case "$2" in
             lens-*|review-synthesis)
                 vols="$vols,\"$WORKSPACES_SRC/review-work:/workspaces/review-work:ro\"" ;;
+            review-workflow)
+                # discover-reviews hands it a --checkout path it already
+                # resolved under /workspaces/repo-cache (REPO_CACHE_SRC's
+                # own container-side name, not repo_cache_profile()'s
+                # /repo-cache -- a different mount point other profiles
+                # share, at a path this card's own body never names).
+                vols="$vols,\"$WORKSPACES_SRC/review-work:/workspaces/review-work\""
+                [ -z "$REPO_CACHE_SRC" ] || vols="$vols,\"$REPO_CACHE_SRC:/workspaces/repo-cache:ro\""
+                [ -z "$BOOTSTRAP_SRC" ] || vols="$vols,\"$BOOTSTRAP_SRC:/ralph/bootstrap:ro\"" ;;
             chat-maintainer)
                 vols="$vols,\"$WORKSPACES_SRC/chat-inbox:/workspaces/chat-inbox:ro\"" ;;
         esac
@@ -251,6 +263,7 @@ terminal_block() {
 # host path behind this instance's /workspaces, never by a path in a container.
 REPO_CACHE_SRC=""
 WORKSPACES_SRC=""
+BOOTSTRAP_SRC=""
 if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
     ws=$(docker inspect "$RALPH_HERMES_CONTAINER" \
         --format '{{range .Mounts}}{{if eq .Destination "/workspaces"}}{{.Source}}{{end}}{{end}}')
@@ -259,6 +272,11 @@ if [ -n "${RALPH_HERMES_CONTAINER:-}" ]; then
         REPO_CACHE_SRC="$ws/repo-cache"
         docker exec -u hermes "$RALPH_HERMES_CONTAINER" mkdir -p /workspaces/repo-cache
     fi
+    # review-workflow runs bootstrap/stage-review-evidence from its own
+    # sandbox terminal; that script has to exist there the same way it
+    # already does inside the hermes container.
+    BOOTSTRAP_SRC=$(docker inspect "$RALPH_HERMES_CONTAINER" \
+        --format '{{range .Mounts}}{{if eq .Destination "/ralph/bootstrap"}}{{.Source}}{{end}}{{end}}')
 fi
 # Nonpersistent Docker terminals use tmpfs for /workspace unless explicitly
 # mounted. Create host sources first: otherwise the daemon creates missing

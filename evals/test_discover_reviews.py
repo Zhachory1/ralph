@@ -1,11 +1,11 @@
 """Discovery on a timer: the first thing that acts without a human.
 
-No network -- these stub gh and build-review-graph to test the admission
-logic itself: the allowlist and the per-run cap. There is no daily cap by
-direct instruction, so these tests check that nothing in this file gates
-on a count across invocations, not that a count stays under some number.
-The real discovery and real graph-building were proven by hand against a
-live board and a real PR; see the PR body for that record.
+No network -- these stub gh and the review-workflow handoff to test the
+admission logic itself: the allowlist and the per-run cap. There is no
+daily cap by direct instruction, so these tests check that nothing in this
+file gates on a count across invocations, not that a count stays under
+some number. The real discovery was proven by hand against a live board
+and a real PR; see the PR body for that record.
 
     python3 evals/test_discover_reviews.py
 """
@@ -31,11 +31,39 @@ def setUpModule():
     patcher = mock.patch.object(discover_reviews, "review_graphs", return_value=(set(), False))
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
+    # Same reasoning, for the newer board-read helper: a test that does not
+    # care about an in-flight intake should not have to know this function
+    # exists, the same way most tests never had to know review_graphs()
+    # exists either.
+    intake_patcher = mock.patch.object(discover_reviews, "intake_in_flight", return_value=False)
+    intake_patcher.start()
+    unittest.addModuleCleanup(intake_patcher.stop)
 
 
 def fake_pr(repo, number, title="x"):
     return {"repository": {"nameWithOwner": repo}, "number": number, "title": title,
            "url": f"https://github.com/{repo}/pull/{number}", "updatedAt": "2026-01-01T00:00:00Z"}
+
+
+def is_handoff(argv):
+    """The one hermes kanban create call that hands a discovered head off
+    to review-workflow, identified by its fixed assignee."""
+    return "kanban" in argv and "create" in argv and "ralph-review-workflow" in argv
+
+
+def handoff_calls(calls):
+    """calls: an iterable of mock.call objects (run.call_args_list) or of
+    already-joined argv lists, whichever the test already collected."""
+    return [c for c in calls if is_handoff(c.args[0] if hasattr(c, "args") else c)]
+
+
+def body_field(argv, field):
+    """One `field: value` line from the --body argument of a handoff call."""
+    body = argv[argv.index("--body") + 1]
+    for line in body.splitlines():
+        if line.startswith(field + ": "):
+            return line.split(": ", 1)[1]
+    return None
 
 
 class AllowlistTests(unittest.TestCase):
@@ -59,9 +87,9 @@ class AllowlistTests(unittest.TestCase):
                        "--work-root", str(work_root), "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+                calls = handoff_calls(run.call_args_list)
                 self.assertEqual(1, len(calls))
-                self.assertIn("a/allowed", calls[0].args[0])
+                self.assertEqual("a/allowed", body_field(calls[0].args[0], "repo"))
 
 
     def test_owner_wildcard_covers_that_owner_only(self):
@@ -80,8 +108,7 @@ class AllowlistTests(unittest.TestCase):
                        "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                repos = [c.args[0][c.args[0].index("--repo") + 1] for c in run.call_args_list
-                         if "build-review-graph" in " ".join(c.args[0])]
+                repos = [body_field(c.args[0], "repo") for c in handoff_calls(run.call_args_list)]
                 self.assertEqual(["a/one", "a/two"], repos)
 
 
@@ -102,7 +129,7 @@ class ReviewRoundCapTests(unittest.TestCase):
                     "--work-root", d, "--once-for-real"]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-            return len([c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])])
+            return len(handoff_calls(run.call_args_list))
 
     def test_a_fourth_round_is_admitted(self):
         self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "c" * 40}))
@@ -137,7 +164,7 @@ class ReviewSpacingTests(unittest.TestCase):
                     "--work-root", d, "--once-for-real"]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-            return len([c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])])
+            return len(handoff_calls(run.call_args_list))
 
     def ago(self, hours):
         return self.NOW - hours * 3600
@@ -205,6 +232,52 @@ class ReviewGraphsStatusTests(unittest.TestCase):
         self.assertTrue(self.graphs(("aaaaaaaa", "blocked"), ("bbbbbbbb", "running"))[1])
 
 
+class IntakeInFlightTests(unittest.TestCase):
+    """The real intake_in_flight, against a fake board. review_graphs()'s
+    own blind spot: an intake that has not yet built a synthesis card is
+    invisible to it, so this is the only thing that can see one."""
+
+    def in_flight(self, *cards):
+        import json
+        loader = importlib.machinery.SourceFileLoader("dr_real3", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("dr_real3", loader)
+        real = importlib.util.module_from_spec(spec)
+        loader.exec_module(real)
+        board = json.dumps([
+            {"title": f"Review o/r#7 @ {sha}", "status": status} for sha, status in cards])
+        done = mock.Mock(returncode=0, stdout=board)
+        with mock.patch.object(real.subprocess, "run", return_value=done):
+            return real.intake_in_flight("queues", "o/r", 7, "aaaaaaaa" + "a" * 32)
+
+    def test_a_ready_intake_for_this_head_is_in_flight(self):
+        self.assertTrue(self.in_flight(("aaaaaaaa", "ready")))
+
+    def test_a_running_intake_for_this_head_is_in_flight(self):
+        self.assertTrue(self.in_flight(("aaaaaaaa", "running")))
+
+    def test_a_blocked_intake_is_not_in_flight(self):
+        """Must still reach the handoff call, so blocked reporting runs."""
+        self.assertFalse(self.in_flight(("aaaaaaaa", "blocked")))
+
+    def test_an_archived_intake_is_not_in_flight(self):
+        self.assertFalse(self.in_flight(("aaaaaaaa", "archived")))
+
+    def test_no_matching_card_is_not_in_flight(self):
+        self.assertFalse(self.in_flight(("bbbbbbbb", "ready")))
+
+    def test_no_cards_at_all_is_not_in_flight(self):
+        self.assertFalse(self.in_flight())
+
+    def test_an_unreadable_board_returns_none(self):
+        import json
+        loader = importlib.machinery.SourceFileLoader("dr_real4", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("dr_real4", loader)
+        real = importlib.util.module_from_spec(spec)
+        loader.exec_module(real)
+        with mock.patch.object(real.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+            self.assertIsNone(real.intake_in_flight("queues", "o/r", 7, "a" * 40))
+
+
 def load_real_discover():
     loader = importlib.machinery.SourceFileLoader("dr_real2", str(SCRIPT))
     spec = importlib.util.spec_from_loader("dr_real2", loader)
@@ -251,18 +324,26 @@ class StaleBlockedSynthesisTests(unittest.TestCase):
 
 
 class ArchiveOnAdmissionTests(unittest.TestCase):
-    """Wired into main: archived after the new head's graph is built, not before."""
+    """Wired into main: archived only once review_graphs() reports this
+    head's own synthesis card already exists on the board -- never right
+    after creating the handoff card, which is review council's own finding
+    against an earlier version of this fix (three lenses, same defect: the
+    handoff card's existence proves nothing about whether review-workflow
+    has built a single lens or synthesis card yet, so archiving there could
+    delete the PR's only resumable graph before any replacement exists).
+    """
 
-    def run_main(self, stale_ids, build_rc=0, archive_rc=0):
+    def run_main(self, stale_ids, graphs=None, running=False, archive_rc=0):
         import sys
         calls = []
 
         def fake_run(argv, **kw):
-            joined = " ".join(argv)
-            calls.append(joined)
-            if "build-review-graph" in joined:
-                return mock.Mock(returncode=build_rc, stdout="", stderr="boom" if build_rc else "")
-            if " archive " in joined:
+            calls.append(list(argv))
+            if is_handoff(argv):
+                return mock.Mock(returncode=0, stdout='{"id": "t_handoff"}', stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0, stdout='{"task": {"status": "ready"}}', stderr="")
+            if "archive" in argv:
                 return mock.Mock(returncode=archive_rc, stdout="", stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -274,6 +355,8 @@ class ArchiveOnAdmissionTests(unittest.TestCase):
                 mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
                 mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch.object(discover_reviews, "review_graphs",
+                                  return_value=(graphs if graphs is not None else set(), running)), \
                 mock.patch.object(discover_reviews, "stale_blocked_synthesis", return_value=stale_ids), \
                 mock.patch("subprocess.run", side_effect=fake_run):
             argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
@@ -283,28 +366,234 @@ class ArchiveOnAdmissionTests(unittest.TestCase):
         return rc, calls
 
     def archives(self, calls):
-        return [c for c in calls if " kanban " in c and " archive " in c]
+        return [c for c in calls if "kanban" in c and "archive" in c]
 
-    def test_stale_blocked_cards_are_archived_once_the_new_graph_is_built(self):
-        rc, calls = self.run_main(["t_old1", "t_old2"])
+    def test_stale_blocked_cards_are_archived_once_the_new_graph_already_exists(self):
+        """graphs={head} means review_graphs() found a real synthesis card
+        for this head -- the one condition that actually proves a
+        replacement exists."""
+        rc, calls = self.run_main(["t_old1", "t_old2"], graphs={"11111111"})
         self.assertEqual(0, rc)
         archive = self.archives(calls)
         self.assertEqual(1, len(archive))
-        self.assertTrue(archive[0].endswith("archive t_old1 t_old2"))
-        build = next(i for i, c in enumerate(calls) if "build-review-graph" in c)
-        self.assertGreater(calls.index(archive[0]), build)
+        self.assertEqual(archive[0][-2:], ["t_old1", "t_old2"])
 
-    def test_nothing_is_archived_when_there_is_nothing_stale(self):
-        _, calls = self.run_main([])
+    def test_nothing_is_archived_right_after_creating_a_fresh_handoff_card(self):
+        """The defect this test used to encode: graphs=set() (no existing
+        graph for this head) still reaches the handoff-creation branch, and
+        archiving there must not happen -- the fresh handoff card has not
+        built anything yet."""
+        _, calls = self.run_main(["t_old1", "t_old2"], graphs=set())
         self.assertEqual([], self.archives(calls))
 
-    def test_nothing_is_archived_when_the_new_graph_failed_to_build(self):
-        _, calls = self.run_main(["t_old"], build_rc=1)
+    def test_nothing_is_archived_when_there_is_nothing_stale(self):
+        _, calls = self.run_main([], graphs={"11111111"})
         self.assertEqual([], self.archives(calls))
 
     def test_a_failed_archive_does_not_fail_discovery(self):
-        rc, _ = self.run_main(["t_old"], archive_rc=1)
+        rc, _ = self.run_main(["t_old"], graphs={"11111111"}, archive_rc=1)
         self.assertEqual(0, rc)
+
+
+class BlockedHandoffCardTests(unittest.TestCase):
+    """review council, two rounds against this PR itself: --idempotency-key
+    is stable per head, so a second discovery pass for a still-open PR gets
+    the SAME card id back whatever its current status -- create succeeding
+    says nothing about whether that card is making progress. A card
+    review-workflow exhausted its retries on, or a human blocked, must be
+    surfaced, must not spend a per-run admission slot (a repeatedly-blocked
+    PR would otherwise starve eligible ones of the cap), and must not
+    trigger archiving the PR's own older blocked synthesis cards (no new
+    graph exists yet to fall back on if the stale ones are gone)."""
+
+    def run_main(self, handoff_status, max_per_run=10):
+        import sys
+        import json as json_mod
+
+        def fake_run(argv, **kw):
+            if is_handoff(argv):
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"id": "t_handoff"}), stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0,
+                                 stdout=json_mod.dumps({"task": {"status": handoff_status}}), stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        stale_mock = mock.Mock(return_value=[])
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(discover_reviews, "search_assigned_prs",
+                                  return_value=[fake_pr("a/repo", n) for n in (1, 2)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
+                mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch.object(discover_reviews, "stale_blocked_synthesis", stale_mock), \
+                mock.patch("subprocess.run", side_effect=fake_run) as run:
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
+            with mock.patch.object(sys, "argv", argv):
+                rc = discover_reviews.main()
+        return rc, run.call_args_list, stale_mock
+
+    def test_a_blocked_handoff_card_is_reported_on_stderr(self):
+        with mock.patch("sys.stderr") as stderr:
+            self.run_main("blocked")
+            written = "".join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertIn("t_handoff", written)
+        self.assertIn("blocked", written)
+
+    def test_a_ready_handoff_card_is_not_reported_as_blocked(self):
+        with mock.patch("sys.stderr") as stderr:
+            self.run_main("ready")
+            written = "".join(c.args[0] for c in stderr.write.call_args_list)
+        self.assertNotIn("blocked", written)
+
+    def test_a_blocked_handoff_does_not_spend_an_admission_slot(self):
+        """Two PRs, max_per_run=1: if the first's blocked handoff spent the
+        slot, the second (eligible) PR would never be reached at all."""
+        _, calls, _ = self.run_main("blocked", max_per_run=1)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(2, len(handoffs), "both PRs must be attempted; neither spent the one slot")
+
+    def test_neither_blocked_nor_ready_handoff_archives_stale_synthesis(self):
+        """Archiving never happens from the handoff-creation path at all,
+        whatever the handoff's own status -- see ArchiveOnAdmissionTests for
+        where it correctly does happen (once review_graphs() confirms a
+        real synthesis card for this head already exists)."""
+        for status in ("blocked", "ready"):
+            with self.subTest(status=status):
+                _, _, stale_mock = self.run_main(status)
+                stale_mock.assert_not_called()
+
+    def test_a_blocked_handoff_card_does_not_fail_discovery(self):
+        rc, _, _ = self.run_main("blocked")
+        self.assertEqual(0, rc)
+
+
+class UnreadableHandoffStatusTests(unittest.TestCase):
+    """review council, round 6: handoff_status is None (the post-create show
+    failed or was unreadable) must still spend a per-run slot, unlike a
+    confirmed blocked or in-flight card -- the handoff create itself already
+    ran, and the cap bounds attempts, not confirmed outcomes. Not spending
+    a slot here let every eligible PR bypass --max-per-run entirely, since
+    slots never incremented for any PR whose follow-up read failed."""
+
+    def run_main(self, max_per_run):
+        import sys
+        import json as json_mod
+
+        def fake_run(argv, **kw):
+            if is_handoff(argv):
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"id": "t_handoff"}), stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0, stdout="not json", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(discover_reviews, "search_assigned_prs",
+                                  return_value=[fake_pr("a/repo", n) for n in range(1, 6)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
+                mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch.object(discover_reviews, "stale_blocked_synthesis", return_value=[]), \
+                mock.patch("subprocess.run", side_effect=fake_run) as run:
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
+            with mock.patch.object(sys, "argv", argv):
+                discover_reviews.main()
+        return handoff_calls(run.call_args_list)
+
+    def test_an_unreadable_status_still_spends_a_slot_and_the_cap_still_binds(self):
+        """5 eligible PRs, cap of 2: exactly 2 handoffs, not 5."""
+        calls = self.run_main(max_per_run=2)
+        self.assertEqual(2, len(calls))
+
+
+class InFlightIntakeTests(unittest.TestCase):
+    """review council, round 5: review_graphs() sees only synthesis cards --
+    a ready or running intake that has not built one yet is invisible to
+    it, so re-attempting the handoff on every later pass spent a fresh
+    admission slot on work already in flight, not new. The real fix checks
+    the board for this exact head's own intake card BEFORE attempting the
+    handoff at all, the same pattern review_graphs() already uses for
+    synthesis cards.
+
+    Unlike most tests in this file, these exercise the real
+    intake_in_flight against a fake board -- setUpModule()'s module-wide
+    stub is lifted for the duration of each one, by loading a second,
+    unstubbed copy of the script and patching that function in."""
+
+    def setUp(self):
+        real = load_real_discover()
+        patcher = mock.patch.object(discover_reviews, "intake_in_flight", real.intake_in_flight)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_main(self, existing_intake_status, max_per_run=1):
+        import sys
+        import json as json_mod
+
+        def fake_run(argv, **kw):
+            if "list" in argv and "ralph-review-workflow" in argv:
+                if existing_intake_status is None:
+                    return mock.Mock(returncode=0, stdout="[]", stderr="")
+                return mock.Mock(returncode=0, stdout=json_mod.dumps([
+                    {"title": "Review a/repo#1 @ 11111111", "status": existing_intake_status}]),
+                    stderr="")
+            if is_handoff(argv):
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"id": "t_handoff"}), stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0, stdout=json_mod.dumps({"task": {"status": "ready"}}),
+                                 stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(discover_reviews, "search_assigned_prs",
+                                  return_value=[fake_pr("a/repo", n) for n in (1, 2)]), \
+                mock.patch.object(discover_reviews, "pr_shas", return_value=("0" * 40, "1" * 40)), \
+                mock.patch.object(discover_reviews, "pr_text", return_value=""), \
+                mock.patch.object(discover_reviews, "pr_checks", return_value=None), \
+                mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
+                mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
+                mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch("subprocess.run", side_effect=fake_run) as run:
+            argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
+                    "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
+            with mock.patch.object(sys, "argv", argv):
+                discover_reviews.main()
+        return run.call_args_list
+
+    def test_a_ready_in_flight_intake_is_not_re_handed_off(self):
+        """a/repo#1 already has a ready intake; max_per_run=1 means the slot
+        must go to a/repo#2 instead, not be wasted re-attempting #1."""
+        calls = self.run_main("ready", max_per_run=1)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(1, len(handoffs))
+        self.assertEqual("a/repo", body_field(handoffs[0].args[0], "repo"))
+        self.assertEqual("2", body_field(handoffs[0].args[0], "pr"))
+
+    def test_a_running_in_flight_intake_is_not_re_handed_off(self):
+        calls = self.run_main("running", max_per_run=1)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(1, len(handoffs))
+        self.assertEqual("2", body_field(handoffs[0].args[0], "pr"))
+
+    def test_a_blocked_intake_is_not_treated_as_in_flight(self):
+        """A blocked intake must still reach the handoff call, so the
+        existing blocked-status reporting and no-slot-spent behavior
+        (BlockedHandoffCardTests) still runs."""
+        calls = self.run_main("blocked", max_per_run=2)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(2, len(handoffs), "both PRs reach the handoff call")
+
+    def test_no_existing_intake_reaches_the_handoff_call_normally(self):
+        calls = self.run_main(None, max_per_run=2)
+        handoffs = handoff_calls(calls)
+        self.assertEqual(2, len(handoffs))
 
 
 class PerRunCapTests(unittest.TestCase):
@@ -325,7 +614,7 @@ class PerRunCapTests(unittest.TestCase):
                    "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-        return [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+        return handoff_calls(run.call_args_list)
 
     def test_per_run_cap_limits_admission_even_with_more_eligible(self):
         with tempfile.TemporaryDirectory() as d:
@@ -413,8 +702,8 @@ class CapValidationTests(unittest.TestCase):
 
 class RepeatDiscoveryTests(unittest.TestCase):
     """Found by the review council: re-discovering an unchanged PR still
-    incremented admitted whenever build-review-graph exited 0, even though
-    its own idempotency keys made that a no-op rebuild. There is no cap
+    incremented admitted whenever the handoff call exited 0, even though
+    its own idempotency key made that a no-op rebuild. There is no cap
     for this to silently consume anymore, but the "admitted" count in the
     printed summary should still reflect genuinely new work, not a repeat."""
 
@@ -434,8 +723,7 @@ class RepeatDiscoveryTests(unittest.TestCase):
                     "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-            return [c.args[0][c.args[0].index("--pr") + 1] for c in run.call_args_list
-                    if "build-review-graph" in " ".join(c.args[0])]
+            return [body_field(c.args[0], "pr") for c in handoff_calls(run.call_args_list)]
 
     def setUp(self):
         patcher = mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x"))
@@ -550,7 +838,7 @@ class AllowFileTests(unittest.TestCase):
                        "--checkout-root", "/x", "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+                calls = handoff_calls(run.call_args_list)
                 self.assertEqual(2, len(calls), "both a/repo and b/repo should be admitted")
 
 

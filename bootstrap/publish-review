@@ -5,8 +5,8 @@ PR 5 of the fleet-into-ralph design. Deterministic. No model, no prompt, no
 judgement: this reads a verdict a synthesis card already reached and either
 posts the one review that verdict authorizes, or explains in its own output
 why it did not. Run by hand for now, against one named synthesis task. It carries gh and
-needs no Hermes install of its own: like bootstrap/build-review-graph, it
-reaches the Kanban board through RALPH_HERMES_CONTAINER via `docker exec`,
+needs no Hermes install of its own: like review-workflow's own card creation,
+it reaches the Kanban board through RALPH_HERMES_CONTAINER via `docker exec`,
 the pattern notifier/poller.py already uses for the same reason -- the
 Hermes image costs 4.5GB to carry for a handful of commands.
 
@@ -40,8 +40,7 @@ WHAT THIS GUARANTEES, each enforced in code below rather than asserted here:
    GitHub immediately before posting and compared to the head pinned in the
    synthesis card's own body; a mismatch means the PR moved since this
    review was built, and nothing is posted. A new head is a new operation,
-   built by a fresh run of bootstrap/build-review-graph, not a retry of this
-   one.
+   built by a fresh review-workflow card, not a retry of this one.
 5. An ambiguous response is reconciled by a human, never retried. If the
    POST itself fails in a way this script cannot distinguish from "it may
    have landed," that is reported and this exits non-zero; it does not
@@ -135,7 +134,7 @@ def gh(*args) -> subprocess.CompletedProcess:
 
 
 def parse_body(body: str) -> dict:
-    """The plain key: value body build-review-graph writes -- never a diff,
+    """The plain key: value body review-workflow writes -- never a diff,
     never a line of code, only identifiers and a role. Parsed here rather
     than as JSON because that is the format every card in this graph uses,
     lens results included, and it is auditable by reading the card."""
@@ -259,7 +258,7 @@ def main() -> int:
         repo, number_s, head_sha = fields.get("repo"), fields.get("number"), fields.get("head_sha")
         if not repo or not number_s or not head_sha or not SHA_RE.match(head_sha):
             print(f"refused: {args.task}'s body does not carry repo/number/head_sha "
-                 "in the shape build-review-graph writes", file=sys.stderr)
+                 "in the shape review-workflow writes", file=sys.stderr)
             return 2
         number = int(number_s)
 

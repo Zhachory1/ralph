@@ -2,8 +2,8 @@
 """Build one maintenance card: react to feedback on a pull request you authored.
 
 PR 8 of the fleet-into-ralph design. Run by hand for now, against one named
-pull request. Unlike bootstrap/build-review-graph, this runs wherever gh
-lives, not inside the hermes container -- it needs gh for every GitHub read
+pull request. Unlike review-workflow, this runs wherever gh lives, not
+inside the hermes container -- it needs gh for every GitHub read
 (reviews, threads, checks), and that container carries neither gh nor a
 standalone hermes CLI. Reaches the board through RALPH_HERMES_CONTAINER, the
 same bridge bootstrap/publish-review and bootstrap/discover-reviews already

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Discover open pull requests assigned to this account and build their review graphs.
+"""Discover open pull requests assigned to this account and hand each one off
+to review-workflow, which builds the review graph.
 
 PR 6 of the fleet-into-ralph design. The first thing in this whole design that
 acts without a human present, and the only one that can spend money
@@ -16,9 +17,9 @@ at least one is required, or this refuses rather than silently discovering
 nothing from an empty scope.
 
 Run on a timer (cron, a sidecar loop) once this has been watched manually for
-a while. --once-for-real is required to let it call build-review-graph; every
-other flag works without it, so a dry run of the discovery and filtering logic
-alone never needs that acknowledgement.
+a while. --once-for-real is required to let it hand a discovered head off to
+review-workflow; every other flag works without it, so a dry run of the
+discovery and filtering logic alone never needs that acknowledgement.
 
 NO CAP ON REVIEW ROUNDS, BY DIRECT INSTRUCTION (2026-11-04, replacing the
 3-round cap of 85e98c2). Each head is reviewed once: a head this account
@@ -50,11 +51,16 @@ judgement:
                                 rejected alternative (section 4)
 
 A PR already admitted is a no-op. This is checked here, not inferred from
-build-review-graph's output: it gives no new-vs-existing signal, since every
-card line looks the same whether created or deduplicated by its own
-idempotency key. Instead this checks whether the operation's staging
-directory already existed before this run touched it -- the one thing that
-is new exactly once.
+the handoff card's own creation: `hermes kanban create` gives no
+new-vs-existing signal, since the output looks the same whether the
+idempotency key created a card or matched an existing one. Instead this
+checks whether the operation's staging directory already existed before
+this run touched it. Staging now happens inside review-workflow, not here,
+so this directory appears one run later than it used to -- `admitted`
+(a reporting count only, not a correctness gate: `review_graphs()`'s own
+board check above is what actually prevents a second graph) undercounts
+by at most one run's worth of now-staged-but-not-yet-admitted operations,
+self-correcting the next time this runs.
 """
 import argparse
 import datetime
@@ -206,8 +212,8 @@ def ensure_checkout(root: pathlib.Path, repo: str, number: int, base_sha: str,
 
     Cloned without a working tree -- stage-review-evidence only needs the
     two commits to diff, never a checked-out file -- but with every blob. --checkout-root must be
-    the same path inside the hermes container, where build-review-graph
-    reads it (the compose stack mounts ./workspaces at /workspaces in both).
+    the same path inside the hermes container, where review-workflow reads
+    it (the compose stack mounts ./workspaces at /workspaces in both).
     """
     path = root / repo
     if not (path / ".git").exists() and not (path / "HEAD").exists():
@@ -283,6 +289,30 @@ def _synthesis_cards(board: str, repo: str, number: int) -> list[dict] | None:
     return [c for c in cards if c.get("title", "").startswith(prefix)]
 
 
+def intake_in_flight(board: str, repo: str, number: int, head_sha: str) -> bool | None:
+    """Whether this head's own review-workflow intake card already exists
+    and is not blocked. review_graphs() sees only synthesis cards -- an
+    intake that has not yet built one is invisible to it (review council,
+    three lenses: a repeat discovery pass re-finding a ready/running intake
+    by its stable idempotency key must not spend a fresh admission slot
+    just because no synthesis card exists to say otherwise). None means the
+    board could not be read, treated as not-in-flight so a transient read
+    failure does not block an otherwise-eligible head forever."""
+    r = subprocess.run(hermes_argv("kanban", "--board", board, "list", "--archived",
+                                   "--assignee", "ralph-review-workflow", "--json"),
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    try:
+        cards = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+    cards = cards if isinstance(cards, list) else cards.get("tasks", [])
+    title = f"Review {repo}#{number} @ {head_sha[:8]}"
+    return any(c.get("title") == title and c.get("status") not in ("blocked", "archived")
+              for c in cards)
+
+
 def review_graphs(board: str, repo: str, number: int) -> tuple[set[str], bool] | None:
     """Heads (8-char prefixes) this PR already has a review graph for, and
     whether one is still running. None means the board could not be read,
@@ -318,10 +348,10 @@ def _login() -> str:
 
 
 def _staging_dir_exists(path: pathlib.Path) -> bool:
-    """Checks the filesystem build-review-graph actually staged into, not
+    """Checks the filesystem review-workflow actually staged into, not
     this process's own.
 
-    build-review-graph runs inside the hermes container when
+    review-workflow runs inside the hermes container when
     RALPH_HERMES_CONTAINER is set (its Kanban workspace paths only resolve
     there), so a prior run's staging directory lives on the container's
     filesystem, not the host's -- this script itself runs wherever gh lives,
@@ -372,8 +402,9 @@ def main() -> int:
     ap.add_argument("--max-per-run", type=_positive_int, default=10)
     ap.add_argument("--max-age-days", type=_positive_int, default=7)
     ap.add_argument("--once-for-real", action="store_true",
-                    help="required to actually call build-review-graph; without it, "
-                         "this reports what it would admit and exits 0")
+                    help="required to actually hand a discovered head off to "
+                         "review-workflow; without it, this reports what it "
+                         "would admit and exits 0")
     args = ap.parse_args()
 
     allowlist = list(args.allowlist)
@@ -453,19 +484,44 @@ def main() -> int:
         # publish: nothing to build, no slot. A failed or partial staging
         # leaves no synthesis card, so it is retried here.
         if head_sha[:8] in graphs:
+            # The replacement graph demonstrably exists now (this check only
+            # passes once review-workflow has actually created its
+            # synthesis card for head_sha), so an older head's blocked
+            # synthesis card is superseded and safe to archive -- unlike
+            # right after creating the handoff card below, where no lens or
+            # synthesis card for this head exists yet at all (review council,
+            # three lenses: archiving there could delete the only resumable
+            # graph before any replacement exists).
+            stale = stale_blocked_synthesis(args.board, repo, number, head_sha)
+            if stale:
+                a = subprocess.run(hermes_argv("kanban", "--board", args.board, "archive", *stale),
+                                   capture_output=True, text=True)
+                if a.returncode == 0:
+                    print(f"  archived superseded blocked review(s) for {repo}#{number}: {' '.join(stale)}")
+                else:
+                    print(f"  could not archive {' '.join(stale)}: {a.stderr.strip()[:200]}", file=sys.stderr)
             continue
         if running:
             print(f"  wait {repo}#{number}: a review is still running")
             continue
+        # review_graphs() cannot see this: an intake that has not yet built
+        # a synthesis card is invisible to it. A ready or running intake
+        # already exists for this exact head -- review-workflow just has
+        # not finished yet -- so re-attempting the handoff would spend
+        # another admission slot on work that is already in flight, not
+        # new (review council, three lenses, same defect twice: the first
+        # fix only caught a blocked intake, not a healthy one still running).
+        in_flight = intake_in_flight(args.board, repo, number, head_sha)
+        if in_flight is None:
+            print(f"  skip {repo}#{number}: could not read its intake cards", file=sys.stderr)
+            continue
+        if in_flight:
+            print(f"  wait {repo}#{number}: its review-workflow handoff is already in flight")
+            continue
         print(f"  {repo}#{number} @ {head_sha[:8]}")
 
-        # Was this operation already staged by an earlier run?
-        # build-review-graph gives no new-vs-existing signal in its own
-        # output -- every card line looks the same whether created or
-        # deduplicated by its idempotency key -- so this checks the one
-        # thing that is new exactly once: the staging directory
-        # stage-review-evidence creates for an operation id it has not
-        # seen before.
+        # Was this operation already staged by an earlier run? See the
+        # module docstring's note on _staging_dir_exists/admitted.
         op_id = operation_id(repo, number, head_sha)
         already_staged = _staging_dir_exists(args.work_root / op_id)
         checkout = ensure_checkout(args.checkout_root, repo, number, base_sha, head_sha)
@@ -483,38 +539,74 @@ def main() -> int:
                 f.write_text(content)
                 extra += [f"--{kind}", str(f)]
 
-        container = os.environ.get("RALPH_HERMES_CONTAINER")
-        graph_cmd = (["docker", "exec", container, "python3",
-                     "/ralph/bootstrap/build-review-graph"] if container
-                    else [sys.executable, str(HERE / "build-review-graph")])
+        # One card to review-workflow, not a build-review-graph subprocess
+        # call: it stages the evidence itself, decides mode, and builds the
+        # lens+synthesis graph (dd-workflow-director.md). This step only
+        # hands off the inputs that script used to take as CLI flags.
+        body_lines = [
+            f"repo: {repo}", f"pr: {number}", f"base_sha: {base_sha}",
+            f"head_sha: {head_sha}", f"checkout: {checkout}",
+            f"work_root: {args.work_root}", f"board: {args.board}",
+            f"pr_text: {text_file}",
+        ]
+        for i in range(0, len(extra), 2):
+            body_lines.append(f"{extra[i].lstrip('-')}: {extra[i + 1]}")
         r = subprocess.run(
-            [*graph_cmd, "--once",
-             "--repo", repo, "--pr", str(number),
-             "--base-sha", base_sha, "--head-sha", head_sha,
-             "--checkout", str(checkout), "--work-root", str(args.work_root),
-             "--board", args.board, "--pr-text", str(text_file), *extra],
+            hermes_argv("kanban", "--board", args.board, "create",
+                       f"Review {repo}#{number} @ {head_sha[:8]}",
+                       "--body", "\n".join(body_lines), "--assignee", "ralph-review-workflow",
+                       "--idempotency-key", f"{op_id}-intake",
+                       "--max-runtime", "480", "--max-retries", "3", "--json"),
             capture_output=True, text=True)
-        print(r.stdout, end="")
         if r.returncode != 0:
             print(r.stderr, file=sys.stderr)
             continue
+        # A stable idempotency key means a second call for the same head
+        # returns the SAME card id Hermes already has, whatever its current
+        # status -- `create` succeeding (returncode 0) says nothing about
+        # whether that card is making progress. A card review-workflow
+        # exhausted its retries on, or a human blocked, is returned here
+        # unchanged every pass: surfaced once per pass so it is not read as
+        # a fresh admission, not retried automatically (unblocking a stuck
+        # graph is the same human call as unblocking any other card), and
+        # treated exactly like a failed handoff below -- no slot spent.
+        # (Archiving an older head's stale synthesis card never happens
+        # here regardless of status: this call only creates or finds the
+        # INTAKE card, before review-workflow has had any chance to build a
+        # single lens or synthesis card for this head. That only happens
+        # above, once `head_sha[:8] in graphs` is true on some later pass.)
+        try:
+            handoff_id = json.loads(r.stdout).get("id")
+        except (ValueError, AttributeError):
+            handoff_id = None
+        handoff_status = None
+        if handoff_id:
+            shown = subprocess.run(
+                hermes_argv("kanban", "--board", args.board, "show", handoff_id, "--json"),
+                capture_output=True, text=True)
+            try:
+                handoff_status = json.loads(shown.stdout)["task"]["status"]
+            except (ValueError, KeyError, TypeError):
+                handoff_status = None
+        print(r.stdout, end="")
+        if handoff_status == "blocked":
+            print(f"  {handoff_id} ({repo}#{number} @ {head_sha[:8]}) is blocked, "
+                 "not retried automatically", file=sys.stderr)
+            continue
+        if handoff_status is None:
+            # The post-create show failed or was unreadable. intake_in_flight
+            # already ruled out the one case that must not spend a slot (a
+            # ready/running card found, not created); past that gate, the
+            # handoff create itself still ran and is the thing the per-run
+            # cap bounds, whether or not this follow-up read could confirm
+            # the result -- so this reports the gap and still spends the
+            # slot below, rather than letting an unreadable show disable the
+            # cap entirely by never incrementing it.
+            print(f"  could not read {handoff_id}'s status for {repo}#{number} @ {head_sha[:8]}",
+                 file=sys.stderr)
         # A slot is spent only by a graph actually built: a failed checkout
         # or build does not starve later PRs.
         slots += 1
-        # The older heads' blocked cards are superseded now that this head has
-        # its own graph. Archived only after that graph exists, so a failed
-        # build leaves the old card as the human's way back in. A failure here
-        # is reported and not fatal: the worst case is the wasted review that
-        # unblocking the old card would have started, and publish-review
-        # already refuses a verdict for a head that has moved.
-        stale = stale_blocked_synthesis(args.board, repo, number, head_sha)
-        if stale:
-            a = subprocess.run(hermes_argv("kanban", "--board", args.board, "archive", *stale),
-                               capture_output=True, text=True)
-            if a.returncode == 0:
-                print(f"  archived superseded blocked review(s) for {repo}#{number}: {' '.join(stale)}")
-            else:
-                print(f"  could not archive {' '.join(stale)}: {a.stderr.strip()[:200]}", file=sys.stderr)
         if not already_staged:
             admitted += 1
 
