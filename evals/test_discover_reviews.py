@@ -271,17 +271,25 @@ class StaleBlockedSynthesisTests(unittest.TestCase):
 
 
 class ArchiveOnAdmissionTests(unittest.TestCase):
-    """Wired into main: archived after the new head's handoff card is
-    created, not before."""
+    """Wired into main: archived only once review_graphs() reports this
+    head's own synthesis card already exists on the board -- never right
+    after creating the handoff card, which is review council's own finding
+    against an earlier version of this fix (three lenses, same defect: the
+    handoff card's existence proves nothing about whether review-workflow
+    has built a single lens or synthesis card yet, so archiving there could
+    delete the PR's only resumable graph before any replacement exists).
+    """
 
-    def run_main(self, stale_ids, build_rc=0, archive_rc=0):
+    def run_main(self, stale_ids, graphs=None, running=False, archive_rc=0):
         import sys
         calls = []
 
         def fake_run(argv, **kw):
             calls.append(list(argv))
             if is_handoff(argv):
-                return mock.Mock(returncode=build_rc, stdout="", stderr="boom" if build_rc else "")
+                return mock.Mock(returncode=0, stdout='{"id": "t_handoff"}', stderr="")
+            if "show" in argv and "t_handoff" in argv:
+                return mock.Mock(returncode=0, stdout='{"task": {"status": "ready"}}', stderr="")
             if "archive" in argv:
                 return mock.Mock(returncode=archive_rc, stdout="", stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
@@ -294,6 +302,8 @@ class ArchiveOnAdmissionTests(unittest.TestCase):
                 mock.patch.object(discover_reviews, "pr_threads", return_value=None), \
                 mock.patch.object(discover_reviews, "reviews_by_me", return_value={}), \
                 mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x")), \
+                mock.patch.object(discover_reviews, "review_graphs",
+                                  return_value=(graphs if graphs is not None else set(), running)), \
                 mock.patch.object(discover_reviews, "stale_blocked_synthesis", return_value=stale_ids), \
                 mock.patch("subprocess.run", side_effect=fake_run):
             argv = ["discover-reviews", "--allow", "a/repo", "--checkout-root", "/x",
@@ -305,25 +315,30 @@ class ArchiveOnAdmissionTests(unittest.TestCase):
     def archives(self, calls):
         return [c for c in calls if "kanban" in c and "archive" in c]
 
-    def test_stale_blocked_cards_are_archived_once_the_new_graph_is_built(self):
-        rc, calls = self.run_main(["t_old1", "t_old2"])
+    def test_stale_blocked_cards_are_archived_once_the_new_graph_already_exists(self):
+        """graphs={head} means review_graphs() found a real synthesis card
+        for this head -- the one condition that actually proves a
+        replacement exists."""
+        rc, calls = self.run_main(["t_old1", "t_old2"], graphs={"11111111"})
         self.assertEqual(0, rc)
         archive = self.archives(calls)
         self.assertEqual(1, len(archive))
         self.assertEqual(archive[0][-2:], ["t_old1", "t_old2"])
-        build = next(i for i, c in enumerate(calls) if is_handoff(c))
-        self.assertGreater(calls.index(archive[0]), build)
 
-    def test_nothing_is_archived_when_there_is_nothing_stale(self):
-        _, calls = self.run_main([])
+    def test_nothing_is_archived_right_after_creating_a_fresh_handoff_card(self):
+        """The defect this test used to encode: graphs=set() (no existing
+        graph for this head) still reaches the handoff-creation branch, and
+        archiving there must not happen -- the fresh handoff card has not
+        built anything yet."""
+        _, calls = self.run_main(["t_old1", "t_old2"], graphs=set())
         self.assertEqual([], self.archives(calls))
 
-    def test_nothing_is_archived_when_the_new_graph_failed_to_build(self):
-        _, calls = self.run_main(["t_old"], build_rc=1)
+    def test_nothing_is_archived_when_there_is_nothing_stale(self):
+        _, calls = self.run_main([], graphs={"11111111"})
         self.assertEqual([], self.archives(calls))
 
     def test_a_failed_archive_does_not_fail_discovery(self):
-        rc, _ = self.run_main(["t_old"], archive_rc=1)
+        rc, _ = self.run_main(["t_old"], graphs={"11111111"}, archive_rc=1)
         self.assertEqual(0, rc)
 
 
@@ -388,13 +403,15 @@ class BlockedHandoffCardTests(unittest.TestCase):
         handoffs = handoff_calls(calls)
         self.assertEqual(2, len(handoffs), "both PRs must be attempted; neither spent the one slot")
 
-    def test_a_blocked_handoff_does_not_archive_stale_synthesis(self):
-        _, _, stale_mock = self.run_main("blocked")
-        stale_mock.assert_not_called()
-
-    def test_a_ready_handoff_does_archive_stale_synthesis(self):
-        _, _, stale_mock = self.run_main("ready")
-        stale_mock.assert_called()
+    def test_neither_blocked_nor_ready_handoff_archives_stale_synthesis(self):
+        """Archiving never happens from the handoff-creation path at all,
+        whatever the handoff's own status -- see ArchiveOnAdmissionTests for
+        where it correctly does happen (once review_graphs() confirms a
+        real synthesis card for this head already exists)."""
+        for status in ("blocked", "ready"):
+            with self.subTest(status=status):
+                _, _, stale_mock = self.run_main(status)
+                stale_mock.assert_not_called()
 
     def test_a_blocked_handoff_card_does_not_fail_discovery(self):
         rc, _, _ = self.run_main("blocked")

@@ -460,6 +460,22 @@ def main() -> int:
         # publish: nothing to build, no slot. A failed or partial staging
         # leaves no synthesis card, so it is retried here.
         if head_sha[:8] in graphs:
+            # The replacement graph demonstrably exists now (this check only
+            # passes once review-workflow has actually created its
+            # synthesis card for head_sha), so an older head's blocked
+            # synthesis card is superseded and safe to archive -- unlike
+            # right after creating the handoff card below, where no lens or
+            # synthesis card for this head exists yet at all (review council,
+            # three lenses: archiving there could delete the only resumable
+            # graph before any replacement exists).
+            stale = stale_blocked_synthesis(args.board, repo, number, head_sha)
+            if stale:
+                a = subprocess.run(hermes_argv("kanban", "--board", args.board, "archive", *stale),
+                                   capture_output=True, text=True)
+                if a.returncode == 0:
+                    print(f"  archived superseded blocked review(s) for {repo}#{number}: {' '.join(stale)}")
+                else:
+                    print(f"  could not archive {' '.join(stale)}: {a.stderr.strip()[:200]}", file=sys.stderr)
             continue
         if running:
             print(f"  wait {repo}#{number}: a review is still running")
@@ -515,8 +531,12 @@ def main() -> int:
         # unchanged every pass: surfaced once per pass so it is not read as
         # a fresh admission, not retried automatically (unblocking a stuck
         # graph is the same human call as unblocking any other card), and
-        # treated exactly like a failed handoff below -- no slot spent, no
-        # stale card archived, because no new graph actually got built.
+        # treated exactly like a failed handoff below -- no slot spent.
+        # (Archiving an older head's stale synthesis card never happens
+        # here regardless of status: this call only creates or finds the
+        # INTAKE card, before review-workflow has had any chance to build a
+        # single lens or synthesis card for this head. That only happens
+        # above, once `head_sha[:8] in graphs` is true on some later pass.)
         try:
             handoff_id = json.loads(r.stdout).get("id")
         except (ValueError, AttributeError):
@@ -538,20 +558,6 @@ def main() -> int:
         # A slot is spent only by a graph actually built: a failed checkout
         # or build does not starve later PRs.
         slots += 1
-        # The older heads' blocked cards are superseded now that this head has
-        # its own graph. Archived only after that graph exists, so a failed
-        # build leaves the old card as the human's way back in. A failure here
-        # is reported and not fatal: the worst case is the wasted review that
-        # unblocking the old card would have started, and publish-review
-        # already refuses a verdict for a head that has moved.
-        stale = stale_blocked_synthesis(args.board, repo, number, head_sha)
-        if stale:
-            a = subprocess.run(hermes_argv("kanban", "--board", args.board, "archive", *stale),
-                               capture_output=True, text=True)
-            if a.returncode == 0:
-                print(f"  archived superseded blocked review(s) for {repo}#{number}: {' '.join(stale)}")
-            else:
-                print(f"  could not archive {' '.join(stale)}: {a.stderr.strip()[:200]}", file=sys.stderr)
         if not already_staged:
             admitted += 1
 
