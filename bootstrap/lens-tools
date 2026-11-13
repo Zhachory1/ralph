@@ -3,7 +3,7 @@
 
 Ported from the fleet's bin/hermes-council-tools, which the design names as
 "the one piece of fleet machinery worth carrying over" (section 3). Adapted
-for this stack's names (lens profiles, the `queues` board, LENS_* env rather
+for this stack's names (lens profiles, the `lenses` board, LENS_* env rather
 than COUNCIL_*) and its two non-security changes: `evidence_read` /
 `evidence_search` replace `snapshot_read` / `snapshot_search` because PR 3
 stages a diff and bounded context into a plain directory rather than
@@ -428,7 +428,16 @@ def kanban_call(name, arguments, aliases):
 
 
 def parent_handoffs(aliases):
-    if aliases["profile"] != "ralph-review-synthesis" or aliases["board"] != "queues":
+    if aliases["profile"] != "ralph-review-synthesis":
+        fail("parent handoffs are restricted to review synthesis")
+    expected = os.environ.get("LENS_EXPECTED_BOARD")
+    if expected is None:
+        expected = os.environ.get("RALPH_LENS_BOARD")
+    if expected is None:
+        expected = "lenses"
+    if not BOARD_RE.fullmatch(expected):
+        fail("invalid expected review board")
+    if aliases["board"] != expected:
         fail("parent handoffs are restricted to review synthesis")
     safe_binding(aliases)
     from hermes_cli import kanban_db as kb
