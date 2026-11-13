@@ -1,11 +1,11 @@
 """Discovery on a timer: the first thing that acts without a human.
 
-No network -- these stub gh and build-review-graph to test the admission
-logic itself: the allowlist and the per-run cap. There is no daily cap by
-direct instruction, so these tests check that nothing in this file gates
-on a count across invocations, not that a count stays under some number.
-The real discovery and real graph-building were proven by hand against a
-live board and a real PR; see the PR body for that record.
+No network -- these stub gh and the review-workflow handoff to test the
+admission logic itself: the allowlist and the per-run cap. There is no
+daily cap by direct instruction, so these tests check that nothing in this
+file gates on a count across invocations, not that a count stays under
+some number. The real discovery was proven by hand against a live board
+and a real PR; see the PR body for that record.
 
     python3 evals/test_discover_reviews.py
 """
@@ -38,6 +38,27 @@ def fake_pr(repo, number, title="x"):
            "url": f"https://github.com/{repo}/pull/{number}", "updatedAt": "2026-01-01T00:00:00Z"}
 
 
+def is_handoff(argv):
+    """The one hermes kanban create call that hands a discovered head off
+    to review-workflow, identified by its fixed assignee."""
+    return "kanban" in argv and "create" in argv and "ralph-review-workflow" in argv
+
+
+def handoff_calls(calls):
+    """calls: an iterable of mock.call objects (run.call_args_list) or of
+    already-joined argv lists, whichever the test already collected."""
+    return [c for c in calls if is_handoff(c.args[0] if hasattr(c, "args") else c)]
+
+
+def body_field(argv, field):
+    """One `field: value` line from the --body argument of a handoff call."""
+    body = argv[argv.index("--body") + 1]
+    for line in body.splitlines():
+        if line.startswith(field + ": "):
+            return line.split(": ", 1)[1]
+    return None
+
+
 class AllowlistTests(unittest.TestCase):
     """The rejected alternative is the fleet's board-engine shape: no
     "all accessible repos" exists anywhere in this script. owner/* covers
@@ -59,9 +80,9 @@ class AllowlistTests(unittest.TestCase):
                        "--work-root", str(work_root), "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+                calls = handoff_calls(run.call_args_list)
                 self.assertEqual(1, len(calls))
-                self.assertIn("a/allowed", calls[0].args[0])
+                self.assertEqual("a/allowed", body_field(calls[0].args[0], "repo"))
 
 
     def test_owner_wildcard_covers_that_owner_only(self):
@@ -80,8 +101,7 @@ class AllowlistTests(unittest.TestCase):
                        "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                repos = [c.args[0][c.args[0].index("--repo") + 1] for c in run.call_args_list
-                         if "build-review-graph" in " ".join(c.args[0])]
+                repos = [body_field(c.args[0], "repo") for c in handoff_calls(run.call_args_list)]
                 self.assertEqual(["a/one", "a/two"], repos)
 
 
@@ -102,7 +122,7 @@ class ReviewRoundCapTests(unittest.TestCase):
                     "--work-root", d, "--once-for-real"]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-            return len([c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])])
+            return len(handoff_calls(run.call_args_list))
 
     def test_a_fourth_round_is_admitted(self):
         self.assertEqual(1, self._admitted({"a" * 40, "b" * 40, "c" * 40}))
@@ -137,7 +157,7 @@ class ReviewSpacingTests(unittest.TestCase):
                     "--work-root", d, "--once-for-real"]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-            return len([c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])])
+            return len(handoff_calls(run.call_args_list))
 
     def ago(self, hours):
         return self.NOW - hours * 3600
@@ -251,18 +271,18 @@ class StaleBlockedSynthesisTests(unittest.TestCase):
 
 
 class ArchiveOnAdmissionTests(unittest.TestCase):
-    """Wired into main: archived after the new head's graph is built, not before."""
+    """Wired into main: archived after the new head's handoff card is
+    created, not before."""
 
     def run_main(self, stale_ids, build_rc=0, archive_rc=0):
         import sys
         calls = []
 
         def fake_run(argv, **kw):
-            joined = " ".join(argv)
-            calls.append(joined)
-            if "build-review-graph" in joined:
+            calls.append(list(argv))
+            if is_handoff(argv):
                 return mock.Mock(returncode=build_rc, stdout="", stderr="boom" if build_rc else "")
-            if " archive " in joined:
+            if "archive" in argv:
                 return mock.Mock(returncode=archive_rc, stdout="", stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -283,15 +303,15 @@ class ArchiveOnAdmissionTests(unittest.TestCase):
         return rc, calls
 
     def archives(self, calls):
-        return [c for c in calls if " kanban " in c and " archive " in c]
+        return [c for c in calls if "kanban" in c and "archive" in c]
 
     def test_stale_blocked_cards_are_archived_once_the_new_graph_is_built(self):
         rc, calls = self.run_main(["t_old1", "t_old2"])
         self.assertEqual(0, rc)
         archive = self.archives(calls)
         self.assertEqual(1, len(archive))
-        self.assertTrue(archive[0].endswith("archive t_old1 t_old2"))
-        build = next(i for i, c in enumerate(calls) if "build-review-graph" in c)
+        self.assertEqual(archive[0][-2:], ["t_old1", "t_old2"])
+        build = next(i for i, c in enumerate(calls) if is_handoff(c))
         self.assertGreater(calls.index(archive[0]), build)
 
     def test_nothing_is_archived_when_there_is_nothing_stale(self):
@@ -325,7 +345,7 @@ class PerRunCapTests(unittest.TestCase):
                    "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-        return [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+        return handoff_calls(run.call_args_list)
 
     def test_per_run_cap_limits_admission_even_with_more_eligible(self):
         with tempfile.TemporaryDirectory() as d:
@@ -413,8 +433,8 @@ class CapValidationTests(unittest.TestCase):
 
 class RepeatDiscoveryTests(unittest.TestCase):
     """Found by the review council: re-discovering an unchanged PR still
-    incremented admitted whenever build-review-graph exited 0, even though
-    its own idempotency keys made that a no-op rebuild. There is no cap
+    incremented admitted whenever the handoff call exited 0, even though
+    its own idempotency key made that a no-op rebuild. There is no cap
     for this to silently consume anymore, but the "admitted" count in the
     printed summary should still reflect genuinely new work, not a repeat."""
 
@@ -434,8 +454,7 @@ class RepeatDiscoveryTests(unittest.TestCase):
                     "--work-root", d, "--once-for-real", "--max-per-run", str(max_per_run)]
             with mock.patch.object(sys, "argv", argv):
                 discover_reviews.main()
-            return [c.args[0][c.args[0].index("--pr") + 1] for c in run.call_args_list
-                    if "build-review-graph" in " ".join(c.args[0])]
+            return [body_field(c.args[0], "pr") for c in handoff_calls(run.call_args_list)]
 
     def setUp(self):
         patcher = mock.patch.object(discover_reviews, "ensure_checkout", return_value=pathlib.Path("/x"))
@@ -550,7 +569,7 @@ class AllowFileTests(unittest.TestCase):
                        "--checkout-root", "/x", "--work-root", d, "--once-for-real"]
                 with mock.patch.object(sys, "argv", argv):
                     discover_reviews.main()
-                calls = [c for c in run.call_args_list if "build-review-graph" in " ".join(c.args[0])]
+                calls = handoff_calls(run.call_args_list)
                 self.assertEqual(2, len(calls), "both a/repo and b/repo should be admitted")
 
 

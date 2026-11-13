@@ -5,8 +5,8 @@ PR 10 of the fleet-into-ralph design. Runs on the host, where the Gmail token
 lives; the token never enters the hermes container. Reads with the token,
 writes the thread as a JSON file into a staging directory, and creates a
 card whose workspace is that directory -- the same --workspace dir: shape
-bootstrap/build-review-graph uses, so the drafter reads the thread through
-lens-tools and nothing else.
+review-workflow uses for its own cards, so the drafter reads the thread
+through lens-tools and nothing else.
 
     RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-producer \
         --token ~/.config/ralph/inbox/gmail-token.json \

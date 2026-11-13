@@ -34,6 +34,7 @@ A new profile is justified by different permissions, resources, or lifecycle —
 | Profile | Can | Cannot |
 | --- | --- | --- |
 | orchestrator | Talk to you, own the board | Write to any repo |
+| review-workflow | Stage a PR's evidence, decide review depth, create its lens and synthesis cards | Write to any repo, review code itself, publish anything |
 | author | Write the docs repo | Touch code repos |
 | reviewer | Comment, request changes | Approve, push |
 | builder | Branch, push, open PRs; list Chat space IDs through the sidecar | Merge, read or send Chat messages directly |

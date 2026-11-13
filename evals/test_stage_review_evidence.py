@@ -213,9 +213,9 @@ class StageReviewEvidenceTests(unittest.TestCase):
         script imports the other and nothing had checked they agree.
 
         A lens profile sets LENS_WORKSPACE=$HERMES_KANBAN_WORKSPACE and
-        LENS_EVIDENCE_ROOT=$HERMES_KANBAN_WORKSPACE/evidence. bootstrap/
-        build-review-graph creates each card with --workspace dir:<op_root>,
-        so HERMES_KANBAN_WORKSPACE resolves to op_root at dispatch time. This
+        LENS_EVIDENCE_ROOT=$HERMES_KANBAN_WORKSPACE/evidence. review-workflow
+        creates each card with --workspace dir:<op_root>, so
+        HERMES_KANBAN_WORKSPACE resolves to op_root at dispatch time. This
         asserts the binding this script writes is consistent with that
         without needing a live Hermes task to prove it.
         """

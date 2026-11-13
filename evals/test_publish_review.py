@@ -60,7 +60,7 @@ class VerdictMappingTests(unittest.TestCase):
 
 
 class BodyParsingTests(unittest.TestCase):
-    """The plain key: value shape build-review-graph writes into card bodies."""
+    """The plain key: value shape review-workflow writes into card bodies."""
 
     def test_parses_the_real_shape(self):
         body = ("operation_id: review-abc123\nrepo: owner/name\nnumber: 42\n"

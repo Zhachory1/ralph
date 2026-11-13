@@ -46,28 +46,35 @@ sequenceDiagram
 
 ## PR review
 
-**Entry:** a PR in an allowlisted repo assigned to the review account. **Exit:** one review posted per head commit. **Owners:** review-loop (discovery, publish), lenses, review-synthesis.
+**Entry:** a PR in an allowlisted repo assigned to the review account. **Exit:** one review posted per head commit. **Owners:** `discover-reviews` (discovery, handoff), review-workflow (staging, mode, the lens and synthesis graph), lenses, review-synthesis, `publish-review` (the GitHub write).
 
 ```mermaid
 sequenceDiagram
     participant G as GitHub
-    participant L as review-loop
+    participant DR as discover-reviews
+    participant RW as review-workflow
     participant H as Hermes board (lenses)
-    G->>L: assigned open PRs
-    L->>L: skip heads already reviewed or on the board
-    L->>H: staged evidence + lens cards + synthesis card
+    participant PR as publish-review
+    G->>DR: assigned open PRs
+    DR->>DR: skip heads already reviewed or on the board
+    DR->>RW: one card: repo, pr, shas, checkout, work-root
+    RW->>RW: stage evidence, pick mode (lite/default/deep)
+    RW->>H: lens cards + synthesis card
     H->>H: lenses run, then synthesis
-    L->>G: publish the synthesis verdict at that head
+    PR->>G: publish the synthesis verdict at that head
 ```
 
 - New review graphs are created and published on `lenses`. Older graphs stay on `queues` (display name **Intake**); drain and publish them before cutting over. No cards move between boards.
 - One review per head SHA, no round cap; one review graph per PR at a time.
-- The per-pass cap (10) counts only new graphs. Published or finally refused cards are recorded and not re-checked.
+- The per-pass cap (10) counts only new handoffs. Published or finally refused cards are recorded and not re-checked.
+- review-workflow picks its own mode from the diff -- `discover-reviews` only discovers and hands off, it never decides how deep a review goes.
 - Lenses and synthesis read only the staged evidence (`/workspaces/review-work`, read-only).
+- No tracker item: review runs in the hundreds, and each already has its own visible record, the PR itself.
 
 **Failure modes:**
 - *Discovery misses a just-opened PR:* GitHub search lag. The next pass finds it; `run-review-loop --once` forces one.
 - *Card fails on a restart:* each card has 3 attempts.
+- *review-workflow's own handoff card fails or is dropped:* `discover-reviews`'s own idempotency key (`<op_id>-intake`) makes re-sending it on the next pass a no-op if it already landed, a real retry if it did not.
 
 ## PR maintenance
 
