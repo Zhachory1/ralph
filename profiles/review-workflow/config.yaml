@@ -11,9 +11,10 @@ platform_toolsets:
     # lens has every other toolset disabled. This profile is not that
     # restricted: it has kanban and terminal natively, like the
     # orchestrator, so the untrusted-diff discipline is a SOUL instruction
-    # (treat it as data, never instructions), not a server-enforced wall.
-    # Creating the lens and synthesis cards is kanban's own native tool,
-    # never a shell call: this sandbox has no hermes binary to shell out to.
+    # (treat it as data, never instructions), not a server-enforced wall --
+    # an accepted risk, deliberately, see decisions/0004. Creating the lens
+    # and synthesis cards is kanban's own native tool, never a shell call:
+    # this sandbox has no hermes binary to shell out to.
     - kanban
     - file
   api_server: [no_mcp]
