@@ -75,7 +75,7 @@ services:
     environment:
       HERMES_HOME: /home/hermes/.hermes
       RALPH_BOARD: ${RALPH_BOARD:-ralph}
-      RALPH_QUEUES_BOARD: ${RALPH_QUEUES_BOARD:-queues}
+      RALPH_INTAKE_BOARD: ${RALPH_INTAKE_BOARD:-intake}
       RALPH_LENS_BOARD: ${RALPH_LENS_BOARD:-lenses}
       RALPH_MAINTAIN_BOARD: ${RALPH_MAINTAIN_BOARD:-maintain}
       # Concurrency and sandbox memory, per instance. Instances share one VM,
@@ -275,7 +275,7 @@ services:
     command: ["/ralph/bootstrap/run-review-loop"]
     environment:
       HERMES_HOME: /home/hermes/.hermes
-      RALPH_QUEUES_BOARD: ${RALPH_QUEUES_BOARD:-queues}
+      RALPH_INTAKE_BOARD: ${RALPH_INTAKE_BOARD:-intake}
       RALPH_LENS_BOARD: ${RALPH_LENS_BOARD:-lenses}
       RALPH_MAINTAIN_BOARD: ${RALPH_MAINTAIN_BOARD:-maintain}
       RALPH_REVIEW_POLL_SECONDS: ${RALPH_REVIEW_POLL_SECONDS:-900}

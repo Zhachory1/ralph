@@ -51,10 +51,14 @@ ensure_board queues Intake 'Chat and email intake'
         self.assertEqual(2, output.count("board queues already exists"))
 
     def test_install_ensures_the_four_workflow_boards(self):
-        for slug in ("BOARD", "QUEUES_BOARD", "LENS_BOARD", "MAINTAIN_BOARD"):
+        for slug in ("BOARD", "INTAKE_BOARD", "LENS_BOARD", "MAINTAIN_BOARD"):
             with self.subTest(slug=slug):
                 self.assertIn(f'ensure_board "${slug}"', INSTALL)
         self.assertEqual(1, INSTALL.count("hermes kanban boards create"))
+
+    def test_install_keeps_the_legacy_queues_board(self):
+        """In-flight Chat threads and older cards are still read there."""
+        self.assertIn("ensure_board queues ", INSTALL)
 
     def test_synthesis_board_setting_is_written_after_tokens(self):
         target = INSTALL.index("profiles/ralph-review-synthesis/.env")
@@ -69,7 +73,7 @@ class BoardComposeTests(unittest.TestCase):
         for service in ("init", "review-loop"):
             with self.subTest(service=service):
                 env = COMPOSE["services"][service]["environment"]
-                for name in ("RALPH_LENS_BOARD", "RALPH_MAINTAIN_BOARD", "RALPH_QUEUES_BOARD"):
+                for name in ("RALPH_LENS_BOARD", "RALPH_MAINTAIN_BOARD", "RALPH_INTAKE_BOARD"):
                     self.assertIn(name, env)
 
     def test_hermes_receives_the_synthesis_board_name(self):
@@ -79,7 +83,7 @@ class BoardComposeTests(unittest.TestCase):
         self.assertNotIn("RALPH_REVIEW_BOARD", COMPOSE["services"]["notifier"]["environment"])
 
     def test_example_lists_all_four_board_defaults(self):
-        for setting in ("RALPH_BOARD=ralph", "RALPH_QUEUES_BOARD=queues",
+        for setting in ("RALPH_BOARD=ralph", "RALPH_INTAKE_BOARD=intake",
                         "RALPH_LENS_BOARD=lenses", "RALPH_MAINTAIN_BOARD=maintain"):
             with self.subTest(setting=setting):
                 self.assertEqual(1, EXAMPLE.splitlines().count(setting))

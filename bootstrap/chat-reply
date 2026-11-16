@@ -34,6 +34,9 @@ sys.path.insert(0, str(HERE))
 import chat_evidence
 
 OP_ID = re.compile(r"chat-[0-9a-f]{64}\Z")
+# New intake cards land on the intake board; ones created before the move
+# stay on `queues` and are still answered there until it drains.
+INTAKE_BOARDS = (os.environ.get("RALPH_INTAKE_BOARD", "intake"), "queues")
 SPACE = re.compile(r"spaces/[A-Za-z0-9_-]+\Z")
 URL = re.compile(r"https?://[^\s<>\"')\]]+")
 GITHUB_PULL = re.compile(r"\Ahttps://github\.com/([\w.-]+)/([\w.-]+)/pull/\d+/?\Z")
@@ -517,7 +520,7 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
         op_id = operation_of(task)
         metadata = decision_of(detail)
         choice = metadata["decision"]
-        if board == "queues":
+        if board in INTAKE_BOARDS:
             if task["workspace_path"] != "/workspaces/chat-inbox/" + op_id:
                 raise Refused("Chat workspace differs from operation")
             if choice == "route":
@@ -576,6 +579,7 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
         if kind == "ack":
             routed = command(["docker", "exec", "-u", "hermes", container, "python3",
                               "/ralph/bootstrap/chat-route", "--task", task_id,
+                              "--source-board", board,
                               "--work-root", "/workspaces/chat-inbox"])
             if routed.returncode or not routed.stdout.startswith("routed: t_"):
                 reason = "cannot confirm orchestrator card; acknowledgement not sent"
@@ -634,7 +638,7 @@ def scan(instance_env):
     if settled.returncode:
         status = 1
         alert_settle_failures(root, settled.stderr)
-    for board in ("queues", "ralph"):
+    for board in (*INTAKE_BOARDS, "ralph"):
         listed = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
                           "--board", board, "list", "--assignee", "ralph-chat-maintainer",
                           "--status", "done", "--json"])
@@ -654,7 +658,7 @@ def scan(instance_env):
                 continue
             if board == "ralph" and answered(root, op_id, "final"):
                 continue
-            if board == "queues" and (answered(root, op_id, "ack") or answered(root, op_id, "reply")
+            if board in INTAKE_BOARDS and (answered(root, op_id, "ack") or answered(root, op_id, "reply")
                                        or answered(root, op_id, "clarify")
                                        or answered(root, op_id, "decline")):
                 continue
@@ -668,7 +672,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--task")
-    parser.add_argument("--board", default="queues", choices=("queues", "ralph"))
+    parser.add_argument("--board", default=INTAKE_BOARDS[0], choices=(*INTAKE_BOARDS, "ralph"))
     parser.add_argument("--scan", action="store_true")
     parser.add_argument("--instance-env", required=True, type=pathlib.Path)
     args = parser.parse_args()

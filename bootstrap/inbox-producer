@@ -10,7 +10,7 @@ through lens-tools and nothing else.
 
     RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-producer \
         --token ~/.config/ralph/inbox/gmail-token.json \
-        --work-root /path/visible/to/both/host-and-container --board queues
+        --work-root /path/visible/to/both/host-and-container --board intake
 
 Every unread inbox thread gets a draft, by direct instruction -- no opt-in
 label. --query overrides the Gmail search if that ever needs to narrow.
@@ -92,7 +92,7 @@ def main() -> int:
                     help="the same directory as the container sees it; defaults to "
                          "--work-root. Card workspaces and the lens-tools binding must "
                          "name the container's path, since that is where the drafter runs")
-    ap.add_argument("--board", default="queues")
+    ap.add_argument("--board", default="intake")
     ap.add_argument("--query", default=DEFAULT_QUERY,
                     help=f"Gmail search selecting threads to draft for (default: {DEFAULT_QUERY!r})")
     ap.add_argument("--include-self", action="store_true",

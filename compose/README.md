@@ -100,7 +100,7 @@ Ralph's state lives in a named Docker volume (`ralph_hermes-home`), never a bind
 Verify for yourself:
 
 ```bash
-docker compose exec hermes hermes kanban boards list   # default, ralph, queues, lenses, maintain
+docker compose exec hermes hermes kanban boards list   # default, ralph, intake, lenses, maintain, queues (legacy)
 hermes kanban boards list                              # your own boards, unchanged
 ```
 
@@ -228,9 +228,9 @@ profiles run on a separate provider and are unaffected.
 
 Producer-created work has separate boards: review graphs on `lenses` (`RALPH_LENS_BOARD`),
 PR maintenance on `maintain` (`RALPH_MAINTAIN_BOARD`), and Chat/email intake plus the weekly
-librarian card on `queues` (`RALPH_QUEUES_BOARD`, displayed **Intake**). `ralph` holds
-human-facing feature work. Older review and maintenance cards stay on `queues`; none are
-migrated. The notifier enumerates active boards, so a blocked machine-created card can page
+librarian card on `intake` (`RALPH_INTAKE_BOARD`). `ralph` holds human-facing feature work.
+`queues` is legacy history: older intake, review and maintenance cards stay there and are
+still read (an in-flight Chat thread, an open librarian run), but no new card goes there. The notifier enumerates active boards, so a blocked machine-created card can page
 you. `kanban.max_in_progress` remains an instance-wide cap across all boards; adding boards
 does not increase concurrency.
 
@@ -250,7 +250,7 @@ uses) and `bootstrap/discover-reviews --allow-file`, never both at once.
 
 The `review-loop` service runs every `RALPH_REVIEW_POLL_SECONDS` (default 900). It discovers
 review graphs and publishes finished synthesis cards on `lenses`, creates maintenance rounds
-on `maintain`, and keeps the librarian card on `queues`. Review discovery uses
+on `maintain`, and keeps the librarian card on `intake`. Review discovery uses
 `RALPH_REVIEW_ALLOW` when set, else `workspaces/review-allowlist.txt`; an absent or empty
 allowlist admits nothing. Clones are cached per repository under `workspaces/repo-cache`,
 fetched on demand.
@@ -290,7 +290,7 @@ the host and never enters a container. Both scripts run on the host, by hand, fo
        --work-root compose/workspaces/inbox-work --container-work-root /workspaces/inbox-work
    ```
 
-4. Each card is assigned to `ralph-inbox-drafter` on `queues` (**Intake**). When one is `done`, turn it
+4. Each card is assigned to `ralph-inbox-drafter` on `intake`. When one is `done`, turn it
    into a draft:
 
    ```sh

@@ -64,7 +64,7 @@ sequenceDiagram
     PR->>G: publish the synthesis verdict at that head
 ```
 
-- New review graphs are created and published on `lenses`. Older graphs stay on `queues` (display name **Intake**); drain and publish them before cutting over. No cards move between boards.
+- New review graphs are created and published on `lenses`. Older graphs stay on the legacy `queues` board; drain and publish them before cutting over. No cards move between boards.
 - One review per head SHA, no round cap; one review graph per PR at a time.
 - The per-pass cap (10) counts only new handoffs. Published or finally refused cards are recorded and not re-checked.
 - review-workflow picks its own mode from the diff -- `discover-reviews` only discovers and hands off, it never decides how deep a review goes.
@@ -115,7 +115,7 @@ sequenceDiagram
     end
 ```
 
-- Chat intake stays on `queues` (display name **Intake**), while routed work stays on `ralph`; the board distinguishes the acknowledgement from the final reply. Email intake also stays on `queues`.
+- Chat intake goes on `intake`, while routed work stays on `ralph`; the board distinguishes the acknowledgement from the final reply. Email intake also goes on `intake`. Intake cards created before the move stay on the legacy `queues` board and are still answered there.
 - The destination always comes from the staged intake, never from model text. Ralph's own messages carry a `client-ralph-*` id and are skipped at intake.
 - Both halves run as one compose service (`chat-sender`, `COMPOSE_PROFILES=chat`), the Chat token in its own volume the agent's container never mounts (dd-chat.md Sec4.1, D5). Before the owner's cutover (`docs/operations.md`), the overlay `chat_inbox.py` cron job and the host LaunchAgent `chat-reply` do the same two jobs instead.
 - Builder card workers can call `list_spaces` through a fixed read-only sidecar command to resolve space IDs; they cannot read messages or send Chat through this tool. A missing sidecar or token returns an error, not an empty list.
@@ -150,7 +150,7 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 
 ## Librarian
 
-**Entry:** a card the review loop creates once a week on `queues` (**Intake**), assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
+**Entry:** a card the review loop creates once a week on `intake`, assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
 - Promotes a document from `in review` to `approved` once its newest `prs:` entry has merged and none is still open (`draft` is never promoted). Fills the memory front matter it can derive (`kind` from the folder, `date` and `source` from the file name or first commit, `profile` from that commit's author when it maps to a `ralph-*` profile) and nothing else; what it cannot derive goes in the pull request body. Merges duplicate notes and marks superseded ones, only when a pair passes three gates (same `kind`, a shared concrete anchor, one sentence true of both with no "and"), at most five of each per run. Archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead). Rewrites path links to anything moved, and regenerates folder indexes, leaving the repository's root `README.md` and any `README.md` that carries an `id` or `status` alone.

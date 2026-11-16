@@ -274,7 +274,8 @@ class LibrarianCardTests(unittest.TestCase):
     """#130, dd-ralph-librarian 2.1, 3.5: the review loop creates the weekly card."""
 
     def run_pass(self, docs_repo="owner/docs", stamp=None, pr_heads="", create_rc=0,
-                 gh_rc=0, lib_cards="[]", list_rc=0, queues_board="queues"):
+                 gh_rc=0, lib_cards="[]", list_rc=0, intake_board="intake",
+                 legacy_lib_cards="[]"):
         with tempfile.TemporaryDirectory() as d:
             d = pathlib.Path(d)
             stub = d / "bin"
@@ -296,6 +297,7 @@ class LibrarianCardTests(unittest.TestCase):
                 '[ "$1" = inspect ] && { echo false; exit 0; }\n'
                 'case "$*" in\n'
                 '    *" create "*) echo "$*" >> "$CALLS"; exit "$CREATE_RC";;\n'
+                '    *"--board queues list --assignee ralph-librarian"*) printf "%s" "$LEGACY_LIB_CARDS"; exit "$LIST_RC";;\n'
                 '    *"assignee ralph-librarian"*) printf "%s" "$LIB_CARDS"; exit "$LIST_RC";;\n'
                 "esac\n"
                 "echo '[]'\n")
@@ -317,7 +319,8 @@ class LibrarianCardTests(unittest.TestCase):
                    "PR_HEADS": pr_heads, "CREATE_RC": str(create_rc),
                    "GH_RC": str(gh_rc), "LIB_CARDS": lib_cards, "LIST_RC": str(list_rc),
                    "RALPH_HERMES_CONTAINER": "x", "RALPH_REVIEW_WORK": str(work),
-                   "RALPH_REVIEW_ALLOW": "o/r", "RALPH_QUEUES_BOARD": queues_board}
+                   "RALPH_REVIEW_ALLOW": "o/r", "RALPH_INTAKE_BOARD": intake_board,
+                   "LEGACY_LIB_CARDS": legacy_lib_cards}
             if docs_repo is not None:
                 env["RALPH_DOCS_REPO"] = docs_repo
             subprocess.run(["bash", str(SCRIPT)], env=env,
@@ -332,7 +335,7 @@ class LibrarianCardTests(unittest.TestCase):
     def test_absent_stamp_creates_exactly_one_card(self):
         created, stamped = self.run_pass(stamp=None)
         self.assertEqual(1, len(created))
-        self.assertIn("--board queues", created[0])
+        self.assertIn("--board intake", created[0])
         self.assertIn("--assignee ralph-librarian", created[0])
         self.assertIn("librarian:", created[0])
         self.assertTrue(stamped, "a successful create touches the stamp")
@@ -343,9 +346,15 @@ class LibrarianCardTests(unittest.TestCase):
         self.assertTrue(stamped)
 
     def test_librarian_uses_the_configured_intake_board(self):
-        created, _ = self.run_pass(queues_board="inbox-alt")
+        created, _ = self.run_pass(intake_board="inbox-alt")
         self.assertEqual(1, len(created))
         self.assertIn("--board inbox-alt", created[0])
+
+    def test_open_librarian_card_on_the_legacy_board_creates_no_card(self):
+        """A run started before the move to intake is still on queues; a new
+        card on intake must wait for it like any other open run."""
+        created, _ = self.run_pass(legacy_lib_cards='[{"status": "running"}]')
+        self.assertEqual([], created)
 
     def test_open_librarian_pr_creates_no_card_regardless_of_stamp(self):
         created, _ = self.run_pass(stamp=None, pr_heads="librarian/2026-11-03\n")
