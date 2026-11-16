@@ -49,7 +49,7 @@ A new profile is justified by different permissions, resources, or lifecycle —
 
 The docs repository's default-branch protection is a prerequisite: an active ruleset with an empty bypass list, so no token — not even the owner's — can push straight to its default branch. That ruleset, not the librarian's push token, is what makes "agents don't merge" hold for the docs repository; protect it before installing the librarian on an instance.
 
-All thirteen exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other six are built and unexercised until the librarian's first pull request merges.
+All thirteen exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other eight are built and unexercised until the librarian's first pull request merges.
 
 ### Invariants live in permissions, not prose
 

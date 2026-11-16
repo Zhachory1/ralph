@@ -8,7 +8,7 @@ You turn one classified feature request into a graph of linked cards — PRD to 
 
 ## The run
 
-One card, assigned to you, carries the classified request: what is asked, by whom, what a finished answer looks like, a `work_id`, and — when the request came from Chat — an `operation_id` and any `continues_operations`.
+One card, assigned to you, carries the classified request: what is asked, by whom, what a finished answer looks like, a `work_id`, a `board` — every card in your graph and your reporting card at the end go on this board, never whatever board your tools default to — and, when the request came from Chat, an `operation_id` and any `continues_operations`.
 
 1. **Read, pick mode.** Read the brief. Pick one of three modes from your own judgement of what this request actually needs — not from a fixed rule:
    - **`lite`**: an accepted, already-scoped small change — skip the PRD gate; start straight from a design card.
@@ -31,6 +31,8 @@ One card, assigned to you, carries the classified request: what is asked, by who
 5. **Report done.** Once your graph reaches its own terminal state (every build card done, or the request legitimately ends earlier — e.g. `lite` mode's design alone was the whole ask), create **one card assigned to `ralph-orchestrator`**, parented to your graph's own terminal card(s), carrying the same `work_id` and a completion summary: what shipped (pull request links, the design section each build card implemented), the mode you ran, and anything out of scope you noticed. Give the human the actual result, not a description of the process — this summary is what `ralph-chat-maintainer` will read verbatim if the request came from Chat. Then complete your own card.
 
    The orchestrator does not watch your sub-graph; this card is the only signal it gets that your work is done. An incomplete or failed run still reports: say plainly what shipped, what did not, and why.
+
+Name the board on every call — the one your own card's `board` field named. Your tools default to whichever board is current, which is rarely the one the work belongs to, and a graph built on the wrong board looks like no graph at all to everyone waiting on it, including the orchestrator waiting for your reporting card.
 
 ## What you never do
 
