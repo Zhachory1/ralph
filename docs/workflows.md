@@ -6,35 +6,29 @@ Each workflow: entry, exit, owners, and how it fails. Where the parts run is in 
 
 ## Feature: PRD → design → plan → build
 
-**Entry:** a request to the orchestrator (WebUI, Chat, or a card on `ralph`). **Exit:** merged code PRs. **Owners:** orchestrator (classifies, opens/closes the tracker item, hands off), feature-workflow (mode, the whole PRD/design/plan/build graph), author (documents), reviewer (agent review), builder (code), owner (approval gates).
+**Entry:** a request to the orchestrator (WebUI, Chat, or a card on `ralph`). **Exit:** merged code PRs. **Owners:** orchestrator (plans), author (documents), reviewer (agent review), builder (code), owner (approval gates).
 
 ```mermaid
 sequenceDiagram
     actor Owner
     participant O as Orchestrator
-    participant FW as feature-workflow
     participant A as Author
     participant N as Notifier
     participant B as Builder
-    O->>O: classify, open work_id in the tracker
-    O->>FW: one card: the request, work_id
-    FW->>FW: pick mode (lite/default/deep)
-    FW->>A: PRD card (skipped in lite mode)
+    O->>A: PRD card
     A->>Owner: PRD-only PR in docs repo, card blocked
     Owner-->>N: comments + dd-changes, or merge
     N->>A: changes: feedback on card, resume same author
-    N->>FW: merge: completes "Approve PRD" gate
-    FW->>A: design card
+    N->>O: merge: completes "Approve PRD" gate
+    O->>A: design card
     A->>Owner: design-only PR, card blocked
     Owner-->>N: merge
-    N->>FW: completes "Approve design" gate
-    FW->>A: plan card
+    N->>O: completes "Approve design" gate
+    O->>A: plan card
     A->>Owner: implementation-plan PR, card blocked
     Owner-->>N: merge
-    N->>FW: completes "Approve plan" gate
-    FW->>B: decompose: one build card per planned PR, as written
-    FW->>O: one card: work_id + completion summary, parented to the terminal build card(s)
-    O->>O: close work_id in the tracker
+    N->>O: completes "Approve plan" gate
+    O->>B: decompose: one build card per planned PR, as written
 ```
 
 - The author grounds the PRD in current code, tools and decisions first. PRD, design and implementation plan are separate pull requests.
@@ -43,15 +37,12 @@ sequenceDiagram
 - The notifier enumerates active boards for approval gates, alerts and the daily digest. It keeps separate sent-once state per board; if enumeration fails, it uses a cached board list or skips the whole pass rather than guessing.
 - `dd-changes` on a document PR returns it to the same author with the feedback; the label is removed once acted on.
 - Before planning or writing, agents search the knowledge index for prior PRDs, designs, decisions and memories, and cite what they used (see [Knowledge](#knowledge-search-and-memories)).
-- feature-workflow picks its own mode from the request -- the orchestrator only classifies that this is a feature at all, it never decides how many gates that feature runs.
-- The orchestrator never watches feature-workflow's inner graph; feature-workflow's own reporting card, parented to its terminal build card(s), is the only signal the orchestrator needs to close the tracker item.
 
 **Failure modes:**
 - *A gate card is parked in Hermes `triage`* after a repeated block: the notifier releases it (only cards parked for that reason).
 - *Handoff interrupted:* the next poll redoes it.
 - *Hermes `active_pr` guard:* the notifier unassigns and reassigns the author so the guard lifts.
 - *An old review on a previous commit:* never counts as a decision.
-- *feature-workflow's reporting card never arrives:* its own sub-graph is still visible on the board under its own cards; a stalled graph shows there, the same as any other stalled card.
 
 ## PR review
 
@@ -144,7 +135,7 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 - Clears package caches when a profile's sandbox home passes 5 GB.
 - If any board cannot be read, it deletes nothing.
 
-`bootstrap/reap-sandboxes`, also run by review-loop at most hourly, a different leak with the same cause: `container_persistent: false` is supposed to make Hermes remove a session's sandbox container once it closes or idles, and at volume that does not always hold -- a live instance can accumulate well over a hundred idle containers in one day, confirmed live. It removes a container only if both hold: its own `/workspace` mount is rooted under this instance's `RALPH_SANDBOX_ROOT` (so one instance never reaps another's sandboxes sharing the same Docker host), and every process inside it is `docker-init` or `sleep` (so a sandbox mid-task is never touched, whatever its age). Neither check is a guess: an unreadable container list or an unreachable container is left alone, the same conservative rule `cleanup-sandboxes` already follows for an unreadable board.
+`bootstrap/reap-sandboxes`, also run by review-loop at most hourly, removes sandbox *containers* that Hermes left behind (`container_persistent: false` does not always remove them at volume). A container is removed only if it belongs to this instance (its `/workspace` mount is under `RALPH_SANDBOX_ROOT`), every process in it is `docker-init` or `sleep`, and it has been idle for the grace period. Any read failure keeps the container. A removal that fails is reported and makes the pass fail, so the next poll retries it.
 
 ## Knowledge: search and memories
 

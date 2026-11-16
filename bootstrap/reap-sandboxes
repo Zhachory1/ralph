@@ -25,30 +25,32 @@ sandbox_dir-rooted mount is set by terminal_block() in bootstrap/install
 (`sandbox_dir: $RALPH_SANDBOX_ROOT/ralph-<profile>`), so it is always
 instance-specific, unlike the container name or image, both shared.
 
-A container is reaped only if every process inside it is `docker-init`,
-`sleep`, or the `ps` call checking it -- the idle shape every nonpersistent
-sandbox takes once its terminal session has nothing left to run. Any other
-process (an agent still working, a build, a leftover shell) keeps the
-container. This check reads live container state (`docker exec ... ps -eo
-comm`), not a label or a timestamp, because a container's last-active time is
-not reliably exposed and guessing from `StartedAt` would reap a sandbox
-mid-task on a long run.
-
-The idle check and the removal are still two separate steps, not one atomic
-step: a container found idle could, in principle, be handed a new task in
-the moment between the check and `docker rm -f`. Accepted, not closed here --
-`container_persistent: false` means Hermes does not reuse an idle sandbox
-for a later task in the first place (the whole leak this script exists for
-is proof: idle containers were piling up, not being reclaimed and reused),
-so the practical window this could matter in is narrow, but it is not
-provably zero.
+A container is reaped only if both hold:
+- every process inside it is `docker-init`, `sleep`, or the `ps` call
+  checking it, read live (`docker exec ... ps -eo comm`); and
+- no command has started in it for GRACE_SECONDS, read from Docker's own
+  `exec_start` events. An agent works outside its sandbox between terminal
+  calls, so a sleeping container alone does not prove its task is over; the
+  grace period is longer than the longest card runtime, so a live task always
+  has a recent call.
+Any read failure keeps the container. A failed `docker rm` is reported and
+makes the run exit nonzero, so run-review-loop retries on the next poll
+instead of stamping the hour done.
 """
 
 import argparse
+import datetime
+import re
 import subprocess
 import sys
+import time
 
 IDLE_COMMANDS = {"docker-init", "sleep", "ps"}
+# An agent works outside its sandbox between terminal calls, so an idle
+# process list alone does not prove its task is over. A container is only
+# reaped after no command has run in it for longer than the longest card
+# runtime (7200s), so a live task always has a call inside that window.
+GRACE_SECONDS = 3 * 3600
 
 
 def sandbox_containers(sandbox_root: str) -> list[str]:
@@ -92,6 +94,31 @@ def is_idle(name: str) -> bool:
     return all(ln in IDLE_COMMANDS for ln in lines)
 
 
+def last_activity(name: str) -> float | None:
+    """Epoch seconds of the container's newest start or exec, from Docker's
+    own event log. None on a read failure, which keeps the container."""
+    r = subprocess.run(["docker", "inspect", name, "--format", "{{.State.StartedAt}}"],
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        return None
+    try:
+        # Docker gives nanoseconds; fromisoformat takes at most microseconds.
+        stamp = re.sub(r"(\.\d{6})\d+", r"\1", r.stdout.strip()).replace("Z", "+00:00")
+        newest = datetime.datetime.fromisoformat(stamp).timestamp()
+    except ValueError:
+        return None
+    e = subprocess.run(["docker", "events", "--since", str(int(newest)), "--until", "0s",
+                        "--filter", f"container={name}", "--filter", "event=exec_start",
+                        "--format", "{{.Time}}"],
+                       capture_output=True, text=True, timeout=30)
+    if e.returncode != 0:
+        return None
+    for line in e.stdout.split():
+        if line.isdigit():
+            newest = max(newest, float(line))
+    return newest
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -101,18 +128,32 @@ def main():
 
     names = sandbox_containers(args.sandbox_root)
     reaped = 0
+    failed = 0
+    now = time.time()
     for name in names:
         if not is_idle(name):
             continue
-        verb = "would reap" if args.dry_run else "reaped"
-        print(f"reap-sandboxes: {verb} {name} (idle)")
-        if not args.dry_run:
-            subprocess.run(["docker", "rm", "-f", name],
+        last = last_activity(name)
+        if last is None or now - last < GRACE_SECONDS:
+            continue
+        if args.dry_run:
+            print(f"reap-sandboxes: would reap {name} (idle)")
+            reaped += 1
+            continue
+        r = subprocess.run(["docker", "rm", "-f", name],
                            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            print(f"reap-sandboxes: could not remove {name}: {r.stderr.strip()[:200]}",
+                  file=sys.stderr)
+            failed += 1
+            continue
+        print(f"reap-sandboxes: reaped {name} (idle)")
         reaped += 1
     print(f"reap-sandboxes: {'would reap' if args.dry_run else 'reaped'} "
-          f"{reaped} of {len(names)} sandbox container(s) under {args.sandbox_root}")
-    return 0
+          f"{reaped} of {len(names)} sandbox container(s) under {args.sandbox_root}"
+          + (f", {failed} removal(s) failed" if failed else ""))
+    # Nonzero so run-review-loop does not stamp the pass and retries next poll.
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
