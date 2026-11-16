@@ -75,7 +75,7 @@ flowchart LR
 | `chat-sender` | `bootstrap/run-chat-sender`: the public Chat producer, then `chat-reply --scan`, every 60 s. On when `COMPOSE_PROFILES` includes `chat` (dd-chat.md Sec4.1, D5). | Its own `chat-creds` volume (the Chat token, empty until `bootstrap/chat-creds-copy`, D8), `/workspaces` at the hermes service's own path, the board through `docker exec`. Never `hermes-home`. |
 | `tracker-sync` | Idle (`sleep infinity`); exec'd into by `chat-sender`, not ticked. On when `COMPOSE_PROFILES` includes `tracker`. Inert: no pull request calls it yet. | Its own `tracker-creds` volume (the tracker key, empty), `/workspaces`, the board through `docker exec`. Never `hermes-home` or `chat-creds`. |
 
-**Agent sandboxes** are Docker containers that Hermes creates for terminal sessions (`terminal.backend: docker`, image `ghcr.io/zhachory1/ralph-sandbox`). Ralph sets `container_persistent: false` and `persistent_shell: false`: Hermes removes a session's container when that session closes or goes idle, rather than keeping one running per profile. `/workspace` is a writable, host-backed mount under that instance's `RALPH_SANDBOX_ROOT/<profile>/docker/default/workspace`, so files survive across sessions; `/root` is temporary and disappears with the container. Each profile gets only its own workspace and these extra mounts:
+**Agent sandboxes** are Docker containers that Hermes creates for terminal sessions (`terminal.backend: docker`, image `ghcr.io/zhachory1/ralph-sandbox`). Ralph sets `container_persistent: false` and `persistent_shell: false`: Hermes removes a session's container when that session closes or goes idle, rather than keeping one running per profile. In practice, at review-loop volume, that removal does not always happen -- `bootstrap/reap-sandboxes` (run by review-loop, at most hourly) is the backstop: it removes a sandbox container only if it is this instance's own (its `/workspace` mount rooted under `RALPH_SANDBOX_ROOT`) and every process inside it is idle (`docker-init`/`sleep` only, nothing mid-task). `/workspace` is a writable, host-backed mount under that instance's `RALPH_SANDBOX_ROOT/<profile>/docker/default/workspace`, so files survive across sessions; `/root` is temporary and disappears with the container. Each profile gets only its own workspace and these extra mounts:
 
 | Mount (read-only) | Profiles |
 |---|---|
@@ -131,7 +131,8 @@ A profile token lives in that profile's own `.env` (mode 600) and is forwarded i
 | Approvals, gate alerts | notifier | `RALPH_POLL_SECONDS` (900) |
 | Morning digest | notifier | once a day after `RALPH_DIGEST_HOUR` |
 | Review discovery, publish, maintenance | review-loop | `RALPH_REVIEW_POLL_SECONDS` (900); `run-review-loop --once` on demand |
-| Sandbox cleanup | review-loop, `bootstrap/cleanup-sandboxes` | at most hourly |
+| Sandbox disk cleanup | review-loop, `bootstrap/cleanup-sandboxes` | at most hourly |
+| Sandbox container cleanup | review-loop, `bootstrap/reap-sandboxes` | at most hourly |
 | Knowledge refresh | review-loop, `bootstrap/refresh-knowledge` in the knowledge container | at most hourly |
 | Overlay jobs (chat digest) | Hermes cron on `ralph-inbox-drafter` | per job (`hermes -p ralph-inbox-drafter cron list`) |
 | Chat intake + reply sender | `chat-sender` sidecar (`COMPOSE_PROFILES=chat`): the public producer, then the reply loop. Before the cutover: the overlay `chat_inbox.py` cron job for intake, the host LaunchAgent `dev.ralph.chat-reply.<instance>` for replies | every 60 s |

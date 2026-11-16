@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Remove idle agent sandbox containers Hermes never tore down.
+
+A script, not an agent, same reasoning as bootstrap/cleanup-sandboxes: the
+rule is fixed, and the instance's own docker socket is not a tool to hand an
+agent. Run by bootstrap/run-review-loop, at most once an hour, right next to
+cleanup-sandboxes -- that script frees sandbox disk; this one frees sandbox
+containers, a different leak with the same root cause: `container_persistent:
+false` (docs/infrastructure.md) says Hermes removes a session's container
+when that session closes or goes idle, and in practice, at volume, it does
+not always happen. A live instance running many review cycles in one day
+(dozens of lens and synthesis sandboxes) can accumulate well over a hundred
+`sleep infinity` containers nobody is using -- a real leak, not a cosmetic
+one, confirmed live: over a hundred idle sandbox containers on one instance
+after one day of review-loop traffic, none of them doing anything but
+`sleep infinity`.
+
+    reap-sandboxes --sandbox-root /workspaces/sandboxes [--dry-run]
+
+Scoped to one instance only: a container is a candidate if and only if it
+carries the `hermes-agent=1` label Hermes itself sets AND has a bind mount at
+`/workspace` whose host-side source starts with --sandbox-root. Two instances
+share one Docker host and must never touch each other's sandboxes; this
+sandbox_dir-rooted mount is set by terminal_block() in bootstrap/install
+(`sandbox_dir: $RALPH_SANDBOX_ROOT/ralph-<profile>`), so it is always
+instance-specific, unlike the container name or image, both shared.
+
+A container is reaped only if every process inside it is `docker-init`,
+`sleep`, or the `ps` call checking it -- the idle shape every nonpersistent
+sandbox takes once its terminal session has nothing left to run. Any other
+process (an agent still working, a build, a leftover shell) keeps the
+container. This check reads live container state (`docker exec ... ps -eo
+comm`), not a label or a timestamp, because a container's last-active time is
+not reliably exposed and guessing from `StartedAt` would reap a sandbox
+mid-task on a long run.
+
+The idle check and the removal are still two separate steps, not one atomic
+step: a container found idle could, in principle, be handed a new task in
+the moment between the check and `docker rm -f`. Accepted, not closed here --
+`container_persistent: false` means Hermes does not reuse an idle sandbox
+for a later task in the first place (the whole leak this script exists for
+is proof: idle containers were piling up, not being reclaimed and reused),
+so the practical window this could matter in is narrow, but it is not
+provably zero.
+"""
+
+import argparse
+import subprocess
+import sys
+
+IDLE_COMMANDS = {"docker-init", "sleep", "ps"}
+
+
+def sandbox_containers(sandbox_root: str) -> list[str]:
+    """Every hermes-agent container whose /workspace mount lives under
+    sandbox_root. Empty, never a guess, on any read failure: nothing to reap
+    conservatively beats acting on a partial list."""
+    r = subprocess.run(
+        ["docker", "ps", "-a", "--filter", "label=hermes-agent=1", "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        return []
+    root = sandbox_root.rstrip("/")
+    out = []
+    for name in r.stdout.splitlines():
+        name = name.strip()
+        if not name:
+            continue
+        m = subprocess.run(
+            ["docker", "inspect", name,
+             "--format", "{{range .Mounts}}{{if eq .Destination \"/workspace\"}}{{.Source}}{{end}}{{end}}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if m.returncode != 0:
+            continue
+        source = m.stdout.strip()
+        if source == root or source.startswith(root + "/"):
+            out.append(name)
+    return out
+
+
+def is_idle(name: str) -> bool:
+    """True only if every process is the container's own init, an idle
+    sleep, or this check's own ps call -- never true on a read failure, so
+    an unreachable container is kept rather than guessed idle."""
+    r = subprocess.run(["docker", "exec", name, "ps", "-eo", "comm"],
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        return False
+    lines = [ln.strip() for ln in r.stdout.splitlines()[1:] if ln.strip()]
+    return all(ln in IDLE_COMMANDS for ln in lines)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sandbox-root", required=True)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    names = sandbox_containers(args.sandbox_root)
+    reaped = 0
+    for name in names:
+        if not is_idle(name):
+            continue
+        verb = "would reap" if args.dry_run else "reaped"
+        print(f"reap-sandboxes: {verb} {name} (idle)")
+        if not args.dry_run:
+            subprocess.run(["docker", "rm", "-f", name],
+                           capture_output=True, text=True, timeout=30)
+        reaped += 1
+    print(f"reap-sandboxes: {'would reap' if args.dry_run else 'reaped'} "
+          f"{reaped} of {len(names)} sandbox container(s) under {args.sandbox_root}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

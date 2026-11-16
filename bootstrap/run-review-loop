@@ -114,6 +114,20 @@ while true; do
             && touch "$stamp" || echo "review loop: cleanup returned $?" >&2
     fi
 
+    # Sandbox container cleanup: a different leak than the disk cleanup
+    # above. container_persistent: false (docs/infrastructure.md) is
+    # supposed to make Hermes remove a session's sandbox once it closes or
+    # idles; at review-loop volume that does not always happen, and a live
+    # instance can accumulate well over a hundred idle `sleep infinity`
+    # containers in one day. At most hourly, same stamp pattern.
+    if [ -n "${RALPH_SANDBOX_ROOT:-}" ]; then
+        rstamp="$WORK/.reap-stamp"
+        if [ -z "$(find "$rstamp" -mmin -60 2>/dev/null)" ]; then
+            python3 /ralph/bootstrap/reap-sandboxes --sandbox-root "$RALPH_SANDBOX_ROOT" \
+                && touch "$rstamp" || echo "review loop: reap returned $?" >&2
+        fi
+    fi
+
     # Knowledge index refresh (#121, #130), at most hourly, or sooner when the
     # docs repository's default branch has moved (dd-ralph-librarian 3.4). A
     # failed refresh leaves .knowledge-head unchanged, so the next poll

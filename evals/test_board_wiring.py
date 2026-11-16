@@ -102,6 +102,12 @@ class BoardComposeTests(unittest.TestCase):
     def test_hermes_receives_the_synthesis_board_name(self):
         self.assertIn("RALPH_LENS_BOARD", COMPOSE["services"]["hermes"]["environment"])
 
+    def test_review_loop_receives_the_sandbox_root_for_reap_sandboxes(self):
+        """reap-sandboxes matches a container's own /workspace mount against
+        this -- the host path hermes itself gets, needed so one instance
+        never reaps another instance's sandboxes sharing one Docker host."""
+        self.assertIn("RALPH_SANDBOX_ROOT", COMPOSE["services"]["review-loop"]["environment"])
+
     def test_notifier_no_longer_gets_the_old_review_board_setting(self):
         self.assertNotIn("RALPH_REVIEW_BOARD", COMPOSE["services"]["notifier"]["environment"])
 
