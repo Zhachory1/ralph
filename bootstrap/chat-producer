@@ -204,11 +204,13 @@ def command(argv):
 
 
 def create_card(container, op_id):
-    """One intake card: queues, ralph-chat-maintainer, one operation_id:
-    line, idempotency key the operation id, the container workspace path
-    `chat-reply:171-172` requires (`inbox-producer:148-154`'s shape)."""
+    """One intake card: the intake board, ralph-chat-maintainer, one
+    operation_id: line, idempotency key the operation id, the container
+    workspace path `chat-reply:171-172` requires (`inbox-producer:148-154`'s
+    shape)."""
     return command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
-                    "--board", "queues", "create", "Chat message received",
+                    "--board", os.environ.get("RALPH_INTAKE_BOARD", "intake"),
+                    "create", "Chat message received",
                     "--body", f"operation_id: {op_id}\n",
                     "--assignee", "ralph-chat-maintainer",
                     "--idempotency-key", op_id,

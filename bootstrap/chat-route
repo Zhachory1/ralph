@@ -23,7 +23,7 @@ def hermes(*args):
     return subprocess.run(["hermes", *args], capture_output=True, text=True)
 
 
-def route(task_id, work_root, source_board="queues", target_board="ralph"):
+def route(task_id, work_root, source_board="intake", target_board="ralph"):
     response = hermes("kanban", "--board", source_board, "show", task_id, "--json")
     if response.returncode:
         print("cannot read chat-maintainer card", file=sys.stderr)
@@ -100,7 +100,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", required=True)
     parser.add_argument("--work-root", required=True, type=pathlib.Path)
-    parser.add_argument("--source-board", default="queues")
+    parser.add_argument("--source-board", default="intake")
     parser.add_argument("--target-board", default="ralph")
     args = parser.parse_args()
     return route(args.task, args.work_root, args.source_board, args.target_board)

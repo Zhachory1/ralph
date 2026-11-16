@@ -360,11 +360,14 @@ ensure_board() {
 
 # The dispatcher enumerates every board, while max_in_progress still caps the
 # instance across them. Existing boards keep their owner-chosen display names.
-QUEUES_BOARD=${RALPH_QUEUES_BOARD:-queues}
+INTAKE_BOARD=${RALPH_INTAKE_BOARD:-intake}
 LENS_BOARD=${RALPH_LENS_BOARD:-lenses}
 MAINTAIN_BOARD=${RALPH_MAINTAIN_BOARD:-maintain}
 ensure_board "$BOARD" "Ralph" "Feature pipeline: PRD, design docs, PRs"
-ensure_board "$QUEUES_BOARD" "Intake" "Chat and email intake; history of earlier review and maintenance work"
+ensure_board "$INTAKE_BOARD" "Intake" "Chat intake and the librarian's weekly card"
+# History only: no new cards. Kept because in-flight Chat threads and older
+# review and maintenance cards are still read here.
+ensure_board queues "Queues (legacy)" "History: earlier intake, review and maintenance cards. No new cards"
 ensure_board "$LENS_BOARD" "Lenses" "Review graphs: lens cards and synthesis. No human cards"
 ensure_board "$MAINTAIN_BOARD" "Maintain" "Pull-request maintenance rounds. No human cards"
 

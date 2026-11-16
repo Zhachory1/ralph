@@ -11,7 +11,7 @@ never holds it.
 
     RALPH_HERMES_CONTAINER=ralph-hermes-1 bootstrap/inbox-writer \
         --task t_xxxxxxxx --token ~/.config/ralph/inbox/gmail-token.json \
-        --work-root <same as inbox-producer> --board queues
+        --work-root <same as inbox-producer> --board intake
 
 The reply goes to the thread's own Reply-To or From, as a reply in the same
 thread. The agent cannot choose or change recipients: it only supplies body
@@ -64,7 +64,7 @@ def main() -> int:
     ap.add_argument("--task", required=True)
     ap.add_argument("--token", required=True, type=pathlib.Path)
     ap.add_argument("--work-root", required=True, type=pathlib.Path)
-    ap.add_argument("--board", default="queues")
+    ap.add_argument("--board", default="intake")
     args = ap.parse_args()
 
     r = hermes("kanban", "--board", args.board, "show", args.task, "--json")

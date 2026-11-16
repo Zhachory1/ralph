@@ -153,6 +153,17 @@ class ChatReplyTests(unittest.TestCase):
             self.assertIn("--strict-thread", argv)
             self.assertTrue(argv[argv.index("--message-id") + 1].startswith("client-ralph-"))
 
+    def test_intake_board_card_is_acked_and_routed_from_that_board(self):
+        """New intake cards land on `intake`; chat-route must read the card
+        from the board it is on, not a hardcoded default."""
+        self.cards[("intake", "t_intake")] = self.cards.pop(("queues", "t_intake"))
+        self.assertEqual(0, self.scan())
+        texts = [a[a.index("send") + 2] for a in self.sends()]
+        self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."], texts)
+        routes = [a for a in self.calls if "/ralph/bootstrap/chat-route" in a]
+        self.assertEqual(1, len(routes))
+        self.assertEqual("intake", routes[0][routes[0].index("--source-board") + 1])
+
     def test_ack_waits_for_orchestrator_card(self):
         def route_fails(argv):
             if "/ralph/bootstrap/chat-route" in argv:

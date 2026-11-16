@@ -96,6 +96,18 @@ Every profile's SOUL starts with `profiles/PRINCIPLES.md` and `profiles/STANDARD
 - **review-workflow** keeps `terminal` and `kanban` natively while it reads a PR's own, untrusted diff and description -- unlike the lenses, which read the same evidence through a locked-down MCP with no other toolset. An accepted risk, not an oversight ([0004](decisions/0004-review-workflow-reads-untrusted-diffs-with-full-tools.md)).
 - **Chat space listing (`mcp_servers.chat-spaces`: `list_spaces`):** builder card workers only. Hermes invokes a fixed read-only command in `chat-sender` through the Docker proxy; only space IDs, names and types return. No Chat token or Docker access enters the worker sandbox. Requires the `chat` compose profile and the sidecar token copy.
 
+## Boards
+
+Each board's slug is set per instance by its env var; defaults shown. Cards are never moved between boards, so an older card stays on the board it was created on.
+
+| Board | Env var | Holds |
+|---|---|---|
+| `ralph` | `RALPH_BOARD` | Human-facing feature work, and the orchestrator's handoffs and reports. A Chat request's final reply card. |
+| `intake` | `RALPH_INTAKE_BOARD` | New Chat and email intake cards, and the librarian's weekly card. |
+| `lenses` | `RALPH_LENS_BOARD` | Review graphs: lens and synthesis cards. |
+| `maintain` | `RALPH_MAINTAIN_BOARD` | PR maintenance rounds. |
+| `queues` | none | Legacy history: intake, review and maintenance cards from before the split. No new cards; still read for an in-flight Chat thread or an open librarian run. |
+
 ## Credentials
 
 | Credential | Lives in | Reaches |

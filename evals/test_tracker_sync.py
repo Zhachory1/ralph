@@ -194,9 +194,9 @@ class TrackerSyncTests(unittest.TestCase):
         path.chmod(0o600)
         return op
 
-    def intake_card(self, op, ack="On it.", kind="question", task_id=None):
+    def intake_card(self, op, ack="On it.", kind="question", task_id=None, board="queues"):
         task_id = task_id or ("t_intake_" + op[-6:])
-        self.cards[("queues", task_id)] = {
+        self.cards[(board, task_id)] = {
             "task": {"id": task_id, "status": "done", "assignee": "ralph-chat-maintainer",
                      "body": "operation_id: %s\n" % op},
             "metadata": {"decision": "route", "body": "do the thing", "ack": ack, "kind": kind},
@@ -259,6 +259,13 @@ class TrackerSyncTests(unittest.TestCase):
         self.assertEqual(issue["status"]["name"], "In progress")
         self.assertEqual(self.backend._thread_value(issue), "spaces/example/threads/first")
         self.assertEqual(self.recorded_id(op), str(issue["id"]))
+
+    def test_record_reads_kind_from_a_card_on_the_intake_board(self):
+        op = self.stage()
+        self.intake_card(op, kind="bug_investigation", board="intake")
+        self.assertEqual(0, self.module.record(self.client(), self.root, op))
+        issue = next(iter(self.backend.issues.values()))
+        self.assertEqual(issue["kind"], "bug_investigation")
 
     def test_second_record_over_same_operation_creates_nothing(self):
         op = self.stage()

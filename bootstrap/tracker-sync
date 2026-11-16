@@ -45,6 +45,10 @@ import chat_evidence
 import tracker as tracker_client
 
 TRACKER_CREDS_ENV = "RALPH_TRACKER_CREDS"
+INTAKE_BOARD = os.environ.get("RALPH_INTAKE_BOARD", "intake")
+# Chat intake cards created before the move to `intake` stay on `queues`;
+# a thread can span days, so its earlier card is still read there.
+LEGACY_INTAKE_BOARD = "queues"
 RECORDED = ".tracker-recorded"
 WAITING = ".tracker-waiting"
 CLOSED = ".tracker-closed"
@@ -108,6 +112,10 @@ def find_card(board, op_id):
         return run["metadata"]
     except (ValueError, KeyError, IndexError, TypeError):
         return None
+
+
+def find_intake_card(op_id):
+    return find_card(INTAKE_BOARD, op_id) or find_card(LEGACY_INTAKE_BOARD, op_id) or {}
 
 
 def write_marker(path, text=""):
@@ -200,7 +208,7 @@ def record(client, root, op_id):
     except chat_evidence.Invalid as error:
         print("refused tracker-sync --record %s: %s" % (op_id, error), file=sys.stderr)
         return 2
-    card = find_card("queues", op_id) or {}
+    card = find_intake_card(op_id)
     canonical = resolve_or_create(client, item, IN_PROGRESS, card)
     reopen_if_needed(client, canonical)
     write_marker(root / op_id / RECORDED, str(canonical["id"]))
@@ -214,7 +222,7 @@ def pending(client, root, op_id, item):
     thread `--record` already moved to `In progress` is pulled back to
     `Waiting on requester` once a clarifying question is the thing that
     actually went out."""
-    card = find_card("queues", op_id) or {}
+    card = find_intake_card(op_id)
     canonical_id = resolve_or_create(client, item, "Waiting on requester", card)["id"]
     client.update(canonical_id, {"status": "Waiting on requester"})
     write_marker(root / op_id / WAITING, str(canonical_id))
@@ -226,7 +234,7 @@ def close(client, root, op_id, item):
     the report card on the `ralph` board, else `Closed`, then remove the
     operation's `evidence/` directory and keep every marker file, so the
     chat producer's `prior_operations` still counts this operation."""
-    card = find_card("queues", op_id) or {}
+    card = find_intake_card(op_id)
     report = find_card("ralph", op_id) or {}
     outcome = report.get("body")
     outcome = outcome.strip() if isinstance(outcome, str) else ""
