@@ -138,7 +138,7 @@ repo_cache_profile() {
 # only from their staged evidence or have no tools by design, so never get it.
 knowledge_profile() {
     case "$1" in
-        orchestrator|author|builder|maintainer|researcher|reviewer|analyst|experimenter|auditor|watcher|librarian) return 0 ;;
+        orchestrator|feature-workflow|author|builder|maintainer|researcher|reviewer|analyst|experimenter|auditor|watcher|librarian) return 0 ;;
         *) return 1 ;;
     esac
 }

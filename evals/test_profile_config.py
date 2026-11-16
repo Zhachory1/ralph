@@ -79,7 +79,7 @@ class ApplyTests(unittest.TestCase):
 
 
 ALL = (
-    "orchestrator", "author", "reviewer", "builder", "researcher",
+    "orchestrator", "feature-workflow", "author", "reviewer", "builder", "researcher",
     "analyst", "experimenter", "auditor", "watcher", "chat-maintainer",
     "librarian",
 )
@@ -113,6 +113,14 @@ class DeclarationTests(unittest.TestCase):
 
     def test_the_orchestrator_can_reach_the_board(self):
         self.assertIn("kanban", self.toolsets("orchestrator"))
+
+    def test_feature_workflow_can_reach_the_board_and_not_run_code(self):
+        """It builds a feature's own card graph, same reason orchestrator used
+        to need kanban for this; it never writes code itself, only cards for
+        author and builder to act on, so code_execution stays withheld."""
+        toolset = self.toolsets("feature-workflow")
+        self.assertIn("kanban", toolset)
+        self.assertNotIn("code_execution", toolset)
 
     def test_code_running_profiles_can_run_code(self):
         for name in ("builder", "author", "experimenter"):
@@ -433,7 +441,7 @@ class VoiceTests(unittest.TestCase):
         profiles reason only from staged evidence and never search."""
         install = (ROOT / "bootstrap" / "install").read_text()
         block = install[install.index("knowledge_profile() {"):install.index("knowledge_set() {")]
-        for name in ("orchestrator", "author", "builder", "maintainer", "researcher",
+        for name in ("orchestrator", "feature-workflow", "author", "builder", "maintainer", "researcher",
                      "reviewer", "analyst", "experimenter", "auditor", "watcher"):
             self.assertIn(name, block)
         for name in ("lens-", "review-synthesis", "chat-maintainer", "chat-summarizer", "inbox-drafter"):

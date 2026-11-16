@@ -90,7 +90,7 @@ class DesignApprovalGateTests(BoardTest):
     def test_reviewed_design_does_not_release_the_build_until_the_gate_is_approved(self):
         design = self.card("design")
         gate = self.card("Approve design: x", assignee=None, parent=design)
-        decompose = self.card("decompose", assignee="ralph-orchestrator", parent=gate)
+        decompose = self.card("decompose", assignee="ralph-feature-workflow", parent=gate)
 
         self.board.complete(design, "reviewer: design ok")
         self.assertEqual("ready", self.board.status(gate))
@@ -114,7 +114,7 @@ class PrdApprovalGateTests(BoardTest):
         prd_gate = self.card("Approve PRD: x", assignee=None, parent=prd)
         design = self.card("design", parent=prd_gate)
         dd_gate = self.card("Approve design: x", assignee=None, parent=design)
-        decompose = self.card("decompose", assignee="ralph-orchestrator", parent=dd_gate)
+        decompose = self.card("decompose", assignee="ralph-feature-workflow", parent=dd_gate)
 
         self.board.complete(prd, "reviewer: PRD ok")
         self.board.block(prd_gate, "review-required: approve PRD")
@@ -135,7 +135,7 @@ class PlanApprovalGateTests(BoardTest):
         dd_gate = self.card("Approve design: x", assignee=None)
         plan = self.card("plan", parent=dd_gate)
         plan_gate = self.card("Approve plan: x", assignee=None, parent=plan)
-        decompose = self.card("decompose", assignee="ralph-orchestrator", parent=plan_gate)
+        decompose = self.card("decompose", assignee="ralph-feature-workflow", parent=plan_gate)
 
         self.board.block(dd_gate, "review-required: approve design")
         self.board.unblock(dd_gate)
