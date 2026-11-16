@@ -33,8 +33,8 @@ sequenceDiagram
     Owner-->>N: merge
     N->>FW: completes "Approve plan" gate
     FW->>B: decompose: one build card per planned PR, as written
-    FW->>O: one card: work_id + completion summary, parented to the terminal build card(s)
-    O->>O: close work_id in the tracker
+    FW->>O: one card: work_id, outcome, summary (when done, or when it needs a human)
+    O->>O: outcome done: close work_id; otherwise set Feedback and block for the owner
 ```
 
 - The author grounds the PRD in current code, tools and decisions first. PRD, design and implementation plan are separate pull requests.
@@ -44,14 +44,14 @@ sequenceDiagram
 - `dd-changes` on a document PR returns it to the same author with the feedback; the label is removed once acted on.
 - Before planning or writing, agents search the knowledge index for prior PRDs, designs, decisions and memories, and cite what they used (see [Knowledge](#knowledge-search-and-memories)).
 - feature-workflow picks its own mode from the request -- the orchestrator only classifies that this is a feature at all, it never decides how many gates that feature runs.
-- The orchestrator never watches feature-workflow's inner graph; feature-workflow's own reporting card, parented to its terminal build card(s), is the only signal the orchestrator needs to close the tracker item.
+- The orchestrator never watches feature-workflow's inner graph. feature-workflow's reporting card has no parents, so a failed or blocked run can still report; the orchestrator closes the tracker item only on `outcome: done`, and otherwise sets it to `Feedback` and blocks for the owner.
 
 **Failure modes:**
 - *A gate card is parked in Hermes `triage`* after a repeated block: the notifier releases it (only cards parked for that reason).
 - *Handoff interrupted:* the next poll redoes it.
 - *Hermes `active_pr` guard:* the notifier unassigns and reassigns the author so the guard lifts.
 - *An old review on a previous commit:* never counts as a decision.
-- *feature-workflow's reporting card never arrives:* its own sub-graph is still visible on the board under its own cards; a stalled graph shows there, the same as any other stalled card.
+- *feature-workflow's reporting card never arrives:* feature-workflow itself crashed before reporting. Its sub-graph is still visible on the board, and its own handoff card shows the failure, the same as any other stalled card.
 
 ## PR review
 
