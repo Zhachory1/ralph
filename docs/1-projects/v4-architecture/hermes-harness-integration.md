@@ -18,6 +18,17 @@ called it with the exact Sec 11 argument shape, and the file it asked for
 landed on disk with `status: "completed"` and accurate `test_summary` /
 `diff_stats`.
 
+The first pass of this proof ran against Hermes's default profile (no `-p`
+flag), not `ralph-swe` -- a gap an independent review caught: `bootstrap-
+hermes.sh`'s first draft granted the MCP server globally, and `profiles/
+swe/config.yaml`'s own `mcp_servers` block was dead text, since Hermes never
+merges that block from a profile's own YAML (the same mechanism ralph's
+`write-profile-config.py` already follows, #134). Fixed by scoping every
+`hermes config set` call to `-p ralph-swe` and re-ran the proof against that
+profile specifically: `hermes -p ralph-swe chat -q "..."` found and called
+`implement_spec` and the requested file landed correctly. The claim below
+now reflects that re-run, not the first one.
+
 ## Four environment gotchas found doing this, now scripted
 
 `compose/v4/bootstrap-hermes.sh` automates all four, each with the finding
@@ -78,6 +89,20 @@ and no `code_execution` -- the one way it changes a repository is the
 `disabled_toolsets`, not only described in `SOUL.md` (AGENTS.md's
 invariants-in-permissions rule, same pattern as `council`).
 
+The `mcp_servers.coding-harness` grant itself is **not** in `config.yaml`
+-- `bootstrap-hermes.sh` applies it with `hermes -p ralph-swe config set`,
+including an explicit `tools.include: [implement_spec]` allowlist so a
+future Sec 11 tool landing on this same server does not silently become
+reachable without a deliberate change here.
+
+A second, independent-review-only finding also fixed this slice: the
+first `config.yaml` draft put `skills` in `disabled_toolsets` while also
+setting a `create_dir` for Tier 3 skill writing -- the two directly
+contradicted each other, since `create_dir` means nothing with the
+`skills` toolset disabled. Every other profile with a `create_dir`
+(`builder`, `author`, `council`) leaves `skills` enabled; `swe` now
+matches.
+
 ## Not in this slice
 
 - No n8n or Postgres wiring to `swe` or the harness. The profile still takes
@@ -100,15 +125,26 @@ HERMES_IMAGE=nousresearch/hermes-agent:v0.22.2 \
   ./bootstrap-hermes.sh
 # ... run twice, confirmed no duplicated config/gitconfig entries
 
+# ralph-swe needs its own model + auth set once (bootstrap-hermes.sh
+# creates the profile and grants the MCP server; it does not set up
+# Hermes's own model credential -- that is an operator step, same as the
+# default profile's):
+docker run --rm -v <hermes_home_volume>:/opt/data nousresearch/hermes-agent:v0.22.2 \
+  hermes -p ralph-swe config set model.provider anthropic
+# ... plus model.default, platform_toolsets.cli, agent.disabled_toolsets,
+# and a copy of a valid (non-expired) Hermes auth.json into the profile
+
 # with a fresh MEWRITE_AUTH_SOURCE copy and a repo_path/rfc_path writable
 # by the container's uid (created inside the Colima VM directly, not
 # bind-mounted from macOS -- see the virtiofs note below):
 docker run --rm -v <hermes_home_volume>:/opt/data \
-  -v coding-harness/server.js:...:ro -v coding-harness/adapters.json:...:ro \
-  -v coding-harness/node_modules:...:ro -v <test fixtures>:... \
+  -v coding-harness/server.js:/harness/server.js:ro \
+  -v coding-harness/adapters.json:/harness/adapters.json:ro \
+  -v coding-harness/node_modules:/harness/node_modules:ro -v <test fixtures>:... \
   nousresearch/hermes-agent:v0.22.2 \
-  hermes chat -q "Use the implement_spec tool ..."
-# -> status: "completed", correct diff_stats, file confirmed on disk
+  hermes -p ralph-swe chat -q "Use the implement_spec tool ..."
+# -> status: "completed", correct diff_stats, file confirmed on disk --
+# as ralph-swe specifically, not Hermes's default profile
 ```
 
 One unrelated environment note, not a harness bug: Colima's virtiofs mount

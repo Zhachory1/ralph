@@ -220,7 +220,12 @@ class DeclarationTests(unittest.TestCase):
         coding-harness MCP tool's configured adapter does, inside a
         worktree the harness manages. No terminal (a shell is how "never
         edits directly" would actually get violated) and no code_execution,
-        enforced here rather than only described in SOUL.md."""
+        enforced here rather than only described in SOUL.md. Its
+        mcp_servers.coding-harness grant is not in config.yaml at all --
+        set by compose/v4/bootstrap-hermes.sh with `hermes -p ralph-swe
+        config set`, the same mcp_servers-is-never-merged-from-YAML
+        mechanism every other profile's MCP grant uses (#134) -- so there
+        is nothing to assert against this file for that grant."""
         import yaml
         declared = self.toolsets("swe")
         self.assertNotIn("terminal", declared)
@@ -228,8 +233,8 @@ class DeclarationTests(unittest.TestCase):
         config = yaml.safe_load((ROOT / "profiles" / "swe" / "config.yaml").read_text())
         disabled = config["agent"]["disabled_toolsets"]
         self.assertIn("code_execution", disabled)
-        self.assertIn("coding-harness", config.get("mcp_servers", {}))
         self.assertIn("delegation", disabled)
+        self.assertNotIn("skills", disabled, "create_dir needs the skills toolset enabled to mean anything")
 
     def test_isolated_profiles_stay_off_the_board(self):
         """Lenses and synthesis must not plan or change their own review graph;
