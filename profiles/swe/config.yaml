@@ -1,0 +1,52 @@
+# swe owns implement_spec calls for one product (spec Sec 3). It never
+# edits code itself -- the coding-harness MCP server's configured adapter
+# does, inside a worktree the harness manages -- so code_execution and a
+# push-capable terminal credential are both withheld here, not just
+# described as off-limits in SOUL.md, per AGENTS.md's invariants-in-
+# permissions rule.
+#
+# The mcp_servers.coding-harness grant is NOT set from this file: Hermes
+# does not merge mcp_servers YAML from a profile's own config (write-
+# profile-config.py's BLOCKS excludes it by design, #134 -- "no YAML text
+# is written or merged for mcp_servers"), and this repo follows the same
+# mechanism rather than reinventing one. compose/v4/bootstrap-hermes.sh
+# applies the grant with `hermes -p ralph-swe config set`, scoped to this
+# profile and nothing else; that script, not this file, is the only place
+# this profile's actual MCP access is determined.
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  # No terminal: a shell is how "you do not edit code directly" (SOUL.md)
+  # would actually get violated. The only way this profile changes a
+  # repository is through the coding-harness MCP tool below.
+  cli:
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  external_dirs:
+    - /ralph/skills/voice
+  # Tier 3 procedural memory for this profile: repo-specific quirks and
+  # patterns it has learned, written per coding-harness/adapters.json's
+  # skillPlacement, not necessarily into this lane -- see SOUL.md.
+  create_dir: /ralph/private-skills/swe
+  creation_nudge_interval: 0
+agent:
+  # skills is deliberately NOT in this list: create_dir above only means
+  # anything if the skills toolset itself stays enabled. Every other
+  # profile with a create_dir (builder, author, council) leaves skills
+  # out of disabled_toolsets for the same reason.
+  disabled_toolsets: [code_execution, delegation, kanban, browser, computer_use, web, memory, vision, image_gen, tts, todo, connections]
+  max_turns: 30
+  run_budget_seconds: 1200
+  api_max_retries: 0

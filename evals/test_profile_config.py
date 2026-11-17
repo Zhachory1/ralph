@@ -168,9 +168,13 @@ class DeclarationTests(unittest.TestCase):
 
     def test_every_profile_can_reach_github_from_a_terminal(self):
         """docs/decisions/0001: every profile can use gh. terminal is the toolset
-        that carries the forwarded token; code_execution scrubs it."""
+        that carries the forwarded token; code_execution scrubs it.
+        docs/decisions/0005: swe is the one documented exception -- it never
+        runs git/gh itself, so it gets no repository credential at all."""
         import yaml
         for f in sorted((ROOT / "profiles").glob("*/config.yaml")):
+            if f.parent.name == "swe":
+                continue
             with self.subTest(profile=f.parent.name):
                 config = yaml.safe_load(f.read_text())
                 self.assertIn("terminal", self.toolsets(f.parent.name))
@@ -202,7 +206,27 @@ class DeclarationTests(unittest.TestCase):
         config = yaml.safe_load((ROOT / "profiles" / "council" / "config.yaml").read_text())
         disabled = config["agent"]["disabled_toolsets"]
         self.assertIn("code_execution", disabled)
+
+    def test_swe_has_no_terminal_or_code_execution(self):
+        """v4 slice: swe never edits a repository itself -- the
+        coding-harness MCP tool's configured adapter does, inside a
+        worktree the harness manages. No terminal (a shell is how "never
+        edits directly" would actually get violated) and no code_execution,
+        enforced here rather than only described in SOUL.md. Its
+        mcp_servers.coding-harness grant is not in config.yaml at all --
+        set by compose/v4/bootstrap-hermes.sh with `hermes -p ralph-swe
+        config set`, the same mcp_servers-is-never-merged-from-YAML
+        mechanism every other profile's MCP grant uses (#134) -- so there
+        is nothing to assert against this file for that grant."""
+        import yaml
+        declared = self.toolsets("swe")
+        self.assertNotIn("terminal", declared)
+        self.assertNotIn("code_execution", declared)
+        config = yaml.safe_load((ROOT / "profiles" / "swe" / "config.yaml").read_text())
+        disabled = config["agent"]["disabled_toolsets"]
+        self.assertIn("code_execution", disabled)
         self.assertIn("delegation", disabled)
+        self.assertNotIn("skills", disabled, "create_dir needs the skills toolset enabled to mean anything")
 
     def test_isolated_profiles_stay_off_the_board(self):
         """Lenses and synthesis must not plan or change their own review graph;
