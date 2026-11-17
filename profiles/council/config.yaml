@@ -1,10 +1,16 @@
-# council convenes the judge panel (spec Sec 4, docs/v4-spec.docx): a
-# persistent Tier B worker, not a stateless function the orchestrator calls
-# directly. It keeps its own skill lane so rubric-calibration lessons
-# (overturned verdicts, miscalibrated judges) persist across runs the same
-# way builder's repo quirks do, per profiles/PRINCIPLES.md "write down what
-# lasts" -- never in a stateless judge's own context, since judges are
-# recreated fresh on every invocation.
+# council convenes the judge panel (see docs/1-projects/v4-architecture/pr-review-slice.md
+# and the v4 spec it summarizes): a persistent Tier B worker, not a stateless
+# function the orchestrator calls directly. It keeps its own skill lane so
+# rubric-calibration lessons (overturned verdicts, miscalibrated judges)
+# persist across runs the same way builder's repo quirks do, per
+# profiles/PRINCIPLES.md "write down what lasts" -- never in a stateless
+# judge's own context, since judges are recreated fresh on every invocation.
+#
+# Scaffold only: no judge profiles or shared rubric exist yet, so this
+# profile has kanban to escalate/route but no code_execution or delegation --
+# it never writes the artifact it evaluates and never acts as a judge
+# itself. Per AGENTS.md, that boundary is enforced here (disabled_toolsets),
+# not only asserted in SOUL.md.
 model:
   provider: anthropic
   default: claude-sonnet-5
@@ -34,6 +40,10 @@ skills:
   create_dir: /ralph/private-skills/council
   creation_nudge_interval: 0
 agent:
+  # No code_execution: council never edits the artifact it evaluates. No
+  # delegation: it convenes named judge profiles through the board, once
+  # they exist, not through delegate_task.
+  disabled_toolsets: [code_execution, delegation, browser, computer_use, vision, image_gen, tts, connections]
   max_turns: 60
   run_budget_seconds: 900
   api_max_retries: 0
