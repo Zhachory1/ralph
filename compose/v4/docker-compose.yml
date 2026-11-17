@@ -1,0 +1,69 @@
+# v4 control-plane skeleton (spec: docs/v4-spec.docx).
+#
+# Scope of this file: Postgres+pgvector, Vikunja and n8n only -- the three
+# new control-plane primitives this slice proves out. No Hermes, no
+# knowledge service, no chat sidecar: those stay on compose/docker-compose.yml
+# until a later slice ports them. Nothing here touches that file or its
+# volumes; this is a separate compose project so the two stacks can run side
+# by side on one machine.
+name: ${RALPH_V4_INSTANCE:-ralph-v4}
+
+services:
+  postgres:
+    image: pgvector/pgvector:${POSTGRES_VERSION:?set POSTGRES_VERSION, never latest}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ralph}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run bootstrap/secrets or set POSTGRES_PASSWORD}
+      POSTGRES_DB: agent_memory
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ralph} -d agent_memory"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  vikunja:
+    image: vikunja/vikunja:${VIKUNJA_VERSION:?set VIKUNJA_VERSION, never latest}
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: "http://127.0.0.1:${VIKUNJA_PORT:-3456}"
+      VIKUNJA_DATABASE_TYPE: "postgres"
+      VIKUNJA_DATABASE_HOST: "postgres"
+      VIKUNJA_DATABASE_DATABASE: "pm_tracker"
+      VIKUNJA_DATABASE_USER: ${POSTGRES_USER:-ralph}
+      VIKUNJA_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?run bootstrap/secrets or set POSTGRES_PASSWORD}
+      VIKUNJA_WEBHOOKS_ENABLED: "true"
+    ports:
+      - "127.0.0.1:${VIKUNJA_PORT:-3456}:3456"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:?set N8N_VERSION, never latest}
+    environment:
+      N8N_HOST: "127.0.0.1"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "http"
+      DB_TYPE: "postgresdb"
+      DB_POSTGRESDB_HOST: "postgres"
+      DB_POSTGRESDB_DATABASE: "agent_memory"
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-ralph}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?run bootstrap/secrets or set POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  n8n_data:
