@@ -1,0 +1,38 @@
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    # The board is this profile's whole job: it plans a feature's PRD/design/
+    # plan/build graph and watches for cards that stalled, the same reason
+    # the orchestrator carries kanban. No code_execution: it never writes
+    # code itself, only cards for the profiles that do (author, builder) --
+    # the same shape review-workflow already has for its own graph.
+    # terminal is for the tracker (bootstrap/tracker-work) and reading
+    # repositories with gh. Like every profile it carries the instance's
+    # repository token there; that is decision 0001's accepted risk, not a
+    # new one, and it holds no push token (only author, builder,
+    # maintainer and librarian get RALPH_MAINTAIN_TOKEN).
+    - terminal
+    - kanban
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  external_dirs:
+    - /ralph/skills/voice
+    - /ralph/skills/plan
+    - /ralph/skills/meta
+  creation_nudge_interval: 0
+agent:
+  max_turns: 60
+  run_budget_seconds: 900
+  api_max_retries: 0

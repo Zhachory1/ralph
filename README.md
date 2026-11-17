@@ -18,7 +18,7 @@ Every profile starts with the shared [Ralph principles](profiles/PRINCIPLES.md):
 
 ## How it works
 
-Work runs as a graph of linked cards on a Hermes Kanban board. The orchestrator plans the graph; the dispatcher runs it. Profiles never chat with each other — they hand off through cards and through GitHub, which keeps coordination deterministic and keeps one bad agent turn from derailing a feature mid-flight.
+Work runs as a graph of linked cards on a Hermes Kanban board. The orchestrator classifies each request and hands it to a workflow profile, which plans its graph (feature-workflow for features; the orchestrator still plans an analysis itself); the dispatcher runs it. Profiles never chat with each other — they hand off through cards and through GitHub, which keeps coordination deterministic and keeps one bad agent turn from derailing a feature mid-flight.
 
 ```
 PRD → scope check → DD draft → council critique → [you approve] →
@@ -33,7 +33,8 @@ A new profile is justified by different permissions, resources, or lifecycle —
 
 | Profile | Can | Cannot |
 | --- | --- | --- |
-| orchestrator | Talk to you, own the board | Write to any repo |
+| orchestrator | Talk to you, classify a request, open and close its tracker item | Write to any repo, build a feature's own card graph |
+| feature-workflow | Decide a feature's mode, build and run its PRD/design/plan/build graph, report back to the orchestrator | Write to any repo, talk to you directly, open or close the tracker item |
 | review-workflow | Stage a PR's evidence, decide review depth, create its lens and synthesis cards | Write to any repo, review code itself, publish anything |
 | author | Write the docs repo | Touch code repos |
 | reviewer | Comment, request changes | Approve, push |
@@ -48,7 +49,7 @@ A new profile is justified by different permissions, resources, or lifecycle —
 
 The docs repository's default-branch protection is a prerequisite: an active ruleset with an empty bypass list, so no token — not even the owner's — can push straight to its default branch. That ruleset, not the librarian's push token, is what makes "agents don't merge" hold for the docs repository; protect it before installing the librarian on an instance.
 
-All eleven exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other six are built and unexercised until the librarian's first pull request merges.
+All thirteen exist. Five have done real work: the orchestrator planned a feature's card graph, the author wrote a design that shipped, the builder wrote the three pull requests that implemented it, the reviewer found a status-code enumeration leak nothing else caught, and the researcher answered a question about this repository's own sandbox. The other eight are built and unexercised until the librarian's first pull request merges.
 
 ### Invariants live in permissions, not prose
 
