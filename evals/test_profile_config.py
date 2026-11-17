@@ -210,6 +210,20 @@ class DeclarationTests(unittest.TestCase):
         config = yaml.safe_load((ROOT / "profiles" / "council" / "config.yaml").read_text())
         disabled = config["agent"]["disabled_toolsets"]
         self.assertIn("code_execution", disabled)
+
+    def test_swe_has_no_terminal_or_code_execution(self):
+        """v4 slice: swe never edits a repository itself -- the
+        coding-harness MCP tool's configured adapter does, inside a
+        worktree the harness manages. No terminal (a shell is how "never
+        edits directly" would actually get violated) and no code_execution,
+        enforced here rather than only described in SOUL.md."""
+        import yaml
+        declared = self.toolsets("swe")
+        self.assertNotIn("terminal", declared)
+        self.assertNotIn("code_execution", declared)
+        config = yaml.safe_load((ROOT / "profiles" / "swe" / "config.yaml").read_text())
+        self.assertIn("code_execution", config["agent"]["disabled_toolsets"])
+        self.assertIn("coding-harness", config.get("mcp_servers", {}))
         self.assertIn("delegation", disabled)
 
     def test_isolated_profiles_stay_off_the_board(self):
