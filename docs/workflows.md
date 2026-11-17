@@ -34,7 +34,7 @@ sequenceDiagram
     N->>FW: completes "Approve plan" gate
     FW->>B: decompose: one build card per planned PR, as written
     FW->>O: one card: work_id, outcome, summary (when done, or when it needs a human)
-    O->>O: outcome done: close work_id; otherwise set Feedback and block for the owner
+    O->>O: outcome done: close work_id, Chat reply; otherwise Feedback + a blocked Decide card (unblock resumes, archive drops)
 ```
 
 - The author grounds the PRD in current code, tools and decisions first. PRD, design and implementation plan are separate pull requests.
