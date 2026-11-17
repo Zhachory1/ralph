@@ -8,6 +8,11 @@ platform_toolsets:
     # the orchestrator carries kanban. No code_execution: it never writes
     # code itself, only cards for the profiles that do (author, builder) --
     # the same shape review-workflow already has for its own graph.
+    # terminal is for the tracker (bootstrap/tracker-work) and reading
+    # repositories with gh. Like every profile it carries the instance's
+    # repository token there; that is decision 0001's accepted risk, not a
+    # new one, and it holds no push token (only author, builder,
+    # maintainer and librarian get RALPH_MAINTAIN_TOKEN).
     - terminal
     - kanban
     - file
