@@ -135,6 +135,8 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 - Clears package caches when a profile's sandbox home passes 5 GB.
 - If any board cannot be read, it deletes nothing.
 
+`bootstrap/reap-sandboxes`, also run by review-loop at most hourly, removes sandbox *containers* that Hermes left behind (`container_persistent: false` does not always remove them at volume). A container is removed only if it belongs to this instance (its `/workspace` mount is under `RALPH_SANDBOX_ROOT`), every process in it is `docker-init` or `sleep`, and it has been idle for the grace period. Any read failure keeps the container. A removal that fails is reported and makes the pass fail, so the next poll retries it.
+
 ## Knowledge: search and memories
 
 **Entry:** any card or WebUI chat on a profile with the knowledge tools. **Exit:** an answer that cites documents, and maybe one memory note. **Owners:** the knowledge service, `refresh-knowledge`, every searching profile.

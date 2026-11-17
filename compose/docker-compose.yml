@@ -292,6 +292,10 @@ services:
       # The maintenance circuit breaker posts its one alert here.
       RALPH_NOTIFY_URL: ${RALPH_NOTIFY_URL:-${GCHAT_WEBHOOK_URL:-}}
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
+      # bootstrap/reap-sandboxes matches a sandbox container's own /workspace
+      # mount against this: the host path, not a container-internal one, so
+      # it has to be the same value hermes itself gets, not RALPH_WORKSPACES.
+      RALPH_SANDBOX_ROOT: ${RALPH_SANDBOX_ROOT}
       DOCKER_HOST: tcp://socket-proxy:2375
       # The repo cache is shared with hermes over a host bind mount, and git's
       # ownership check intermittently refused fetches there ("dubious
