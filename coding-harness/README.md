@@ -52,6 +52,27 @@ runs the configured adapter non-interactively inside it, and returns:
 }
 ```
 
+`"error"` means setup/infra failed before the adapter ever ran (bad
+`rfc_path`, a broken or raced worktree, the adapter binary missing). `"failed"`
+means the adapter ran but did not complete cleanly (non-zero exit, or exited
+0 without emitting a parseable final message). A caller should treat these
+differently: an `"error"` is a request/environment problem to fix before
+retrying; a `"failed"` is a legitimate adapter outcome.
+
+## Known limitations, accepted for this slice
+
+- **Unbounded output buffering.** The adapter's stdout/stderr are
+  accumulated as plain strings with no size cap. A very long-running or
+  unusually chatty adapter run grows memory proportionally; fine for a
+  single-ticket proof of concept, worth a cap before this runs unattended
+  against arbitrary tickets.
+- **RFC/criteria content can resurface verbatim.** `test_summary` is the
+  adapter's own final message, which may echo back content from the RFC or
+  acceptance criteria; `open_questions` on a `"failed"` run includes a slice
+  of the adapter's raw stderr. Neither is redacted. If an RFC or criteria
+  ever carries sensitive data, that data can appear in this tool's return
+  payload -- a concern for whatever calls this harness, not solved here.
+
 ## A real gotcha this slice found
 
 `child_process.spawn()`'s default stdio (`pipe` for stdin) leaves stdin open
