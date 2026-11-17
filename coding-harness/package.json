@@ -1,0 +1,14 @@
+{
+  "name": "ralph-coding-harness",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Host-native MCP server (spec Sec 11): a thin wrapper that shells out to a configured coding CLI per the harness-agnostic contract (Sec 11.0), rather than reimplementing coding/testing/worktree logic.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  }
+}
