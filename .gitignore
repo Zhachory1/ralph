@@ -23,3 +23,5 @@ skills/write/stop-slop/
 skills/debug/debug-investigation/
 skills/review/pr-review/
 compose/no-private-jobs/
+node_modules/
+coding-harness/.harness-worktrees/
