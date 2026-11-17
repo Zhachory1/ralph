@@ -1,0 +1,59 @@
+{
+  "name": "v4-inbound-pr-review-intake",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inbound-pr-review",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "v4-inbound-pr-review"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO inbound_pr_reviews (repo, pr_number, head_sha, author_login, title, status) VALUES ($1, $2, $3, $4, $5, 'pending') ON CONFLICT (repo, pr_number) DO UPDATE SET head_sha = EXCLUDED.head_sha, title = EXCLUDED.title, status = 'pending', updated_at = NOW() RETURNING *;",
+        "options": {
+          "queryReplacement": "={{ $json.body.repo }},{{ $json.body.pr_number }},{{ $json.body.head_sha }},{{ $json.body.author_login }},{{ $json.body.title }}"
+        }
+      },
+      "id": "postgres-node",
+      "name": "Upsert inbound_pr_reviews",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__SET_AFTER_IMPORT__",
+          "name": "ralph-v4-postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Upsert inbound_pr_reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {}
+}

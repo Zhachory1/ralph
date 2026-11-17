@@ -59,19 +59,53 @@ curl 127.0.0.1:3456/api/v1/info           # 200, Vikunja v0.24.6
 curl 127.0.0.1:5678/healthz               # 200, n8n
 ```
 
-Confirms the schema applies and all three services boot and respond. Wiring
-an actual n8n workflow against this schema, and an actual Vikunja board/ticket
-flow, is the next slice — this one is infra-exists-and-boots, not
-flow-is-live.
+This infra-boot check is from the prior commit. This slice adds two things
+proven against that infra, both with synthetic data rather than a live
+GitHub token — no real discovery yet, see Non-goals below:
+
+1. **Vikunja project + the 8 columns from spec Sec 5.** `bootstrap-vikunja.sh`
+   creates the `ralph` project and its kanban buckets (`Triage`, `RFC Author`,
+   `Council Review`, `Backlog`, `Ready`, `Peer Review`, `Director PR Merge`,
+   `Done`) through Vikunja's own REST API, idempotently — re-running it a
+   second time against the same instance creates nothing and reports every
+   bucket already present. Verified end-to-end: ran it against a fresh stack,
+   confirmed exactly 8 buckets with no duplicates, created a test task and
+   moved it into Triage through `/projects/{id}/views/{view}/tasks`.
+2. **One real n8n workflow** (`workflows/inbound-pr-review-intake.json`):
+   a webhook trigger that upserts into `inbound_pr_reviews` on
+   `(repo, pr_number)`, matching the spec's own dedup shape for Sec 6.2.
+   Imported the committed file into a fresh n8n instance via its REST API,
+   activated it, and fired two webhook calls for the same `(repo, pr_number)`
+   with different `head_sha` values: confirmed exactly one row, with
+   `head_sha` advancing to the second call's value — the "triggers... when
+   `head_sha` advances" dedup behavior Sec 6.2 describes, proven against a
+   real Postgres write, not asserted.
+
+Both were torn down after verification; nothing is left running.
+
+## What this slice does NOT prove
+
+- No GitHub GraphQL polling. The webhook was fired by hand with a synthetic
+  payload, not by n8n's own 3-minute poller reading real PRs. That poller
+  node is not built yet.
+- No connection to the live Hermes `review-workflow` profile. The n8n
+  workflow writes to Postgres and stops; nothing calls `review-workflow` or
+  any other Hermes profile from this stack yet. Bridging `ralph-v4`'s n8n
+  into the live `ralph` compose project's `hermes` container is its own
+  decision (network, credential, and container-naming implications) not
+  made in this slice.
+- No `publish-review` integration. `publish-review` still reads/writes
+  nothing in this schema; wiring it to update `inbound_pr_reviews.status`
+  alongside its GitHub write is unstarted.
 
 ## Next slice
 
-1. One n8n workflow: GraphQL poll -> upsert `inbound_pr_reviews` -> webhook
-   into the (still-Hermes) `review-workflow` profile, replacing the cron call
-   to `discover-reviews` for one test repo.
-2. One Vikunja project/board with the column set from spec Sec 5, and
-   `publish-review` updating the ticket's status alongside its existing
-   GitHub write.
-3. Only after both run cleanly against a real low-risk PR: consider whether
-   `discover-reviews`' Python moves into an n8n Code node, or stays a
-   script n8n shells out to (no decision made yet; both satisfy the spec).
+1. Add the GraphQL-poll node in front of the webhook (or replace the webhook
+   entirely with a cron-triggered poll), reading real PRs for one test repo
+   under `review-requested:@me`, still writing only to `inbound_pr_reviews`
+   — no Hermes call yet.
+2. Decide how `ralph-v4`'s n8n reaches the live `hermes` container (shared
+   Docker network vs. a second bridge network vs. keeping them fully
+   separate until a real cutover), before wiring the webhook-to-profile leg.
+3. Only after both: `publish-review` updates `inbound_pr_reviews.status`
+   alongside its existing GitHub write, against one real low-risk PR.
