@@ -55,6 +55,12 @@ services:
       DB_POSTGRESDB_DATABASE: "agent_memory"
       DB_POSTGRESDB_USER: ${POSTGRES_USER:-ralph}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?run bootstrap/secrets or set POSTGRES_PASSWORD}
+      # n8n encrypts every stored credential (GitHub token, Vikunja API key,
+      # ...) with this key and persists it into n8n_data on first boot if
+      # unset -- losing or regenerating that volume without a pinned key
+      # loses those credentials silently. Pinned explicitly rather than left
+      # to auto-generate.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?run bootstrap/secrets or set N8N_ENCRYPTION_KEY}
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     volumes:

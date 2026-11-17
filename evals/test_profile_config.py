@@ -200,6 +200,18 @@ class DeclarationTests(unittest.TestCase):
             with self.subTest(profile=name):
                 self.assertIn("kanban", self.toolsets(name))
 
+    def test_council_reaches_the_board_but_cannot_edit_or_delegate(self):
+        """v4 slice: council routes decisions through kanban (escalate,
+        advance, revise) but never writes the artifact it evaluates and
+        never acts as a judge itself -- enforced here, not only in SOUL.md,
+        per AGENTS.md's "invariants in permissions, not prose"."""
+        import yaml
+        self.assertIn("kanban", self.toolsets("council"))
+        config = yaml.safe_load((ROOT / "profiles" / "council" / "config.yaml").read_text())
+        disabled = config["agent"]["disabled_toolsets"]
+        self.assertIn("code_execution", disabled)
+        self.assertIn("delegation", disabled)
+
     def test_isolated_profiles_stay_off_the_board(self):
         """Lenses and synthesis must not plan or change their own review graph;
         the chat and inbox profiles read untrusted text with a fixed shape."""

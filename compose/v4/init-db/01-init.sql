@@ -15,7 +15,9 @@ CREATE TABLE workflow_registry (
     target_profile    TEXT NOT NULL DEFAULT 'orchestrator',
     name              TEXT NOT NULL,
     description       TEXT NOT NULL,
-    description_embed VECTOR(1536),
+    -- 768, matching bootstrap/knowledge-init's embeddinggemma-300M: the
+    -- only embedding model this repo runs, local, no cloud call.
+    description_embed VECTOR(768),
     input_schema      JSONB NOT NULL,
     execution_target  TEXT NOT NULL,
     requires_approval BOOLEAN NOT NULL DEFAULT TRUE,
