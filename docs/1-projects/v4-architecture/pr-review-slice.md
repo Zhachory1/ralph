@@ -66,20 +66,39 @@ GitHub token — no real discovery yet, see Non-goals below:
 1. **Vikunja project + the 8 columns from spec Sec 5.** `bootstrap-vikunja.sh`
    creates the `ralph` project and its kanban buckets (`Triage`, `RFC Author`,
    `Council Review`, `Backlog`, `Ready`, `Peer Review`, `Director PR Merge`,
-   `Done`) through Vikunja's own REST API, idempotently — re-running it a
+   `Done`) through Vikunja's own REST API, idempotently -- re-running it a
    second time against the same instance creates nothing and reports every
    bucket already present. Verified end-to-end: ran it against a fresh stack,
-   confirmed exactly 8 buckets with no duplicates, created a test task and
-   moved it into Triage through `/projects/{id}/views/{view}/tasks`.
+   confirmed exactly 8 buckets with no duplicates and in spec Sec 5's order
+   by position, created a test task, and moved it into Triage through
+   `/projects/{id}/views/{view}/tasks`.
+
+   One real gotcha surfaced and fixed during verification: Vikunja's API
+   refuses to delete a view's last remaining bucket, so the script cannot
+   delete the project's auto-created default bucket until after the 8 named
+   buckets exist, and the default bucket's own title (`"Backlog"`) has to be
+   excluded from the "does this column already exist" check -- otherwise the
+   script would skip creating a real `Backlog` column (seeing the default's
+   title as a match) and then delete that same default bucket at the end,
+   leaving the board with 7 columns and no `Backlog` at all. Caught by
+   actually counting buckets after a run, not by inspecting the script.
 2. **One real n8n workflow** (`workflows/inbound-pr-review-intake.json`):
    a webhook trigger that upserts into `inbound_pr_reviews` on
    `(repo, pr_number)`, matching the spec's own dedup shape for Sec 6.2.
    Imported the committed file into a fresh n8n instance via its REST API,
    activated it, and fired two webhook calls for the same `(repo, pr_number)`
    with different `head_sha` values: confirmed exactly one row, with
-   `head_sha` advancing to the second call's value — the "triggers... when
+   `head_sha` advancing to the second call's value -- the "triggers... when
    `head_sha` advances" dedup behavior Sec 6.2 describes, proven against a
    real Postgres write, not asserted.
+
+   The Postgres node binds its 5 parameters via an n8n array expression
+   (`[$json.body.repo, ...]`), not a comma-joined string -- the first version
+   of this workflow used a comma-joined string, which n8n splits on `,` to
+   bind positional parameters, so any field containing a comma (a PR title
+   like "fix: X, improve Y" is common) would desync every parameter after it.
+   Verified by firing a webhook call with a 3-comma title and confirming the
+   full, unsplit title landed in Postgres.
 
 Both were torn down after verification; nothing is left running.
 
@@ -88,6 +107,11 @@ Both were torn down after verification; nothing is left running.
 - No GitHub GraphQL polling. The webhook was fired by hand with a synthetic
   payload, not by n8n's own 3-minute poller reading real PRs. That poller
   node is not built yet.
+- No webhook authentication. The committed workflow accepts any POST with
+  no shared secret or signature check, safe only because n8n is bound to
+  `127.0.0.1` only (`compose/v4/docker-compose.yml`). Add a shared-secret
+  header check before this is ever reachable beyond localhost -- noted
+  in-file on the webhook node itself, not only here.
 - No connection to the live Hermes `review-workflow` profile. The n8n
   workflow writes to Postgres and stops; nothing calls `review-workflow` or
   any other Hermes profile from this stack yet. Bridging `ralph-v4`'s n8n
