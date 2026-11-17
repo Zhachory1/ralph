@@ -96,15 +96,16 @@ class IsIdleTests(unittest.TestCase):
 
 
 NOW = 1_800_000_000
-OLD_START = "2026-01-01T00:00:00.123456789Z"  # long before NOW
 
 
-def started_at(stamp=OLD_START):
-    return mock.Mock(returncode=0, stdout=stamp + "\n", stderr="")
+def labels(profile="ralph-lens-mvp", session="20261117_172653_5f582d"):
+    return mock.Mock(returncode=0, stdout=f"{profile} {session}\n", stderr="")
 
 
-def exec_events(*epochs):
-    return mock.Mock(returncode=0, stdout="".join(f"{e}\n" for e in epochs), stderr="")
+def session(result):
+    """The hermes container's answer for the owning session: an epoch,
+    "open", or "missing"."""
+    return mock.Mock(returncode=0, stdout=f"{result}\n", stderr="")
 
 
 def ok():
@@ -112,71 +113,89 @@ def ok():
 
 
 class MainTests(unittest.TestCase):
-    """The end-to-end wiring: only an idle, in-scope container past the grace
-    period is removed, and a failed removal fails the run."""
+    """The end-to-end wiring: only an idle, in-scope container whose Hermes
+    session has ended is removed, and a failed removal fails the run."""
 
     def run_main(self, argv, run_side_effects):
         import sys
         with mock.patch.object(reap.subprocess, "run", side_effect=run_side_effects) as run, \
                 mock.patch.object(reap.time, "time", return_value=NOW), \
+                mock.patch.dict(reap.os.environ, {"RALPH_HERMES_CONTAINER": "ralph-hermes-1"}), \
                 mock.patch.object(sys, "argv", ["reap-sandboxes", *argv]):
             rc = reap.main()
         return run, rc
 
-    def candidate(self):
+    def idle_candidate(self):
         return [ps_names("hermes-aa"),
-                inspect_mount(f"{ROOT}/ralph-lens-mvp/docker/default/workspace")]
+                inspect_mount(f"{ROOT}/ralph-lens-mvp/docker/default/workspace"),
+                ps_eo_comm("docker-init", "sleep")]
 
     @staticmethod
     def rm_calls(run):
         return [c for c in run.call_args_list if c.args[0][:2] == ["docker", "rm"]]
 
-    def test_an_idle_container_past_the_grace_period_is_removed(self):
-        run, rc = self.run_main(["--sandbox-root", ROOT], self.candidate() + [
-            ps_eo_comm("docker-init", "sleep"), started_at(), exec_events(), ok()])
+    def test_a_container_whose_session_ended_long_ago_is_removed(self):
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels(), session(NOW - 3600), ok()])
         self.assertEqual(1, len(self.rm_calls(run)))
         self.assertIn("hermes-aa", self.rm_calls(run)[0].args[0])
         self.assertEqual(0, rc)
 
+    def test_the_session_is_read_from_its_own_profiles_store(self):
+        run, _ = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels("ralph-lens-mvp", "20261117_172653_5f582d"), session(NOW - 3600), ok()])
+        query = next(c.args[0] for c in run.call_args_list if "-c" in c.args[0])
+        self.assertIn("/home/hermes/.hermes/profiles/ralph-lens-mvp/state.db", query)
+        self.assertIn("20261117_172653_5f582d", query)
+
     def test_a_busy_container_is_kept(self):
-        run, rc = self.run_main(["--sandbox-root", ROOT], self.candidate() + [
+        run, rc = self.run_main(["--sandbox-root", ROOT], [
+            ps_names("hermes-aa"),
+            inspect_mount(f"{ROOT}/ralph-lens-mvp/docker/default/workspace"),
             ps_eo_comm("docker-init", "sleep", "python3")])
         self.assertEqual([], self.rm_calls(run))
 
-    def test_a_sleeping_container_with_a_recent_command_is_kept(self):
-        """Review finding: an agent between terminal calls leaves its sandbox
-        sleeping. A recent exec means its task may still be live."""
-        recent = NOW - 600
-        run, rc = self.run_main(["--sandbox-root", ROOT], self.candidate() + [
-            ps_eo_comm("docker-init", "sleep"), started_at(), exec_events(recent)])
+    def test_a_sleeping_container_whose_session_is_still_open_is_kept(self):
+        """Review findings: an agent between terminal calls leaves its sandbox
+        sleeping, and Docker's event log can drop its recent exec. The open
+        session is what proves the task is live."""
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels(), session("open")])
         self.assertEqual([], self.rm_calls(run))
         self.assertEqual(0, rc)
 
-    def test_a_recently_started_container_with_no_commands_is_kept(self):
-        run, rc = self.run_main(["--sandbox-root", ROOT], self.candidate() + [
-            ps_eo_comm("docker-init", "sleep"),
-            started_at("2027-01-15T07:50:00.000000000Z"),  # NOW minus 10 minutes
-            exec_events()])
+    def test_a_session_that_just_ended_is_kept_for_the_grace_period(self):
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels(), session(NOW - 60)])
         self.assertEqual([], self.rm_calls(run))
 
-    def test_unreadable_activity_keeps_the_container(self):
-        run, rc = self.run_main(["--sandbox-root", ROOT], self.candidate() + [
-            ps_eo_comm("docker-init", "sleep"), started_at(),
-            mock.Mock(returncode=1, stdout="", stderr="events failed")])
+    def test_an_unknown_session_keeps_the_container(self):
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels(), session("missing")])
+        self.assertEqual([], self.rm_calls(run))
+
+    def test_unexpected_labels_keep_the_container_and_are_never_queried(self):
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels("../etc", "x; rm -rf /")])
+        self.assertEqual([], self.rm_calls(run))
+        self.assertFalse(any("-c" in c.args[0] for c in run.call_args_list))
+
+    def test_an_unreadable_session_store_keeps_the_container(self):
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels(), mock.Mock(returncode=1, stdout="", stderr="no such table")])
         self.assertEqual([], self.rm_calls(run))
 
     def test_a_failed_removal_is_not_counted_and_fails_the_run(self):
         """Review finding: a failed docker rm was reported as reaped and the
         run exited 0, so the hourly stamp hid it until the next hour."""
-        run, rc = self.run_main(["--sandbox-root", ROOT], self.candidate() + [
-            ps_eo_comm("docker-init", "sleep"), started_at(), exec_events(),
-            mock.Mock(returncode=1, stdout="", stderr="conflict")])
+        run, rc = self.run_main(["--sandbox-root", ROOT], self.idle_candidate() + [
+            labels(), session(NOW - 3600), mock.Mock(returncode=1, stdout="", stderr="conflict")])
         self.assertEqual(1, len(self.rm_calls(run)))
         self.assertEqual(1, rc)
 
     def test_dry_run_reports_without_removing(self):
-        run, rc = self.run_main(["--sandbox-root", ROOT, "--dry-run"], self.candidate() + [
-            ps_eo_comm("docker-init", "sleep"), started_at(), exec_events()])
+        run, rc = self.run_main(["--sandbox-root", ROOT, "--dry-run"], self.idle_candidate() + [
+            labels(), session(NOW - 3600)])
         self.assertEqual([], self.rm_calls(run))
         self.assertEqual(0, rc)
 

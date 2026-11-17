@@ -28,29 +28,27 @@ instance-specific, unlike the container name or image, both shared.
 A container is reaped only if both hold:
 - every process inside it is `docker-init`, `sleep`, or the `ps` call
   checking it, read live (`docker exec ... ps -eo comm`); and
-- no command has started in it for GRACE_SECONDS, read from Docker's own
-  `exec_start` events. An agent works outside its sandbox between terminal
+- the Hermes session that owns it (its `hermes-profile` and `hermes-task-id`
+  labels) has ended, per that profile's own session store, at least
+  GRACE_SECONDS ago. An agent works outside its sandbox between terminal
   calls, so a sleeping container alone does not prove its task is over; the
-  grace period is longer than the longest card runtime, so a live task always
-  has a recent call.
+  session record does, and unlike Docker's event log it is not truncated.
 Any read failure keeps the container. A failed `docker rm` is reported and
 makes the run exit nonzero, so run-review-loop retries on the next poll
 instead of stamping the hour done.
 """
 
 import argparse
-import datetime
+import os
 import re
 import subprocess
 import sys
 import time
 
 IDLE_COMMANDS = {"docker-init", "sleep", "ps"}
-# An agent works outside its sandbox between terminal calls, so an idle
-# process list alone does not prove its task is over. A container is only
-# reaped after no command has run in it for longer than the longest card
-# runtime (7200s), so a live task always has a call inside that window.
-GRACE_SECONDS = 3 * 3600
+# How long after its Hermes session ended a sandbox may still be reaped.
+# A margin, not the proof: the ended session is the proof.
+GRACE_SECONDS = 600
 
 
 def sandbox_containers(sandbox_root: str) -> list[str]:
@@ -94,29 +92,36 @@ def is_idle(name: str) -> bool:
     return all(ln in IDLE_COMMANDS for ln in lines)
 
 
-def last_activity(name: str) -> float | None:
-    """Epoch seconds of the container's newest start or exec, from Docker's
-    own event log. None on a read failure, which keeps the container."""
-    r = subprocess.run(["docker", "inspect", name, "--format", "{{.State.StartedAt}}"],
+SESSION_QUERY = """
+import sqlite3, sys
+db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+row = db.execute("select ended_at from sessions where id = ?", (sys.argv[2],)).fetchone()
+print("missing" if row is None else ("open" if row[0] is None else row[0]))
+"""
+
+
+def session_ended(name: str) -> float | None:
+    """When the Hermes session that owns this sandbox ended, from that
+    profile's own session store -- the authoritative record, unlike Docker's
+    event log, which keeps only the newest events and can drop a recent one.
+    None for an open session, a missing record, or any read failure: all of
+    them keep the container."""
+    r = subprocess.run(["docker", "inspect", name, "--format",
+                        '{{index .Config.Labels "hermes-profile"}} {{index .Config.Labels "hermes-task-id"}}'],
                        capture_output=True, text=True, timeout=15)
-    if r.returncode != 0:
+    parts = r.stdout.split() if r.returncode == 0 else []
+    container = os.environ.get("RALPH_HERMES_CONTAINER")
+    if len(parts) != 2 or not container \
+            or not re.fullmatch(r"ralph-[a-z-]+", parts[0]) or not re.fullmatch(r"[0-9_a-f]+", parts[1]):
         return None
+    profile, session = parts
+    q = subprocess.run(["docker", "exec", "-u", "hermes", container, "python3", "-c", SESSION_QUERY,
+                        f"/home/hermes/.hermes/profiles/{profile}/state.db", session],
+                       capture_output=True, text=True, timeout=30)
     try:
-        # Docker gives nanoseconds; fromisoformat takes at most microseconds.
-        stamp = re.sub(r"(\.\d{6})\d+", r"\1", r.stdout.strip()).replace("Z", "+00:00")
-        newest = datetime.datetime.fromisoformat(stamp).timestamp()
+        return float(q.stdout.strip()) if q.returncode == 0 else None
     except ValueError:
         return None
-    e = subprocess.run(["docker", "events", "--since", str(int(newest)), "--until", "0s",
-                        "--filter", f"container={name}", "--filter", "event=exec_start",
-                        "--format", "{{.Time}}"],
-                       capture_output=True, text=True, timeout=30)
-    if e.returncode != 0:
-        return None
-    for line in e.stdout.split():
-        if line.isdigit():
-            newest = max(newest, float(line))
-    return newest
 
 
 def main():
@@ -133,8 +138,8 @@ def main():
     for name in names:
         if not is_idle(name):
             continue
-        last = last_activity(name)
-        if last is None or now - last < GRACE_SECONDS:
+        ended = session_ended(name)
+        if ended is None or now - ended < GRACE_SECONDS:
             continue
         if args.dry_run:
             print(f"reap-sandboxes: would reap {name} (idle)")
