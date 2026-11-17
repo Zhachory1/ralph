@@ -68,6 +68,21 @@ ensure_board queues Intake 'Chat and email intake'
         self.assertIn('profiles/ralph-review-synthesis/.env', INSTALL)
 
 
+class OrchestratorBoardRuleTests(unittest.TestCase):
+    """A maintainer's handoff to the orchestrator landed on `maintain`, and the
+    whole feature graph and its human gates followed it there. Handoffs and
+    the graphs they become belong on `ralph`."""
+
+    def test_principles_send_orchestrator_handoffs_to_ralph(self):
+        text = (ROOT / "profiles" / "PRINCIPLES.md").read_text()
+        self.assertIn("a card for `ralph-orchestrator`", text)
+        self.assertIn("always goes on `ralph`", text)
+
+    def test_orchestrator_builds_every_graph_on_ralph(self):
+        text = (ROOT / "profiles" / "orchestrator" / "SOUL.md").read_text()
+        self.assertIn("Every graph you build goes on `ralph`, whatever board your own card is on", text)
+
+
 class BoardComposeTests(unittest.TestCase):
     def test_review_loop_trusts_only_the_repo_cache_for_git(self):
         """The cache is a host bind mount shared with hermes; git's ownership
