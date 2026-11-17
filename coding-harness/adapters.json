@@ -1,0 +1,12 @@
+{
+  "_comment": "Per spec Sec 11.0: swapping the underlying CLI is a config change here, never a change to the MCP tool signatures in server.js. Each adapter maps the harness-agnostic contract (prompt flag, skill flag, skill placement, completion signal) onto one concrete CLI's actual flags.",
+  "mewrite": {
+    "command": "mewrite",
+    "promptFlag": "-p",
+    "modeFlag": ["--mode", "json"],
+    "skillFlag": "--skill",
+    "skillPlacement": "project",
+    "skillPlacementPath": ".mewrite/skills/<name>/SKILL.md",
+    "completionSignal": "exit-code-and-jsonl"
+  }
+}
