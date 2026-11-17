@@ -31,7 +31,21 @@ function git(args, cwd) {
       if (code !== 0) reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`));
       else resolvePromise(stdout);
     });
+    // Without this, a missing git binary or a cwd that does not exist emits
+    // an 'error' event with no listener, which Node treats as an uncaught
+    // exception and crashes the whole server process rather than rejecting
+    // this one call -- confirmed by reproducing it directly.
+    proc.on("error", reject);
   });
+}
+
+async function isValidWorktree(path) {
+  try {
+    const out = await git(["rev-parse", "--is-inside-work-tree"], path);
+    return out.trim() === "true";
+  } catch {
+    return false;
+  }
 }
 
 // Provisions an isolated worktree for this ticket, per spec Sec 11's
@@ -43,13 +57,40 @@ async function ensureWorktree(repoPath, branch, ticketId) {
   const worktreeRoot = resolve(repoPath, "..", ".harness-worktrees");
   const worktreePath = resolve(worktreeRoot, ticketId);
   mkdirSync(worktreeRoot, { recursive: true });
-  if (existsSync(worktreePath)) return worktreePath;
+
+  // A directory existing is not the same as a valid worktree: a prior run
+  // that crashed between mkdir and `git worktree add`, or any other stray
+  // directory at this path, must not be silently reused and fail opaquely
+  // on every later git call inside it.
+  if (existsSync(worktreePath)) {
+    if (await isValidWorktree(worktreePath)) return worktreePath;
+    throw new Error(
+      `${worktreePath} exists but is not a valid git worktree (a prior ` +
+      `run may have crashed mid-setup); remove it manually before retrying ticket ${ticketId}`
+    );
+  }
+
+  // Clears stale worktree metadata (e.g. a worktree directory removed by
+  // something other than `git worktree remove`), so a branch that exists
+  // with no live worktree does not get treated as still claimed.
+  await git(["worktree", "prune"], repoPath).catch(() => {});
 
   const branches = await git(["branch", "--list", branch], repoPath);
-  if (branches.trim()) {
-    await git(["worktree", "add", worktreePath, branch], repoPath);
-  } else {
-    await git(["worktree", "add", "-b", branch, worktreePath], repoPath);
+  try {
+    if (branches.trim()) {
+      await git(["worktree", "add", worktreePath, branch], repoPath);
+    } else {
+      await git(["worktree", "add", "-b", branch, worktreePath], repoPath);
+    }
+  } catch (err) {
+    // A second concurrent call for the same ticket_id racing this one is
+    // the most likely cause of a worktree-add failure right after the
+    // existsSync/prune checks above found nothing -- surfaced as its own
+    // message rather than git's raw (and less actionable) error text.
+    throw new Error(
+      `failed to create worktree for ticket ${ticketId} (a concurrent ` +
+      `implement_spec call for the same ticket is the most likely cause): ${err.message}`
+    );
   }
   return worktreePath;
 }
@@ -119,26 +160,58 @@ function parseJsonlCompletion(stdout) {
   return { finalText, turnEndSeen };
 }
 
+function errorPayload(branch, message) {
+  // "error" is reserved for setup/infra failures where the adapter never
+  // ran at all (bad rfc_path, a broken worktree, git itself failing) --
+  // distinct from "failed", which means the adapter ran and did not
+  // complete cleanly. A caller retries these differently: an "error" is a
+  // request/environment problem to fix before retrying; a "failed" is a
+  // legitimate adapter outcome that may just need a different approach.
+  return {
+    status: "error",
+    pr_url: null,
+    branch,
+    test_summary: null,
+    diff_stats: null,
+    open_questions: [message],
+  };
+}
+
 async function implementSpec(args) {
   const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
 
   if (!existsSync(rfc_path)) {
-    return {
-      status: "error",
-      pr_url: null,
-      branch,
-      test_summary: null,
-      diff_stats: null,
-      open_questions: [`rfc_path does not exist: ${rfc_path}`],
-    };
+    return errorPayload(branch, `rfc_path does not exist: ${rfc_path}`);
   }
 
-  const worktreePath = await ensureWorktree(repo_path, branch, ticket_id);
-  const rfcContent = readFileSync(rfc_path, "utf8");
+  let worktreePath;
+  try {
+    worktreePath = await ensureWorktree(repo_path, branch, ticket_id);
+  } catch (err) {
+    // Every setup failure (missing repo_path, a stray non-worktree
+    // directory, a concurrent call racing this one) returns the
+    // structured payload the MCP contract promises, rather than letting
+    // the rejection propagate as an unhandled protocol-level error.
+    return errorPayload(branch, `could not provision worktree: ${err.message}`);
+  }
+
+  let rfcContent;
+  try {
+    rfcContent = readFileSync(rfc_path, "utf8");
+  } catch (err) {
+    return errorPayload(branch, `could not read rfc_path: ${err.message}`);
+  }
   const prompt = buildPrompt(rfcContent, acceptance_criteria);
 
   const adapter = ADAPTERS.mewrite;
-  const result = await runAdapter(adapter, worktreePath, prompt, []);
+  let result;
+  try {
+    result = await runAdapter(adapter, worktreePath, prompt, []);
+  } catch (err) {
+    // spawn() itself failing (adapter binary missing, etc.) is also a
+    // setup failure, not the adapter "running and failing".
+    return errorPayload(branch, `could not run adapter: ${err.message}`);
+  }
   const { finalText, turnEndSeen } = parseJsonlCompletion(result.stdout);
 
   // --stat HEAD alone misses new untracked files -- a CLI run that only
