@@ -10,6 +10,7 @@
       },
       "id": "webhook-node",
       "name": "Webhook",
+      "notes": "No auth/signature check -- safe only while n8n binds 127.0.0.1 only (compose/v4/docker-compose.yml). Add a shared-secret header check before this is ever reachable beyond localhost.",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
@@ -23,7 +24,7 @@
         "operation": "executeQuery",
         "query": "INSERT INTO inbound_pr_reviews (repo, pr_number, head_sha, author_login, title, status) VALUES ($1, $2, $3, $4, $5, 'pending') ON CONFLICT (repo, pr_number) DO UPDATE SET head_sha = EXCLUDED.head_sha, title = EXCLUDED.title, status = 'pending', updated_at = NOW() RETURNING *;",
         "options": {
-          "queryReplacement": "={{ $json.body.repo }},{{ $json.body.pr_number }},{{ $json.body.head_sha }},{{ $json.body.author_login }},{{ $json.body.title }}"
+          "queryReplacement": "={{ [$json.body.repo, $json.body.pr_number, $json.body.head_sha, $json.body.author_login, $json.body.title] }}"
         }
       },
       "id": "postgres-node",
