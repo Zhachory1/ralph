@@ -18,7 +18,7 @@ Every profile starts with the shared [Ralph principles](profiles/PRINCIPLES.md):
 
 ## How it works
 
-Work runs as a graph of linked cards on a Hermes Kanban board. The orchestrator plans the graph; the dispatcher runs it. Profiles never chat with each other — they hand off through cards and through GitHub, which keeps coordination deterministic and keeps one bad agent turn from derailing a feature mid-flight.
+Work runs as a graph of linked cards on a Hermes Kanban board. The orchestrator classifies each request and hands it to a workflow profile, which plans its graph (feature-workflow for features; the orchestrator still plans an analysis itself); the dispatcher runs it. Profiles never chat with each other — they hand off through cards and through GitHub, which keeps coordination deterministic and keeps one bad agent turn from derailing a feature mid-flight.
 
 ```
 PRD → scope check → DD draft → council critique → [you approve] →
