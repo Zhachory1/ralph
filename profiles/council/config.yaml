@@ -1,0 +1,39 @@
+# council convenes the judge panel (spec Sec 4, docs/v4-spec.docx): a
+# persistent Tier B worker, not a stateless function the orchestrator calls
+# directly. It keeps its own skill lane so rubric-calibration lessons
+# (overturned verdicts, miscalibrated judges) persist across runs the same
+# way builder's repo quirks do, per profiles/PRINCIPLES.md "write down what
+# lasts" -- never in a stateless judge's own context, since judges are
+# recreated fresh on every invocation.
+model:
+  provider: anthropic
+  default: claude-sonnet-5
+platform_toolsets:
+  cli:
+    - terminal
+    - kanban
+    - file
+  api_server: [no_mcp]
+approvals:
+  single_query_mode: approve
+  unattended_mode: approve
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+skills:
+  external_dirs:
+    - /ralph/skills/voice
+    - /ralph/skills/review
+    - /ralph/skills/plan
+  # Tier 3 procedural memory for this profile alone: rubric drift notes and
+  # escalation-brief phrasing it has learned, never a judge's own context.
+  create_dir: /ralph/private-skills/council
+  creation_nudge_interval: 0
+agent:
+  max_turns: 60
+  run_budget_seconds: 900
+  api_max_retries: 0
