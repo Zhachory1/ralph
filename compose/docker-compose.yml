@@ -293,6 +293,12 @@ services:
       RALPH_NOTIFY_URL: ${RALPH_NOTIFY_URL:-${GCHAT_WEBHOOK_URL:-}}
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       DOCKER_HOST: tcp://socket-proxy:2375
+      # The repo cache is shared with hermes over a host bind mount, and git's
+      # ownership check intermittently refused fetches there ("dubious
+      # ownership"), skipping the PR for that pass. Trust the cache only.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /workspaces/repo-cache/*
     volumes:
       - ../bootstrap:/ralph/bootstrap:ro
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces

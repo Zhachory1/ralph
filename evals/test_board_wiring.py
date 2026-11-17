@@ -69,6 +69,14 @@ ensure_board queues Intake 'Chat and email intake'
 
 
 class BoardComposeTests(unittest.TestCase):
+    def test_review_loop_trusts_only_the_repo_cache_for_git(self):
+        """The cache is a host bind mount shared with hermes; git's ownership
+        check refused fetches there. Trust exactly the cache, nothing wider."""
+        env = COMPOSE["services"]["review-loop"]["environment"]
+        self.assertEqual("1", str(env["GIT_CONFIG_COUNT"]))
+        self.assertEqual("safe.directory", env["GIT_CONFIG_KEY_0"])
+        self.assertEqual("/workspaces/repo-cache/*", env["GIT_CONFIG_VALUE_0"])
+
     def test_install_and_review_loop_receive_all_board_names(self):
         for service in ("init", "review-loop"):
             with self.subTest(service=service):
