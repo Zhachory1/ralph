@@ -168,9 +168,13 @@ class DeclarationTests(unittest.TestCase):
 
     def test_every_profile_can_reach_github_from_a_terminal(self):
         """docs/decisions/0001: every profile can use gh. terminal is the toolset
-        that carries the forwarded token; code_execution scrubs it."""
+        that carries the forwarded token; code_execution scrubs it.
+        docs/decisions/0005: swe is the one documented exception -- it never
+        runs git/gh itself, so it gets no repository credential at all."""
         import yaml
         for f in sorted((ROOT / "profiles").glob("*/config.yaml")):
+            if f.parent.name == "swe":
+                continue
             with self.subTest(profile=f.parent.name):
                 config = yaml.safe_load(f.read_text())
                 self.assertIn("terminal", self.toolsets(f.parent.name))
@@ -214,7 +218,8 @@ class DeclarationTests(unittest.TestCase):
         self.assertNotIn("terminal", declared)
         self.assertNotIn("code_execution", declared)
         config = yaml.safe_load((ROOT / "profiles" / "swe" / "config.yaml").read_text())
-        self.assertIn("code_execution", config["agent"]["disabled_toolsets"])
+        disabled = config["agent"]["disabled_toolsets"]
+        self.assertIn("code_execution", disabled)
         self.assertIn("coding-harness", config.get("mcp_servers", {}))
         self.assertIn("delegation", disabled)
 
