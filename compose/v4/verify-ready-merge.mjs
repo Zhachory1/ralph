@@ -26,7 +26,7 @@ export async function completeReadyTicket(expected, { readPull, recordMerge, mov
   const pull = await readPull(expected.repo, expected.prNumber);
   const proof = verifyReadyMerge(expected, pull);
   if (proof.status !== "verified") return proof;
-  if (!(await recordMerge(expected, proof))) return { status: "stale_dispatch" };
+  if (!(await recordMerge(expected, proof))) return { status: "receipt_rejected" };
   if (!(await moveBoardDone(expected.ticketId))) return { status: "not_at_director_gate" };
   if (!(await recordDone(expected.ticketId, proof.mergeCommitSha))) return { status: "board_ack_failed" };
   return { status: "done", mergeCommitSha: proof.mergeCommitSha };

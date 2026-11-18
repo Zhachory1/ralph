@@ -1,7 +1,8 @@
 # v4 manual Ready-to-Draft canary runner
 
-Run this from the Docker host after provisioning the v4 board, migrating
-Postgres, and setting up the dedicated SWE worker. It does not merge a PR
+Run this from the Docker host after provisioning the v4 board, applying
+[`02-ready-dispatch.sql`](../../../compose/v4/init-db/02-ready-dispatch.sql),
+and setting up the dedicated SWE worker. It does not merge a PR
 or advance a ticket to Done. Use a disposable repository with branch
 protection and a dedicated, scoped automation identity.
 
