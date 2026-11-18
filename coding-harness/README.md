@@ -8,11 +8,11 @@ the tool signatures below.
 
 ## Status
 
-Four tools implemented: `implement_spec`, `get_worktree_status`,
-`apply_pr_feedback`, and `fix_ci_failure`, against one adapter (`mewrite`).
-All but `get_worktree_status` publish changes when the adapter produces a
-diff. Only `implement_spec` can open a draft PR. Not yet built: `audit_pr`,
-`reproduce_and_patch` (spec Sec 11's other two), and the skill-synthesis
+Five tools implemented: `implement_spec`, `get_worktree_status`,
+`apply_pr_feedback`, `fix_ci_failure`, and `audit_pr`. The three writing
+tools use the `mewrite` adapter and publish changes when it produces a
+diff. Only `implement_spec` can open a draft PR. Not yet built:
+`reproduce_and_patch` and the skill-synthesis
 loop (Sec 11.0.1) — that needs a real judgment-making profile to own it,
 not this server.
 
@@ -167,6 +167,30 @@ process, confirmed directly while testing this. Verified against a real
 race: two concurrent `apply_pr_feedback` calls for the same ticket_id ran
 sequentially (not concurrently), producing two real, correctly-ordered
 commits on the sandbox repo rather than a corrupted worktree.
+
+## `audit_pr`
+
+Run the audit-enabled server from the complete harness directory on the
+Docker host, not from the SWE container's single-file `server.js` mount.
+Configure `RALPH_AUDIT_REPOS` in the server environment as a JSON object
+keyed by the repository's canonical absolute path. Each entry supplies a
+locally installed, digest-pinned `image` and trusted shell commands `test`
+and `lint`. Install dependencies in the image; containers have no network
+or host mounts. Use an image that provides `/bin/sh` and `tar` and can run
+as UID 65534. The harness never pulls an image implicitly.
+
+Call with `repo_path`, `pr_number`, and the exact lowercase `head_sha`.
+Both the GitHub pull head and the second parent of its synthetic merge ref
+must match. PRs with a missing or stale merge ref fail closed. Each check
+gets a fresh copy of the Git archive in bounded scratch space. The archive
+does not include Git metadata, untracked files, or submodule contents and
+honors Git export attributes. Results describe these configured checks,
+not an independent security assessment of the PR. Setup and sandbox errors
+are returned as MCP errors, distinct from a failed check. The tool does
+not post GitHub reviews. Profile grants are a separate deployment step.
+
+Set `RALPH_AUDIT_TEST_IMAGE` to a local digest-pinned shell image when
+running `npm test` to exercise the synthetic fixture against real Docker.
 
 ## Known limitations, accepted for this slice
 
