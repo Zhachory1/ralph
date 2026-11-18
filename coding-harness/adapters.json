@@ -16,6 +16,7 @@
     "skillPlacement": "isolated-config",
     "completionSignal": "opencode-steps",
     "isolatedHome": true,
+    "externalVerification": true,
     "passEnv": ["OPENROUTER_API_KEY"],
     "homeConfig": {
       "$schema": "https://opencode.ai/config.json",

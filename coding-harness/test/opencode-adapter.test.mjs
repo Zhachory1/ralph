@@ -80,6 +80,8 @@ test("runs OpenCode headless in an isolated home without credentials or global i
   assert.deepEqual(argv.slice(0, 6), ["run", "--standalone", "--format", "json", "--auto", "--archived"]);
   assert.equal(argv.length, 7, "the whole prompt is one final argument");
   assert.match(argv[6], /Write the fixture\.[\s\S]*Create the file/);
+  assert.match(argv[6], /Verification runs outside the worker/);
+  assert.doesNotMatch(argv[6], /Run the project's own tests/);
   assert.ok(!argv.includes("-p") && !argv.includes("--skill"));
 
   const home = readFileSync(join(f.out, "home"), "utf8").trim();
