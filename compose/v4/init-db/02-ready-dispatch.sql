@@ -24,6 +24,7 @@ RETURNS UUID LANGUAGE SQL AS $$
     VALUES (p_ticket_id, 'running', gen_random_uuid(), clock_timestamp() + INTERVAL '25 minutes')
     ON CONFLICT (ticket_id) DO UPDATE
         SET lease_token = EXCLUDED.lease_token, expires_at = clock_timestamp() + INTERVAL '25 minutes'
+        -- At exact expiry, only reclamation is allowed; recording requires strictly later expiry.
         WHERE dispatch.status = 'running' AND dispatch.expires_at <= clock_timestamp()
     RETURNING dispatch.lease_token;
 $$;

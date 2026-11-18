@@ -13,11 +13,14 @@ returns `false` for a stale or expired lease. This fences database writes,
 not external side effects: the dispatch workflow must use a stable ticket
 and branch and reconcile an already opened draft before retrying.
 
-This migration does not dispatch jobs or verify merges itself.
+This migration does not dispatch jobs or verify merges itself. The
+merge-gate follow-up owns terminal state and retention for handoff rows.
 
 ## Existing v4 database
 
-Fresh installs apply `02-ready-dispatch.sql` automatically. For an
+The migration uses core `gen_random_uuid()` (Postgres 13 or later; the
+v4 image is pinned to Postgres 17). Fresh installs apply
+`02-ready-dispatch.sql` automatically. For an
 existing v4 database, apply the migration from `compose/v4` before
 enabling a workflow that uses it:
 
@@ -30,3 +33,9 @@ docker compose exec -T postgres sh -ec \
 Run `test/ready-dispatch.sql` on a disposable migrated database. It
 rolls back its fixtures and checks duplicates, expired workers,
 reclamation, and the pinned draft handoff.
+
+Run `bash test/ready-dispatch-concurrency.sh psql` on a disposable
+Postgres instance as a user allowed to create an isolated fixture schema.
+The script starts eight independent connections and asserts one winner.
+It accepts a complete `psql` command as arguments, including a local
+`docker exec -i` invocation when testing a container.
