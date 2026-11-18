@@ -65,6 +65,14 @@ reported as an `open_questions` note alongside the real `status`/`diff_stats`
 that already reflect whether the adapter's code change succeeded,
 independent of whether GitHub access happened to work this run.
 
+Two concurrent `implement_spec` calls targeting the same branch (not
+necessarily the same `ticket_id`) can both pass the `pr list` check before
+either creates one; `gh pr create` itself refuses a second PR for a branch
+that already has one, and that refusal is caught and resolved by
+re-checking `pr list` rather than treated as a real failure -- confirmed
+directly by forcing a real `gh pr create` collision against a live PR and
+confirming the loser recovers the winner's URL rather than erroring.
+
 `"error"` means setup/infra failed before the adapter ever ran (bad
 `rfc_path`, a broken or raced worktree, the adapter binary missing). `"failed"`
 means the adapter ran but did not complete cleanly (non-zero exit, or exited
@@ -120,6 +128,20 @@ reads stdin itself — not documented behavior, found by the spawned call
 hanging indefinitely with zero output while the identical invocation from a
 shell (which closes stdin or inherits a TTY) completed in seconds. Fixed by
 setting `stdio: ["ignore", "pipe", "pipe"]` explicitly (`server.js`).
+
+## Known limitation, accepted for this slice: a transient `gh` failure right after a successful push can leave a branch with no PR
+
+If `git push` succeeds but the immediate `gh pr list` call fails (a network
+blip), `ensurePullRequest` returns a note and `pr_url: null`. On retry, if
+the adapter finds nothing further to change, `diffStat` is empty and the
+whole commit/PR step is skipped entirely -- the branch stays pushed with no
+PR and no further attempt, until a caller notices the stale `open_questions`
+note from the one run that hit it. Narrow (needs a `gh` failure in that
+exact few-hundred-millisecond window) and not reproduced; documented rather
+than guarded against, same as the OAuth-token-expiry limitation above --
+fixing it means always attempting `ensurePullRequest` even when `diffStat`
+is empty, which needs its own slice to get the "was this branch ever
+actually PR'd" check right, not stapled onto this one.
 
 ## A second bug this slice found: a stale PR on re-run
 

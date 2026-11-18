@@ -78,12 +78,30 @@ async function ensurePullRequest(worktreePath, branch, ticketId) {
     const existingUrl = existing.trim();
     if (existingUrl) return { pr_url: existingUrl, note: null };
 
-    const createdUrl = await gh(
-      ["pr", "create", "--draft", "--title", `[ralph] ${ticketId}`,
-       "--body", `Opened by the coding harness for ticket ${ticketId}. Draft: review before merging.`],
-      worktreePath
-    );
-    return { pr_url: createdUrl.trim(), note: null };
+    try {
+      const createdUrl = await gh(
+        ["pr", "create", "--draft", "--title", `[ralph] ${ticketId}`,
+         "--body", `Opened by the coding harness for ticket ${ticketId}. Draft: review before merging.`],
+        worktreePath
+      );
+      return { pr_url: createdUrl.trim(), note: null };
+    } catch (createErr) {
+      // The list-then-create sequence above has a window: two concurrent
+      // implement_spec calls for the same branch can both pass the list
+      // check before either creates, and gh itself refuses the second
+      // `pr create` for a branch that already has one. Re-checking here
+      // (rather than treating that refusal as a real failure) is what
+      // makes a loser of that race return the winner's URL instead of an
+      // error -- the same race ensureWorktree already guards for worktree
+      // creation, applied to PR creation.
+      const recheck = await gh(
+        ["pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"],
+        worktreePath
+      ).catch(() => "");
+      const recheckUrl = recheck.trim();
+      if (recheckUrl) return { pr_url: recheckUrl, note: null };
+      throw createErr;
+    }
   } catch (err) {
     // Deliberately not fatal: implement_spec's status still reflects
     // whether the adapter produced a correct diff, independent of whether
