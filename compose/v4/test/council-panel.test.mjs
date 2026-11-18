@@ -53,6 +53,29 @@ test("rejects missing, malformed, duplicate, or failed judge responses", async (
     ? Promise.reject(new Error("judge timed out")) : verdict(judge_role)), /judge timed out/);
 });
 
+test("waits for every in-flight judge to settle before reporting a panel failure", async () => {
+  const pending = [];
+  let settled = false;
+  const panel = runCouncilPanel(job, ({ judge_role }) => {
+    if (judge_role === roles[0]) throw new Error("judge unavailable");
+    return new Promise((resolve) => pending.push(() => resolve(verdict(judge_role))));
+  });
+  panel.catch(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  pending.forEach((finish) => finish());
+  await assert.rejects(panel, /judge unavailable/);
+});
+
+test("preserves every failure when multiple judges fail", async () => {
+  await assert.rejects(runCouncilPanel(job, ({ judge_role }) => {
+    if (judge_role === roles[0]) throw new Error("judge failed");
+    if (judge_role === roles[1]) throw new Error("cleanup unconfirmed");
+    return verdict(judge_role);
+  }), (error) => error instanceof AggregateError
+    && error.errors.some((failure) => failure.message === "cleanup unconfirmed"));
+});
+
 test("rejects invalid input before invoking judges", async () => {
   for (const bad of [{ artifact: "" }, { artifact: null }, { rubric: " " }, { revisions: -1 }, { revisions: 3 }]) {
     await assert.rejects(runCouncilPanel({ ...job, ...bad }, () => assert.fail("invalid job dispatched")));

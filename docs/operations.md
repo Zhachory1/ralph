@@ -26,6 +26,53 @@ Costs depend on token use and [OpenRouter's current model prices](https://openro
 The result reports the panel decision and verdicts; it does not route work or prove
 the identity of the models actually served. Judge egress remains unrestricted.
 
+### Standalone v4 Council tool
+
+Run `npm ci` in `coding-harness/` and cache the pinned Hermes image first. For the isolated
+profile, `host.docker.internal` must reach the host's loopback port (verified with Colima).
+Set `OPENROUTER_API_KEY` privately and generate a fresh 32-byte hex
+`RALPH_COUNCIL_MCP_TOKEN`; grant it only to the host service and launcher. Set
+`RALPH_COUNCIL_STATE_DIR` to an existing absolute directory owned by the service user with mode
+`0700`. Reuse the same directory for all instances under this user and Docker daemon; separate
+state directories or users do not fence each other. Start
+`node coding-harness/council-mcp.mjs` on the host. It listens on `127.0.0.1:8766`;
+`RALPH_COUNCIL_MCP_PORT` overrides the port. Stop the service when finished and discard the token.
+
+To invoke the profile from a host process, import `runCouncilProfile` from
+`compose/v4/council-profile.mjs` and pass `{artifact, revisions, model, port}`. The artifact is
+text of at most 16 KiB; `revisions` is 0–2; `model` is an OpenRouter `provider/model`; and
+`port` must match the service. Both host processes need the same master token and provider key.
+The profile gets a separate single-job token, not the master token. The launcher returns
+`{jobId, result}`, where `result` is retrieved from the service rather than the model's prose.
+**A profile invocation and its panel use paid model calls, without an enforced spend cap.**
+Only send artifacts suitable for the provider. The tool exposes no edit or board tools. Anyone with
+the master token can register jobs repeatedly; there is no total spend limit. The legacy
+`ralph-council` profile is not this isolated runtime.
+
+Results remain in service memory until acknowledged; they do not survive a service restart.
+After recording a result, send an authenticated `DELETE /jobs/<jobId>` to release the slot.
+The master token also permits `GET /jobs` (current ID and status) and `GET /jobs/<jobId>` (status,
+profile activity, and result). A disconnected tool client does not cancel paid judges: the result
+remains retrievable while the service stays up. If registration's response is lost, use `GET /jobs`
+to find the ID. The slot cannot be released until the host confirms profile cleanup; the launcher
+does this after the container exits or its removal is confirmed. Do not put bearer tokens in
+command arguments or logs.
+
+The state directory's `council-job.json` contains only the job ID. A live job, crash, or unconfirmed
+cleanup blocks new jobs, including after restart. `GET /jobs` can report `locked` because another
+service owns the job, not just after a crash. Before recovering, stop **all** services and launchers
+using that state directory, including paused launchers and pending Docker commands. Check the
+marker's job ID, service logs, relevant Docker CLI processes, and containers named
+`ralph-council-judge-<jobId>-...` or `ralph-council-profile-<jobId>`. Confirm the daemon is reachable
+and no associated process can still create a container; wait for watchdogs and resolve any remaining
+containers. Only then may the operator remove the marker and restart the service. A profile cleanup
+error also reports its container ID or name and recovery-file path. Never remove unrelated containers.
+
+Run `node --test coding-harness/test/council-mcp.test.mjs coding-harness/test/council-job.test.mjs compose/v4/test/council-profile.test.mjs`
+and `python3 compose/v4/test/council-profile-docker.py` for synthetic checks. The latter uses the
+cached image and Colima's bridge, sends no external model requests, and creates temporary disposable
+containers. These checks do not verify real provider access or model output.
+
 ### Optional v4 docs preview
 
 Set `RALPH_V4_DOCS_ROOT` to an absolute path shared with Docker. It must be a docs checkout

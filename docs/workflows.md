@@ -5,6 +5,10 @@ Each workflow: entry, exit, owners, and how it fails. Where the parts run is in 
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.
+An authenticated standalone Council service registers a fixed artifact and exposes its panel as
+the argument-free `review_artifact` tool. The isolated profile can call it; the launcher retrieves
+the validated result separately rather than trusting the profile's model-generated response.
+This remains a standalone check, not an automated gate.
 
 The optional v4 docs preview serves the operator-selected checkout and exposes a separate Kroki
 rendering API. It does not automatically embed diagrams, fetch PR branches, publish documents,
