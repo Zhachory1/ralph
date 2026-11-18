@@ -8,13 +8,11 @@ the tool signatures below.
 
 ## Status
 
-Five tools implemented: `implement_spec`, `get_worktree_status`,
-`apply_pr_feedback`, `fix_ci_failure`, and `audit_pr`. The three writing
-tools use the `mewrite` adapter and publish changes when it produces a
-diff. Only `implement_spec` can open a draft PR. Not yet built:
-`reproduce_and_patch` and the skill-synthesis
-loop (Sec 11.0.1) — that needs a real judgment-making profile to own it,
-not this server.
+Six tools implemented: `implement_spec`, `get_worktree_status`,
+`apply_pr_feedback`, `fix_ci_failure`, `audit_pr`, and `reproduce_and_patch`.
+The writing tools use `mewrite`. Only `implement_spec` and
+`reproduce_and_patch` can open draft PRs. The SWE-owned skill-synthesis
+loop (Sec 11.0.1) is opt-in; see the setup below.
 
 Tests: `npm test` (offline; fake `gh` and adapter, local bare repo).
 
@@ -202,6 +200,27 @@ race: two concurrent `apply_pr_feedback` calls for the same ticket_id ran
 sequentially (not concurrently), producing two real, correctly-ordered
 commits on the sandbox repo rather than a corrupted worktree.
 
+## `reproduce_and_patch`
+
+Configure `RALPH_REGRESSION_CHECKS` as a JSON object keyed by canonical
+checkout path, then by check ID. Each value is an argv array starting
+with an absolute path to an operator-owned verifier. Use this only for
+trusted checkouts and ordinary application regressions. The verifier
+must not modify the checkout and must return `0` for pass, `1` for a
+confirmed regression, or another status for an infrastructure error.
+It runs with a minimal environment and no shell interpolation.
+
+Call with `ticket_id`, `repo_path`, and
+`alert_payload: { "kind": "application_regression", "check": "<check ID>" }`.
+An alert selects a registered check but cannot provide an executable or
+raw logs. The harness verifies before and after the adapter attempt and
+publishes a draft `hotfix/<ticket_id>` PR only if it observed failure,
+then success, with a real diff. Unverified edits remain in the local
+worktree. A retry on the same ticket refuses to overwrite those edits;
+inspect and save them before cleaning the worktree, or use a new ticket.
+The result contains `reproduced`, adapter-reported `root_cause`, `pr_url`,
+`test_summary`, and `open_questions`.
+
 ## `audit_pr`
 
 Run the audit-enabled server from the complete harness directory on the
@@ -258,8 +277,7 @@ whole commit/PR step is skipped entirely -- the branch stays pushed with no
 PR and no further attempt, until a caller notices the stale `open_questions`
 note from the one run that hit it. Narrow (needs a `gh` failure in that
 exact few-hundred-millisecond window) and not reproduced; documented rather
-than guarded against, same as the OAuth-token-expiry limitation above --
-fixing it means always attempting `ensurePullRequest` even when `diffStat`
+than guarded against. Fixing it means attempting `ensurePullRequest` even when `diffStat`
 is empty, which needs its own slice to get the "was this branch ever
 actually PR'd" check right, not stapled onto this one.
 

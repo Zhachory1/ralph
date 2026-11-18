@@ -6,7 +6,6 @@
 # step below exists because of one.
 #
 #   HERMES_HOME_VOLUME=/path/to/host/dir \
-#   MEWRITE_AUTH_SOURCE=~/.mewrite/agent/auth.json \
 #     ./bootstrap-hermes.sh
 #
 # Idempotent: `hermes config set` replaces a key rather than duplicating
@@ -17,9 +16,9 @@ set -euo pipefail
 
 HERMES_IMAGE="${HERMES_IMAGE:?set HERMES_IMAGE, e.g. nousresearch/hermes-agent:v0.22.2}"
 HERMES_HOME_VOLUME="${HERMES_HOME_VOLUME:?set HERMES_HOME_VOLUME to a host directory Hermes /opt/data mounts to}"
-MEWRITE_AUTH_SOURCE="${MEWRITE_AUTH_SOURCE:?set MEWRITE_AUTH_SOURCE to the mewrite OAuth auth.json to copy in (read once, never retained by this script)}"
-[ -f "$MEWRITE_AUTH_SOURCE" ] || { echo "error: MEWRITE_AUTH_SOURCE is not a file: $MEWRITE_AUTH_SOURCE" >&2; exit 1; }
 MEWRITE_VERSION="${MEWRITE_VERSION:-1.6.5}"
+# Keep existing copied credentials out of the new login path on upgrades.
+ADAPTER_HOME=/opt/data/mewrite-adapter-home
 # Fixed container path, not a baked-in host path: the harness is meant to
 # be bind-mounted at this exact path every run (see the final echo below),
 # so config written here never needs to change across machines.
@@ -49,17 +48,9 @@ run sh -c "mkdir -p /opt/data/npm-global && npm install -g --prefix /opt/data/np
 # --allow-scripts the binary installs but every real command fails at
 # runtime, not at install time, which makes the failure far harder to place.
 
-echo "== mewrite: copy its OAuth credential into a writable HOME =="
-# Gotcha 3: mewrite needs a writable $HOME to create its session/state
-# files. The image's own $HOME (root's) is not writable by uid 10000;
-# /opt/data/mewrite-home is, and survives restarts since it's on the same
-# volume. The source auth.json is bind-mounted read-only for this one copy
-# and never printed, logged, or committed -- this script's only privileged
-# action. Re-run this step alone whenever a session starts failing with
-# "No API key for provider" -- the access token is short-lived and this
-# copy does not refresh itself; see the doc's OAuth-expiry finding.
-docker run --rm -v "$HERMES_HOME_VOLUME:/opt/data" -v "$MEWRITE_AUTH_SOURCE:/tmp/auth.json:ro" "$HERMES_IMAGE" \
-  sh -c "mkdir -p /opt/data/mewrite-home/.mewrite/agent && cp /tmp/auth.json /opt/data/mewrite-home/.mewrite/agent/auth.json"
+echo "== mewrite: prepare a private persistent HOME =="
+# Gotcha 3: the image's default HOME is not writable by the adapter user.
+run sh -c 'umask 077; mkdir -p "$1/.mewrite/agent"' sh "$ADAPTER_HOME"
 
 echo "== git: trust worktrees this container creates =="
 # Gotcha 4: a worktree the harness creates is owned by uid 10000 (the
@@ -68,7 +59,7 @@ echo "== git: trust worktrees this container creates =="
 # path is explicitly marked safe. Any repo_path the harness is ever pointed
 # at needs this -- a wildcard is the practical choice here, since the harness
 # only ever operates on repos the operator already chose to point it at.
-run sh -c 'export HOME=/opt/data/mewrite-home; git config --global --get-all safe.directory | grep -qxF "*" || git config --global --add safe.directory "*"'
+run sh -c 'export HOME="$1"; git config --global --get-all safe.directory | grep -qxF "*" || git config --global --add safe.directory "*"' sh "$ADAPTER_HOME"
 
 echo "== hermes: grant ralph-swe the coding-harness MCP server =="
 # Scoped to -p ralph-swe, not the default profile: a grant set without -p
@@ -83,6 +74,6 @@ run hermes -p ralph-swe config set mcp_servers.coding-harness.args "[\"$HARNESS_
 run hermes -p ralph-swe config set mcp_servers.coding-harness.enabled true
 run hermes -p ralph-swe config set mcp_servers.coding-harness.tools.include "[implement_spec]"
 run hermes -p ralph-swe config set mcp_servers.coding-harness.env.PATH "/opt/data/npm-global/bin:/usr/local/bin:/usr/bin:/bin"
-run hermes -p ralph-swe config set mcp_servers.coding-harness.env.HOME "/opt/data/mewrite-home"
+run hermes -p ralph-swe config set mcp_servers.coding-harness.env.HOME "$ADAPTER_HOME"
 
 echo "done. Mount this repo's coding-harness/ directory at $HARNESS_CONTAINER_PATH (read-only) in the hermes container when dispatching ralph-swe."
