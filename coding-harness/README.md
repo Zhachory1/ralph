@@ -23,7 +23,7 @@ Tests: `npm test` (offline; fake `gh` and adapter, local bare repo).
 `node server.js` keeps the local stdio transport. `node server.js --http`
 serves Streamable HTTP at `http://127.0.0.1:8765/mcp` by default. To enable
 it, set `RALPH_HARNESS_HTTP_GRANTS` to an operator-managed JSON array of
-objects with `token` (32 random bytes encoded as lowercase hex) and
+objects with `token` (generate with `openssl rand -hex 32`) and
 `tools` (an explicit list of allowed tool names). Clients send
 `Authorization: Bearer <token>`. Both discovery and invocation enforce
 the grant. The listener rejects browser Origin headers and never binds a
