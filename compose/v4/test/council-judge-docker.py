@@ -72,6 +72,9 @@ print("Hermes synthetic judge passed:", fixture["job"]["role"])
 for role, model in MODELS.items():
     fixture = {"worker": (ROOT / "council-judge-worker.py").read_text(), "job": {
         "role": role, "model": model, "artifact": "synthetic artifact", "rubric": "synthetic rubric"}}
+    if role == "architecture_scale":
+        fixture["job"]["artifact"] = "\x01" * (16 * 1024)
+        fixture["job"]["rubric"] = (ROOT.parents[1] / "profiles/council/rubric-v1.md").read_text()
     command = ["docker", "run", "--rm", "--pull=never", "--init", "-i", "--network", "none", "--read-only",
                "--tmpfs", "/tmp:rw,nosuid,size=256m", "--user", "10000:10000", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "1g",
@@ -97,7 +100,8 @@ with tempfile.TemporaryDirectory() as directory:
                       "os.execv(" + repr(shutil.which("docker")) + ", [" + repr(shutil.which("docker")) + "] + args)\n")
     docker.chmod(0o700)
     env = {**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"],
-           "OPENROUTER_API_KEY": "synthetic-provider", "GH_TOKEN": "synthetic-github"}
+           "OPENROUTER_API_KEY": "synthetic-provider", "GH_TOKEN": "synthetic-github",
+           "RALPH_COUNCIL_RUN_ID": "a" * 64}
     script = ('import { invokeCouncilJudge } from ' + json.dumps((ROOT / "council-judge.mjs").as_uri()) + '; '
               'const result = await invokeCouncilJudge({judge_role:"architecture_scale", '
               'artifact:"synthetic artifact", rubric:"synthetic rubric"}); '

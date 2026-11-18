@@ -14,6 +14,16 @@ restricted to the provider. The pinned Hermes invocation exposes no tools in syn
 requests; rerun the offline Docker fixture before changing its image or tool configuration.
 Docker-daemon administrators can inspect the container's provider key while it runs.
 
+The standalone Council service in `coding-harness/council-mcp.mjs` listens on host loopback.
+A host-only bearer token registers one job; a separate job token grants only `review_artifact`,
+with no arguments. The service binds the original artifact and revisions to that job and retains
+the validated result in memory. A private state directory contains a job-ID-only recovery marker;
+it prevents another job after a crash or unconfirmed cleanup until an operator resolves it.
+`compose/v4/council-profile.mjs` starts a disposable Hermes profile with the job token and provider
+key, but no host mounts, master token, or repository/board credentials. It does not use the legacy
+shared Hermes home. Network egress is unrestricted, the bridge uses plain HTTP, and Docker
+administrators can inspect credentials and artifacts. Neither component is connected to board routing.
+
 The separate, opt-in v4 docs preview in `compose/v4/docs-preview.yml` mounts an operator-selected
 docs checkout read-only. MkDocs and Kroki publish only on loopback; neither authenticates clients.
 Mermaid and Excalidraw companions have no published ports and use an internal network. MkDocs and

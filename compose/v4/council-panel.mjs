@@ -7,10 +7,16 @@ export async function runCouncilPanel({ artifact, rubric, revisions }, invokeJud
       || typeof invokeJudge !== "function") {
     throw new TypeError("Expected an artifact, rubric, 0–2 completed revisions, and a judge executor");
   }
-  const verdicts = await Promise.all(COUNCIL_ROLES.map(async (judge_role) => {
+  const results = await Promise.allSettled(COUNCIL_ROLES.map(async (judge_role) => {
     const result = await invokeJudge({ judge_role, artifact, rubric });
     if (result?.judge_role !== judge_role) throw new TypeError("Judge verdict does not match its assigned role");
     return result;
   }));
+  const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, `Multiple Council judges failed: ${failures[0]?.message ?? "unknown error"}`);
+  }
+  const verdicts = results.map((result) => result.value);
   return { decision: councilDecision(verdicts, revisions), verdicts };
 }
