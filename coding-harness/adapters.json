@@ -21,9 +21,12 @@
       "$schema": "https://opencode.ai/config.json",
       "model": "openrouter/anthropic/claude-sonnet-5.5",
       "providers": { "openrouter": { "settings": { "apiKey": "{env:OPENROUTER_API_KEY}" } } },
-      "permissions": [
-        { "action": "shell", "resource": "git push *", "effect": "deny" },
-        { "action": "shell", "resource": "gh *", "effect": "deny" }
+      "policies": [
+        { "action": "tool.use", "resource": "shell:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "external_directory:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "webfetch:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "websearch:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "subagent:*", "effect": "deny" }
       ]
     }
   }

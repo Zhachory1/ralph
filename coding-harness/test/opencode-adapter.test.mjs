@@ -93,8 +93,8 @@ test("runs OpenCode headless in an isolated home without credentials or global i
   const config = JSON.parse(readFileSync(join(f.out, "config.jsonc"), "utf8"));
   assert.match(config.model, /^openrouter\//);
   assert.equal(config.providers.openrouter.settings.apiKey, "{env:OPENROUTER_API_KEY}");
-  const denied = config.permissions.filter((rule) => rule.effect === "deny").map((rule) => rule.resource);
-  assert.ok(denied.includes("git push *") && denied.includes("gh *"));
+  const denied = config.policies.filter((rule) => rule.effect === "deny").map((rule) => rule.resource);
+  assert.ok(denied.includes("shell:*") && denied.includes("external_directory:*"));
   assert.deepEqual(config.skills, []);
   assert.equal(f.git(f.remote, "log", "-1", "--format=%s", "refs/heads/ralph/vikunja-4"), "[ralph] vikunja-4");
 });
@@ -119,6 +119,10 @@ test("does not treat a mid-turn stop or a provider error as completion", async (
   assert.equal(result.status, "failed");
   assert.equal(result.pr_url, null);
   assert.match(result.open_questions[0], /adapter exited 1/);
+  for (const f of [mid, failed]) {
+    const home = readFileSync(join(f.out, "home"), "utf8").trim();
+    assert.equal(existsSync(home), false);
+  }
 });
 
 test("refuses an unknown adapter without running anything", async (t) => {
@@ -127,4 +131,11 @@ test("refuses an unknown adapter without running anything", async (t) => {
   assert.equal(result.status, "error");
   assert.match(result.open_questions[0], /Unknown adapter/);
   assert.equal(existsSync(join(f.out, "argv")), false);
+});
+
+test("an earlier stopped step does not complete a run with an unfinished final step", async (t) => {
+  const f = fixture(t, [...events.success, events.midTurn[0]]);
+  const result = await implement(f);
+  assert.equal(result.status, "failed");
+  assert.equal(result.pr_url, null);
 });

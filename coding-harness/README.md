@@ -73,11 +73,11 @@ environment: `PATH`, the isolated `HOME`, and the variables named in
 `RALPH_*` variables. Approved project skills are listed in that config by
 directory, so they are never copied into the worktree and committed.
 
-Enforcement, not instructions: the worktree and the absence of a GitHub
-credential stop the worker pushing. The config also denies `git push *` and
-`gh *`, which OpenCode applies after its default allow rule (checked with
-`opencode debug agents`). `--auto` approves everything not denied, so give
-the worker only a disposable worktree.
+The OpenCode policy denies shell commands, external directory access,
+web tools, and subagents. The worker edits files; verification commands
+must run outside it. A temporary `HOME` is not an OS sandbox: use only
+trusted repos and ancestor configuration, which OpenCode still discovers.
+Never give the worker publishing credentials.
 
 Set `OPENROUTER_API_KEY` in the harness environment to a dedicated key with
 a spend limit, not a personal key. A run is complete only when its last step

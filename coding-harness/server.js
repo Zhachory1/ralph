@@ -257,7 +257,7 @@ function projectSkillPaths(repoPath) {
     throw new Error("Configured project skills directory must be a canonical absolute path");
   }
   return readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && lstatSync(resolve(root, entry.name), { throwIfNoEntry: false })?.isDirectory())
     .map((entry) => resolve(root, entry.name, "SKILL.md"))
     .filter((path) => lstatSync(path, { throwIfNoEntry: false })?.isFile())
     .sort();
@@ -275,15 +275,14 @@ function selectAdapter() {
 // instructions, skills, or credentials. Skills reach it as config entries
 // pointing at the approved directory, never as files copied into the
 // worktree, where `git add -A` would commit them.
-function prepareIsolatedHome(adapter, skillPaths) {
-  const home = mkdtempSync(resolve(tmpdir(), "ralph-adapter-home-"));
+function prepareIsolatedHome(home, adapter, skillPaths) {
   const configDir = resolve(home, ".config", "opencode");
   mkdirSync(configDir, { recursive: true });
   const skills = [...new Set((skillPaths || []).map((path) => dirname(dirname(path))))];
   writeFileSync(resolve(configDir, "opencode.jsonc"), JSON.stringify({ ...adapter.homeConfig, skills }));
   const env = { PATH: process.env.PATH, HOME: home };
   for (const name of adapter.passEnv ?? []) if (process.env[name]) env[name] = process.env[name];
-  return { home, env };
+  return env;
 }
 
 // Runs the configured adapter's CLI non-interactively in the worktree and
@@ -291,12 +290,13 @@ function prepareIsolatedHome(adapter, skillPaths) {
 // completion verdict -- the "machine-parseable completion signal" half of
 // the Sec 11.0 contract.
 async function runAdapter(adapter, cwd, prompt, skillPaths) {
-  const isolated = adapter.isolatedHome ? prepareIsolatedHome(adapter, skillPaths) : null;
+  const home = adapter.isolatedHome ? mkdtempSync(resolve(tmpdir(), "ralph-adapter-home-")) : null;
   try {
-    const result = await spawnAdapter(adapter, cwd, prompt, isolated ? [] : skillPaths, isolated?.env);
+    const env = home ? prepareIsolatedHome(home, adapter, skillPaths) : undefined;
+    const result = await spawnAdapter(adapter, cwd, prompt, home ? [] : skillPaths, env);
     return { ...result, ...parseJsonlCompletion(result.stdout, adapter.completionSignal) };
   } finally {
-    if (isolated) rmSync(isolated.home, { recursive: true, force: true });
+    if (home) rmSync(home, { recursive: true, force: true });
   }
 }
 
@@ -352,7 +352,7 @@ function parseOpencodeSteps(lines) {
   for (const line of lines) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
-    if (event.type === "step_start") text = "";
+    if (event.type === "step_start") { text = ""; lastReason = null; }
     else if (event.type === "text") text += event.part?.text ?? "";
     else if (event.type === "step_finish") lastReason = event.part?.reason ?? null;
     else if (event.type === "error") errored = true;
