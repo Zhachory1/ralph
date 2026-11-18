@@ -6,7 +6,7 @@
 # profiles/PRINCIPLES.md "write down what lasts" -- never in a stateless
 # judge's own context, since judges are recreated fresh on every invocation.
 #
-# Scaffold only: no judge profiles or shared rubric exist yet, so this
+# Scaffold only: judge profiles and dispatch do not exist yet, so this
 # profile has kanban to escalate/route but no code_execution or delegation --
 # it never writes the artifact it evaluates and never acts as a judge
 # itself. Per AGENTS.md, that boundary is enforced here (disabled_toolsets),
