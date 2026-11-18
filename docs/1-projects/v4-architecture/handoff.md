@@ -270,8 +270,8 @@ own volume burned the OAuth window.
    loop #198 did by hand.
 4. Skill-synthesis loop (Sec 11.0.1).
 5. Verify live provider refresh for the dedicated mewrite home during the pilot.
-6. Transient-gh-after-push stuck branch (documented in
-   `coding-harness/README.md`).
+6. Verify draft recovery on a real canary after a transient GitHub failure;
+   the local transport regression is covered by `implement-spec-retry.test.mjs`.
 7. `.gitignore` has `coding-harness/.harness-worktrees/`, but worktrees
    are created as a sibling of the target repo, not inside
    `coding-harness/` — the pattern never matches anything. Unfixed,
