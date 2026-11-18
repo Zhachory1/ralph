@@ -161,7 +161,9 @@ Run `bash /path/to/compose/v4/bootstrap-reviewer-grant.sh` inside the
 Hermes container with its intended `HERMES_HOME` mounted. This creates
 `ralph-v4-reviewer` without cloning the default profile and grants only
 `audit_pr` on the host harness. It doesn't provision a model or GitHub
-review credentials.
+review credentials. `--no-alias` and `--no-skills` are creation defaults,
+not permission controls. Reruns reapply the MCP grant without removing
+the operator's existing profile files or changing its other permissions.
 
 On the host, start `coding-harness/server.js --http` with an `audit_pr`-only
 entry in `RALPH_HARNESS_HTTP_GRANTS`. Give the matching bearer only to the
@@ -170,3 +172,10 @@ The bootstrap writes only a variable reference; it never copies the
 bearer. The container reaches the loopback listener through
 `host.docker.internal:8765`. That path was verified on Colima; other
 runtimes must provide a host-loopback bridge without widening the bind.
+
+Verified on `nousresearch/hermes-agent:v0.22.2`: running bootstrap twice
+left only `audit_pr` in this grant and did not change the default profile.
+Hermes loaded the reviewer config, substituted the bearer, discovered
+`audit_pr`, and received a denial for a direct `implement_spec` call.
+A separate cross-origin redirect fixture confirmed that Hermes's strict
+header policy does not forward the bearer or configured custom headers.
