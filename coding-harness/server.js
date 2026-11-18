@@ -177,6 +177,73 @@ function errorPayload(branch, message) {
   };
 }
 
+function worktreeStatusErrorPayload(message) {
+  // Mirrors getWorktreeStatus's own success keys, nulled out -- not
+  // implementSpec's errorPayload shape (pr_url/test_summary/diff_stats),
+  // which this tool has no equivalent fields for. The ticket this tool was
+  // built from asked for "the same error-payload pattern implement_spec
+  // uses"; returning only {status, open_questions} the first time this was
+  // implemented did not meet that -- fixed here, and the fix is returning
+  // every field this tool's own success payload has, nulled, not borrowing
+  // implement_spec's unrelated field names.
+  return {
+    status: "error",
+    branch: null,
+    clean: null,
+    ci_state: null,
+    pending_notes_count: null,
+    open_questions: [message],
+  };
+}
+
+async function getWorktreeStatus(args) {
+  // ticket_id is not used to derive a path: unlike implement_spec (which
+  // provisions a *new* worktree from a base repo_path), this tool's
+  // repo_path argument is already the worktree to inspect, matching the
+  // spec's description for the harness's other "checks out existing
+  // worktree" tools. ticket_id is carried for logging/future use, same as
+  // implement_spec's unused `product` argument -- intentionally, not an
+  // oversight.
+  const { repo_path } = args;
+  if (!(await isValidWorktree(repo_path))) {
+    return worktreeStatusErrorPayload(`repo_path is not a valid git working tree: ${repo_path}`);
+  }
+  let branch, porcelain;
+  try {
+    branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)).trim();
+    porcelain = await git(["status", "--porcelain"], repo_path);
+  } catch (err) {
+    return worktreeStatusErrorPayload(`could not read worktree status: ${err.message}`);
+  }
+  // A detached HEAD makes git itself print the literal string "HEAD", not
+  // a real branch name or an error -- returning that silently as `branch`
+  // would read as a working branch called "HEAD". Surfaced explicitly
+  // instead: null branch, with the real reason carried in open_questions,
+  // same as any other field this tool cannot honestly answer.
+  if (branch === "HEAD") {
+    return {
+      status: "completed",
+      branch: null,
+      clean: porcelain.trim() === "",
+      ci_state: null,
+      pending_notes_count: 0,
+      open_questions: ["worktree is in detached HEAD state; no branch name to report"],
+    };
+  }
+  return {
+    status: "completed",
+    branch,
+    clean: porcelain.trim() === "",
+    // Stubs, not computed: no CI integration and no pending_human_notes
+    // table exist yet (spec Sec 11's own ci_state/pending_notes_count
+    // fields). An honest null/0 here is correct for this slice, not a
+    // shortcut -- see coding-harness/README.md.
+    ci_state: null,
+    pending_notes_count: 0,
+    open_questions: [],
+  };
+}
+
 async function implementSpec(args) {
   const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
 
@@ -257,15 +324,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticket_id", "repo_path", "branch", "rfc_path"],
       },
     },
+    {
+      name: "get_worktree_status",
+      description:
+        "Reports a worktree's current branch and clean/dirty state (spec Sec 11). ci_state and pending_notes_count are always stubbed (null/0) until CI integration and pending_human_notes exist.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_id: { type: "string" },
+          repo_path: { type: "string" },
+        },
+        required: ["ticket_id", "repo_path"],
+      },
+    },
   ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: toolArgs } = request.params;
-  if (name !== "implement_spec") {
+  let payload;
+  if (name === "implement_spec") {
+    payload = await implementSpec(toolArgs);
+  } else if (name === "get_worktree_status") {
+    payload = await getWorktreeStatus(toolArgs);
+  } else {
     throw new Error(`unknown tool: ${name}`);
   }
-  const payload = await implementSpec(toolArgs);
   return { content: [{ type: "text", text: JSON.stringify(payload) }] };
 });
 

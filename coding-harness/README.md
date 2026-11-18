@@ -8,11 +8,11 @@ the tool signatures below.
 
 ## Status
 
-One tool implemented this slice: `implement_spec`, against one adapter
-(`mewrite`). Not yet built: `apply_pr_feedback`, `fix_ci_failure`, `audit_pr`,
-`reproduce_and_patch`, `get_worktree_status` (spec Sec 11's other five), real
-GitHub PR creation (`pr_url` is always `null`), and the skill-synthesis loop
-(Sec 11.0.1) — that needs a real judgment-making profile to own it, not this
+Two tools implemented: `implement_spec` and `get_worktree_status`, against
+one adapter (`mewrite`). Not yet built: `apply_pr_feedback`, `fix_ci_failure`,
+`audit_pr`, `reproduce_and_patch` (spec Sec 11's other four), real GitHub PR
+creation (`pr_url` is always `null`), and the skill-synthesis loop (Sec
+11.0.1) — that needs a real judgment-making profile to own it, not this
 server.
 
 ## Setup
@@ -59,6 +59,32 @@ means the adapter ran but did not complete cleanly (non-zero exit, or exited
 differently: an `"error"` is a request/environment problem to fix before
 retrying; a `"failed"` is a legitimate adapter outcome.
 
+`get_worktree_status` takes `{ ticket_id, repo_path }` and returns:
+
+```json
+{
+  "status": "completed | error",
+  "branch": "current branch name, or null on error or detached HEAD",
+  "clean": "true iff `git status --porcelain` is empty, or null on error",
+  "ci_state": null,
+  "pending_notes_count": 0,
+  "open_questions": ["present on error, or a detached-HEAD note"]
+}
+```
+
+`ticket_id` is carried but not used to derive a path: `repo_path` is
+already the worktree to inspect (matching the spec's description for the
+harness's other "checks out existing worktree" tools), unlike
+`implement_spec`'s `repo_path`, which is the base repo a *new* worktree is
+provisioned from. A detached-HEAD worktree returns `branch: null` with an
+explanatory `open_questions` entry rather than the literal string `"HEAD"`,
+which git itself would otherwise report as if it were a real branch name.
+
+`ci_state` and `pending_notes_count` are always stubbed (`null`/`0`): no CI
+integration and no `pending_human_notes` table exist yet. An honest stub is
+correct here, not a shortcut to fix later in this same tool -- those need
+their own slices (CI webhook wiring, the Postgres table from spec Sec 11.2).
+
 ## Known limitations, accepted for this slice
 
 - **Unbounded output buffering.** The adapter's stdout/stderr are
@@ -81,3 +107,26 @@ reads stdin itself — not documented behavior, found by the spawned call
 hanging indefinitely with zero output while the identical invocation from a
 shell (which closes stdin or inherits a TTY) completed in seconds. Fixed by
 setting `stdio: ["ignore", "pipe", "pipe"]` explicitly (`server.js`).
+
+## A bug the pipeline itself caught
+
+The first implementation of `get_worktree_status` was written by `swe` (the
+Tier B profile, via `implement_spec`) against a real Vikunja ticket whose
+acceptance criteria asked for "the same error-payload pattern `implement_spec`
+uses." `swe`'s own self-report claimed `status: "completed"` with all criteria
+met. Independently calling the resulting tool directly (not trusting that
+report) found the error path actually returned `{status, open_questions}`
+only, missing `branch`/`clean`/`ci_state`/`pending_notes_count`. Fixed to
+return its own full payload shape, nulled out, and re-verified directly
+against three real cases (invalid repo, dirty repo, clean repo) before
+trusting it again.
+
+An independent review on this PR caught two more gaps the self-report also
+missed: `ticket_id` was declared required in the tool's schema with no
+comment on why it is unused (it genuinely is unused -- `repo_path` is
+already the worktree to inspect, same as the harness's other "checks out
+existing worktree" tools -- now documented, not just silently dropped),
+and a detached-HEAD worktree would have silently reported the literal
+string `"HEAD"` as if it were a real branch name. Both fixed and
+re-verified (a detached-HEAD checkout now returns `branch: null` with an
+explanatory note) before merge.
