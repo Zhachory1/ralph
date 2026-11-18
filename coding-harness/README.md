@@ -134,6 +134,24 @@ commit, it does not call the Pull Request Review API to resolve threads
 is always `0` when no commit lands, including when the adapter correctly
 determines the feedback is already addressed and makes no change.
 
+Before touching the worktree, `apply_pr_feedback` verifies it is actually
+checked out to the `branch` argument the caller passed (not just that it
+is *some* valid worktree) -- a stale or mismatched `branch` would
+otherwise push whatever the worktree happens to be on to a remote ref
+named after the caller's claim, silently landing feedback on the wrong
+branch.
+
+Both `implement_spec` and `apply_pr_feedback` serialize every call for one
+`ticket_id` through a filesystem lock (`.<ticket_id>.lock` next to the
+worktrees, created with `O_EXCL`), so two concurrent calls -- either tool,
+against either tool -- never run their adapter processes or mutate the
+git index in the same worktree at the same time. An in-process lock would
+not work here: each MCP client connection spawns its own `node server.js`
+process, confirmed directly while testing this. Verified against a real
+race: two concurrent `apply_pr_feedback` calls for the same ticket_id ran
+sequentially (not concurrently), producing two real, correctly-ordered
+commits on the sandbox repo rather than a corrupted worktree.
+
 ## Known limitations, accepted for this slice
 
 - **Unbounded output buffering.** The adapter's stdout/stderr are
