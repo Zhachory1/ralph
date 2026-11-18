@@ -13,6 +13,9 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createServer as createHttpServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, constants as fsConstants } from "node:fs";
@@ -655,6 +658,7 @@ async function updateExistingPrLocked(args, worktreeRoot, opts) {
   };
 }
 
+function createMcpServer(allowed) {
 const server = new Server(
   { name: "ralph-coding-harness", version: "0.0.1" },
   { capabilities: { tools: {} } }
@@ -735,11 +739,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["repo_path", "pr_number", "head_sha"],
       },
     },
-  ],
+  ].filter(({ name }) => !allowed || allowed.has(name)),
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: toolArgs } = request.params;
+  if (allowed && !allowed.has(name)) throw new Error("Tool not granted to this caller");
   let payload;
   if (name === "implement_spec") {
     payload = await implementSpec(toolArgs);
@@ -758,5 +763,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return { content: [{ type: "text", text: JSON.stringify(payload) }] };
 });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+return server;
+}
+
+if (process.argv.includes("--http")) {
+  const grants = JSON.parse(process.env.RALPH_HARNESS_HTTP_GRANTS || "[]");
+  const port = Number(process.env.RALPH_HARNESS_HTTP_PORT || "8765");
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !Array.isArray(grants) || !grants.length
+      || grants.some((grant) => !grant || !/^[a-f0-9]{64}$/.test(grant.token)
+        || !Array.isArray(grant.tools) || !grant.tools.length || grant.tools.some((tool) => typeof tool !== "string"))
+      || new Set(grants.map(({ token }) => token)).size !== grants.length) {
+    throw new Error("HTTP requires a valid port and unique 32-byte hex bearer tokens with tool grants");
+  }
+  createHttpServer(async (req, res) => {
+    if (req.url !== "/mcp") return res.writeHead(404).end();
+    if (req.headers.origin) return res.writeHead(403).end();
+    const token = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization || "")?.[1];
+    const grant = token && grants.find((entry) => timingSafeEqual(Buffer.from(entry.token), Buffer.from(token)));
+    if (!grant) return res.writeHead(401, { "WWW-Authenticate": "Bearer" }).end();
+    const server = createMcpServer(new Set(grant.tools));
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    res.on("close", () => { void server.close(); });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    }
+  }).listen(port, "127.0.0.1");
+} else {
+  await createMcpServer().connect(new StdioServerTransport());
+}
