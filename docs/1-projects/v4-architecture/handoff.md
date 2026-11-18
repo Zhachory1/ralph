@@ -205,8 +205,9 @@ These cost real time. Do not rediscover them.
 - **Vikunja:** refuses to delete a view's last bucket; auto-creates a
   "Backlog" bucket on project creation; task update is a full-replace
   POST (include every field you want to keep); bucket membership is set
-  through `/projects/{id}/views/{view}/tasks`, not a task `bucket_id`
-  field.
+  through `POST /projects/{id}/views/{view}/buckets/{bucket}/tasks`, not a
+  task `bucket_id` field. Read membership with
+  `GET /projects/{id}/views/{view}/tasks`.
 - **n8n:** positional Postgres params must be an n8n array expression, not
   a comma-joined string; this n8n version's postgres node maxes at
   `typeVersion: 2.5` (2.6 silently fails activation with an unrelated
