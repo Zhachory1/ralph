@@ -8,12 +8,13 @@ the tool signatures below.
 
 ## Status
 
-Two tools implemented: `implement_spec` and `get_worktree_status`, against
-one adapter (`mewrite`). `implement_spec` opens a real draft PR via `gh`
-when the adapter produces a diff. Not yet built: `apply_pr_feedback`,
-`fix_ci_failure`, `audit_pr`, `reproduce_and_patch` (spec Sec 11's other
-four), and the skill-synthesis loop (Sec 11.0.1) — that needs a real
-judgment-making profile to own it, not this server.
+Three tools implemented: `implement_spec`, `get_worktree_status`, and
+`apply_pr_feedback`, against one adapter (`mewrite`). `implement_spec` and
+`apply_pr_feedback` both open/push to a real draft PR via `gh` when the
+adapter produces a diff. Not yet built: `fix_ci_failure`, `audit_pr`,
+`reproduce_and_patch` (spec Sec 11's other three), and the skill-synthesis
+loop (Sec 11.0.1) — that needs a real judgment-making profile to own it,
+not this server.
 
 ## Setup
 
@@ -105,6 +106,33 @@ which git itself would otherwise report as if it were a real branch name.
 integration and no `pending_human_notes` table exist yet. An honest stub is
 correct here, not a shortcut to fix later in this same tool -- those need
 their own slices (CI webhook wiring, the Postgres table from spec Sec 11.2).
+
+`apply_pr_feedback` takes `{ ticket_id, repo_path, branch, review_comments }`
+and returns:
+
+```json
+{
+  "status": "completed | failed | error",
+  "commit_sha": "the pushed commit's SHA, or null if nothing changed/was committed",
+  "resolved_count": "review_comments.length iff a commit landed, else 0",
+  "test_summary": "the adapter's final message, or null on error",
+  "open_questions": ["present on error/failed, or a non-fatal commit/PR note"]
+}
+```
+
+Unlike `implement_spec`, this tool **never creates a worktree**: it
+operates on the worktree `implement_spec` already created for `ticket_id`,
+and returns `status: "error"` if none exists -- a caller passing a
+`ticket_id`/`repo_path` that was never run through `implement_spec` first
+gets a clear error, not a worktree silently created out of thin air for a
+tool whose whole point is reacting to feedback on existing work.
+
+`resolved_count` counts review comments a commit was pushed for, not
+GitHub review threads actually marked resolved: this tool pushes a fix
+commit, it does not call the Pull Request Review API to resolve threads
+(spec Sec 6.1's "Resolves/replies on thread" is its own later scope). It
+is always `0` when no commit lands, including when the adapter correctly
+determines the feedback is already addressed and makes no change.
 
 ## Known limitations, accepted for this slice
 
