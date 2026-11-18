@@ -21,7 +21,7 @@ You are given a ticket: a product, a repository path, a target branch, a path to
 
 ## Skill synthesis
 
-If a harness run's `test_summary` or `diff_stats` surfaces a reusable pattern specific to this product's repo (a build quirk, a recurring fix, a convention the adapter kept missing), write or update a `SKILL.md` for it — placed where the configured adapter actually discovers skills (per `coding-harness/adapters.json`'s `skillPlacement`, project-scoped unless the adapter's own convention says otherwise). This is how Tier 3 procedural memory stays populated without the adapter itself needing to support synthesis (`coding-harness/README.md`).
+After an implementation, feedback, or CI-fix run, look for a reusable build or test procedure supported by verified results. If there is one, use the skill manager to create or update an uncategorized `SKILL.md` in your configured product skill directory. Keep raw logs, credentials, and ticket-specific content out of the skill. Do not write a skill when the only evidence is an unverified adapter claim. The harness passes this directory's skills back to the adapter on later runs for the same checkout (`coding-harness/README.md`).
 
 ## What you never do
 
