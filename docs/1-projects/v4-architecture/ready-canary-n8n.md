@@ -21,8 +21,27 @@ acknowledges reception, not delivery or merge. `202 busy` means the last
 pass is still running. Completion appears in the board and ledger; host
 logs contain only ticket IDs and status, not credentials or model output.
 The bridge does not need Docker socket access inside n8n.
+`401` means missing or invalid bearer, `403` rejects a browser Origin,
+and `400` rejects a body or chunked transfer. A client timeout does not
+prove the host pass failed to start.
 
 Verified with n8n `1.70.3`: imported the workflow and a fixture credential
 into a disposable instance, executed the manual trigger, and observed one
 authenticated pass on the host. Scheduled activation and live canary
 credentials remain operator steps.
+
+## Live canary checklist
+
+1. Use a disposable repo whose target branch supports enforced protection.
+   Check required human review, stale-approval dismissal, and no automation
+   bypass. A repo that cannot enable those settings is not suitable.
+2. Provision a separate automation identity for the draft and a Director
+   identity for review and merge. Keep router/observer GitHub credentials
+   read-only and do not forward them to SWE.
+3. Run the manual trigger with a Ready ticket mapped to an accepted RFC.
+   Confirm its draft and pinned handoff. Move the ticket to Director PR
+   Merge only after review. The Director merges the pinned head; run the
+   observer and verify the task reaches Done. The pilot doesn't automate
+   the peer-review approval or the human merge.
+4. Replay the trigger. It must not rerun SWE or move an already acknowledged
+   ticket. Activate the schedule only after these checks pass.

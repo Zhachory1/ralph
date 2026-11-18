@@ -25,7 +25,8 @@
         "url": "http://host.docker.internal:8766/tick",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
-        "options": { "timeout": 5000, "redirect": { "redirect": { "followRedirects": false } } }
+        "sendBody": false,
+        "options": { "timeout": 8000, "redirect": { "redirect": { "followRedirects": false } } }
       },
       "credentials": {
         "httpHeaderAuth": { "id": "__SET_AFTER_IMPORT__", "name": "ralph-v4-canary-tick" }
