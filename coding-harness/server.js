@@ -90,7 +90,7 @@ async function ensurePullRequest(worktreePath, branch, ticketId) {
 
     try {
       const createdUrl = await gh(
-        ["pr", "create", "--draft", "--title", `[ralph] ${ticketId}`,
+        ["pr", "create", "--draft", "--head", branch, "--title", `[ralph] ${ticketId}`,
          "--body", `Opened by the coding harness for ticket ${ticketId}. Draft: review before merging.`],
         worktreePath
       );
