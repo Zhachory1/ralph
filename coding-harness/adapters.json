@@ -1,5 +1,5 @@
 {
-  "_comment": "Per spec Sec 11.0: swapping the underlying CLI is a config change here, never a change to the MCP tool signatures in server.js. Each adapter maps the harness-agnostic contract (prompt flag, skill flag, skill placement, completion signal) onto one concrete CLI's actual flags.",
+  "_comment": "Per spec Sec 11.0: swapping the underlying CLI is a config change here, never a change to the MCP tool signatures in server.js. Each adapter maps the harness-agnostic contract (prompt flag, skill flag, skill placement, completion signal) onto one concrete CLI's actual flags. Select one with RALPH_ADAPTER (default: mewrite).",
   "mewrite": {
     "command": "mewrite",
     "promptFlag": "-p",
@@ -8,5 +8,27 @@
     "skillPlacement": "project",
     "skillPlacementPath": ".mewrite/skills/<name>/SKILL.md",
     "completionSignal": "exit-code-and-jsonl"
+  },
+  "opencode": {
+    "command": "opencode",
+    "promptFlag": null,
+    "modeFlag": ["run", "--standalone", "--format", "json", "--auto", "--archived"],
+    "skillPlacement": "isolated-config",
+    "completionSignal": "opencode-steps",
+    "isolatedHome": true,
+    "externalVerification": true,
+    "passEnv": ["OPENROUTER_API_KEY"],
+    "homeConfig": {
+      "$schema": "https://opencode.ai/config.json",
+      "model": "openrouter/anthropic/claude-sonnet-5.5",
+      "providers": { "openrouter": { "settings": { "apiKey": "{env:OPENROUTER_API_KEY}" } } },
+      "policies": [
+        { "action": "tool.use", "resource": "shell:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "external_directory:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "webfetch:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "websearch:*", "effect": "deny" },
+        { "action": "tool.use", "resource": "subagent:*", "effect": "deny" }
+      ]
+    }
   }
 }

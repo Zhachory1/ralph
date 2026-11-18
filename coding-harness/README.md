@@ -57,6 +57,33 @@ cd coding-harness
 npm install
 ```
 
+### Choosing the coding CLI
+
+`RALPH_ADAPTER` selects an entry in `adapters.json` (default `mewrite`). An
+unknown name makes the writing tools return a structured error before
+anything runs. Two adapters ship: `mewrite` and `opencode`.
+
+`opencode` runs `opencode run --standalone --format json --auto` with the
+prompt as one final argument. The harness gives each run a throwaway `HOME`
+containing only the config in `adapters.json` (`homeConfig`), then deletes
+it. The worker therefore inherits none of the operator's global OpenCode
+instructions, agents, skills, or stored logins. It receives a minimal
+environment: `PATH`, the isolated `HOME`, and the variables named in
+`passEnv` (`OPENROUTER_API_KEY`). It never receives GitHub, board, or
+`RALPH_*` variables. Approved project skills are listed in that config by
+directory, so they are never copied into the worktree and committed.
+
+The OpenCode policy denies shell commands, external directory access,
+web tools, and subagents. The worker edits files; verification commands
+must run outside it. A temporary `HOME` is not an OS sandbox: use only
+trusted repos and ancestor configuration, which OpenCode still discovers.
+Never give the worker publishing credentials.
+
+Set `OPENROUTER_API_KEY` in the harness environment to a dedicated key with
+a spend limit, not a personal key. A run is complete only when its last step
+ends with reason `stop` and no error event appeared. Change the model by
+editing `homeConfig.model`.
+
 ## Running
 
 Not wired into any control plane yet (no MCP client calls this
