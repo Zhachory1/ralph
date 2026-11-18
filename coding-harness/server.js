@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { auditPr } from "./audit-pr.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADAPTERS = JSON.parse(readFileSync(resolve(HERE, "adapters.json"), "utf8"));
@@ -722,6 +723,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticket_id", "repo_path", "branch", "failed_logs"],
       },
     },
+    {
+      name: "audit_pr",
+      description: "Runs operator-configured checks against a pinned PR head in isolated containers.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          pr_number: { type: "integer", minimum: 1 },
+          head_sha: { type: "string" },
+        },
+        required: ["repo_path", "pr_number", "head_sha"],
+      },
+    },
   ],
 }));
 
@@ -736,6 +750,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     payload = await applyPrFeedback(toolArgs);
   } else if (name === "fix_ci_failure") {
     payload = await fixCiFailure(toolArgs);
+  } else if (name === "audit_pr") {
+    payload = await auditPr(toolArgs);
   } else {
     throw new Error(`unknown tool: ${name}`);
   }
