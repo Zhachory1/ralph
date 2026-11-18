@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { networkInterfaces, tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -37,6 +37,10 @@ test("loopback MCP requires a bearer grant for discovery and direct calls", asyn
   const token = randomBytes(32).toString("hex");
   const bin = mkdtempSync(join(tmpdir(), "ralph-http-git-"));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const alias = join(bin, "approved");
+  const deniedAlias = join(bin, "denied");
+  symlinkSync(repo, alias, "dir");
+  symlinkSync(bin, deniedAlias, "dir");
   writeFileSync(join(bin, "git"), `#!/bin/sh
 test -z "\${RALPH_HARNESS_HTTP_GRANTS+x}" || exit 1
 case "$1 $2" in
@@ -72,6 +76,7 @@ esac
   assert.deepEqual((await client.listTools()).tools.map(({ name }) => name), ["get_worktree_status"]);
   await assert.rejects(client.callTool({ name: "audit_pr", arguments: {} }), /Tool not granted/);
   await assert.rejects(client.callTool({ name: "get_worktree_status", arguments: { repo_path: bin } }), /Repository not granted/);
-  const result = await client.callTool({ name: "get_worktree_status", arguments: { repo_path: repo } });
+  await assert.rejects(client.callTool({ name: "get_worktree_status", arguments: { repo_path: deniedAlias } }), /Repository not granted/);
+  const result = await client.callTool({ name: "get_worktree_status", arguments: { repo_path: alias } });
   assert.equal(JSON.parse(result.content[0].text).branch, "fixture");
 });

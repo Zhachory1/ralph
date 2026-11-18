@@ -26,12 +26,17 @@ it, set `RALPH_HARNESS_HTTP_GRANTS` to an operator-managed JSON array of
 objects with `token` (generate with `openssl rand -hex 32`) and
 `tools` (an explicit list of allowed tool names) and `repos` (canonical
 absolute paths to allowed checkouts, including any existing worktree you
-grant). Clients send
+grant; use `pwd -P` from each checkout to avoid symlink aliases). Clients send
 `Authorization: Bearer <token>`. Both discovery and invocation enforce
 the grant. The listener rejects browser Origin headers and never binds a
 non-loopback interface. `RALPH_HARNESS_HTTP_PORT` overrides the port.
 Keep tokens out of the repository; rotate them by updating the configured
-grants and restarting the server. Local stdio callers are unaffected.
+grants and restarting the server. The grant configuration is not inherited
+by command subprocesses. Local stdio callers are unaffected.
+
+The HTTP grant is not OS-level isolation. Keep granted checkout paths and
+their parents under trusted filesystem ownership; path validation does not
+protect against another local process replacing a checkout during a call.
 
 ```
 cd coding-harness
