@@ -1,0 +1,46 @@
+{
+  "id": "V4ReadyCanary001",
+  "name": "v4-ready-canary-tick",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual canary",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 210]
+    },
+    {
+      "parameters": { "rule": { "interval": [{ "field": "minutes", "minutesInterval": 3 }] } },
+      "id": "schedule-trigger",
+      "name": "Every three minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 390]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8766/tick",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": { "timeout": 8000, "redirect": { "redirect": { "followRedirects": false } } }
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "__SET_AFTER_IMPORT__", "name": "ralph-v4-canary-tick" }
+      },
+      "id": "ready-tick",
+      "name": "Wake configured Ready canaries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Manual canary": { "main": [[{ "node": "Wake configured Ready canaries", "type": "main", "index": 0 }]] },
+    "Every three minutes": { "main": [[{ "node": "Wake configured Ready canaries", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
