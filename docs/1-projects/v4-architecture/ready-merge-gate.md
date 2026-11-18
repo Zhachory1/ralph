@@ -23,12 +23,29 @@ repeating the acknowledgement is harmless. Receipts without a board
 acknowledgement remain retryable. The handoff row stays as a tombstone
 against duplicate Ready events.
 
-Before wiring the board update, configure the view's `done_bucket_id`
+Before enabling the observer, configure the view's `done_bucket_id`
 to point to Done. Vikunja 0.24.6 was verified to mark the task done when
 moving it into that configured bucket. The observer should accept only
-the Director PR Merge bucket or a task already in Done.
+the Director PR Merge bucket or a task already in Done. The observer
+rechecks membership before the move. Vikunja does not provide an atomic
+compare-and-move in this API, so concurrent manual moves can still race.
 
-This slice adds the gate and database functions, not the scheduled
-observer or a live canary merge. Run `test/ready-merge.sql` on a disposable
-migrated v4 database and `node --test compose/v4/test/verify-ready-merge.test.mjs`
-to check the gate.
+Add `directorBucketId` and `doneBucketId` to the private runner config's
+`board`, plus a top-level `directors` array of approved GitHub logins.
+The config's `expectedAuthor` must not appear in `directors`. Set
+`VIKUNJA_DONE_TOKEN` to a token scoped to the reads and bucket move; it is
+separate from the ticket dispatcher's read credential. Run:
+
+```bash
+RALPH_READY_CONFIG=/path/to/private-ready-config.json \
+  node compose/v4/run-ready-merge.mjs 101
+```
+
+This reads `gh api` only. A ticket outside the Director/Done bucket is
+never acknowledged. `done` is recorded after checking both task status
+and membership, and retries after a successful move are idempotent.
+
+Run `test/ready-merge.sql` on a disposable migrated v4 database and
+`node --test compose/v4/test/*.test.mjs` to check the guards. The manual
+observer was tested with real Postgres and Vikunja and synthetic GitHub
+responses; a live canary still needs its separate Director identity.
