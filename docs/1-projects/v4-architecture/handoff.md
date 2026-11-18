@@ -130,7 +130,7 @@ recording the holder pid in the lock file and reclaiming once that pid is
 gone. Offline tests added: `cd coding-harness && npm test` (fake `gh`,
 fake adapter, real git).
 
-### #201 — `fix_ci_failure` — OPEN, not yet reviewed or merged
+### #201 — `fix_ci_failure`
 Fourth tool, sharing `apply_pr_feedback`'s path via a new
 `updateExistingPr` helper. Only the last 20,000 chars of `failed_logs`
 reach the adapter; `root_cause` is the adapter's own `ROOT CAUSE:` line
@@ -139,22 +139,40 @@ or null. The origin repo is read from `git config remote.origin.pushurl`
 that command applies `url.<base>.insteadOf` rewrites and hid which GitHub
 repo the remote named; the push test caught this. `npm test`: 7 pass,
 all offline (local bare repo transport via `insteadOf`, fake `gh`, fake
-adapter). **Merge blocker: it has had no independent review** — the
-reviewer subagent has been rate-limited out (see below).
+adapter). The resumed review found that a line echoed from CI logs could
+be mistaken for the diagnosis. The parser now uses only the final
+nonblank line; the regression failed before the fix and passed afterward.
+
+### #210–#213 — sandbox audit and permission boundaries
+
+`audit_pr` checks an exact PR head in a network-isolated Docker sandbox.
+The real Docker fixture verified missing-image denial, SHA pinning and
+isolation. The loopback HTTP transport enforces per-caller tool and
+checkout grants. The reviewer bootstrap was exercised in Hermes: only
+`audit_pr` was discoverable and an implementation call was denied.
+
+### #214–#215 — dedicated adapter home and verified hotfixes
+
+Bootstrap no longer copies personal OAuth state. Two real bootstrap runs
+left the legacy fixture untouched and retained new state in the private
+adapter home. A live provider refresh still needs an operator identity.
+`reproduce_and_patch` uses an operator-registered application verifier;
+the fixture showed a draft is published only for an observed red-to-green
+change and failed edits survive a refused retry.
 
 ## Current architecture state
 
 | Piece | State |
 | --- | --- |
 | compose/v4 (postgres, vikunja, n8n) | Boots clean; schema applies; board provisions idempotently; one n8n workflow proven end-to-end on synthetic payloads |
-| coding-harness | 4 of 6 Sec 11 tools: `implement_spec`, `get_worktree_status`, `apply_pr_feedback`, `fix_ci_failure` (last unmerged in #201) |
+| coding-harness | All six tools in the Sec 11 table, including sandboxed `audit_pr` and registered `reproduce_and_patch`; loopback HTTP and stdio |
 | adapters | mewrite only, via `adapters.json` (prompt flag, skill flag, skill placement, JSONL completion signal) |
 | profiles | `council` (scaffold), `swe` (proven on real tickets via `hermes -p ralph-swe chat`) |
 | Vikunja board | 8 columns per spec Sec 5, created by `bootstrap-vikunja.sh` |
 | PR flow | `implement_spec` commits + pushes + opens/reuses a draft PR on a real repo |
 
-Not built: `audit_pr`, `reproduce_and_patch`, the skill-synthesis loop
-(Sec 11.0.1), real `ci_state`/`pending_notes_count`, real GitHub
+Not wired: skill synthesis in a live SWE run (Sec 11.0.1), real
+`ci_state`/`pending_notes_count`, real GitHub
 review-thread resolution, any wiring from n8n/Vikunja into `swe` or the
 harness (every dispatch so far has been a manual `hermes chat -q`), OAuth
 token refresh (below).
@@ -207,7 +225,7 @@ These cost real time. Do not rediscover them.
   with empty content means the adapter errored (check
   `stopReason: "error"` + `errorMessage`).
 
-## Rate-limit root cause (2026-11-18) — important, still open
+## Historical mewrite reviewer rate limit (2026-11-18)
 
 The `reviewer` subagent (and any subagent whose frontmatter pins
 `model: claude-sonnet-5`) resolves that model to the **Anthropic OAuth
@@ -243,11 +261,10 @@ own volume burned the OAuth window.
 
 ## Open items / backlog
 
-1. **PR #201 (`fix_ci_failure`) needs an independent review, then merge.**
-   Locally verified (7 offline tests pass); blocked only by the
-   rate-limited reviewer path — review inline on the main session or
-   after the OAuth window resets.
-2. Remaining Sec 11 tools: `audit_pr`, `reproduce_and_patch`.
+1. Complete [#203](https://github.com/Zhachory1/ralph/issues/203), then
+   continue the sequential v4 backlog through #209.
+2. Resolve base drift in the maintenance workflow per
+   [decision 0006](../../decisions/0006-v4-base-drift-preserves-pr-history.md).
 3. Wire a real ticket source end to end: Vikunja Ready-column ticket →
    n8n (or manual trigger) → `swe`/`implement_spec` dispatch, closing the
    loop #198 did by hand.
