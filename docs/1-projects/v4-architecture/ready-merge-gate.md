@@ -16,7 +16,8 @@ read-only GitHub access; it never calls a merge endpoint.
 Apply `compose/v4/init-db/03-ready-merge.sql` after the Ready lease
 migration. `record_ready_merge` matches the proof against the existing
 pinned handoff and stores the receipt before any board update. A new
-receipt cannot replace a conflicting one. After confirming the Done
+receipt cannot replace a conflicting one. `receipt_rejected` indicates
+either a handoff mismatch or conflicting previously recorded proof. After confirming the Done
 transition, use `mark_ready_board_done` with the same merge commit;
 repeating the acknowledgement is harmless. Receipts without a board
 acknowledgement remain retryable. The handoff row stays as a tombstone

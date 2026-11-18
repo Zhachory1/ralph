@@ -49,6 +49,11 @@ test("denies evidence from the wrong branch, repository or PR number", () => {
   assert.equal(verifyReadyMerge(expected, fork).status, "wrong_pr");
 });
 
+test("refuses merge evidence without a valid merge commit and timestamp", () => {
+  assert.equal(verifyReadyMerge(expected, { ...merged, merge_commit_sha: null }).status, "incomplete_evidence");
+  assert.equal(verifyReadyMerge(expected, { ...merged, merged_at: "not-a-date" }).status, "incomplete_evidence");
+});
+
 test("records proof before moving the board and acknowledges only a confirmed move", async () => {
   const calls = [];
   const result = await completeReadyTicket(expected, {
@@ -73,5 +78,25 @@ test("does not touch the board when the merge receipt is rejected", async () => 
     moveBoardDone: async () => assert.fail("board moved without receipt"),
     recordDone: async () => assert.fail("Done recorded without receipt"),
   });
-  assert.equal(result.status, "stale_dispatch");
+  assert.equal(result.status, "receipt_rejected");
+});
+
+test("leaves an accepted receipt retryable if the ticket has not reached the Director gate", async () => {
+  const result = await completeReadyTicket(expected, {
+    readPull: async () => merged,
+    recordMerge: async () => true,
+    moveBoardDone: async () => false,
+    recordDone: async () => assert.fail("acknowledged a ticket that did not move"),
+  });
+  assert.equal(result.status, "not_at_director_gate");
+});
+
+test("does not report Done if the acknowledgement fails after a confirmed move", async () => {
+  const result = await completeReadyTicket(expected, {
+    readPull: async () => merged,
+    recordMerge: async () => true,
+    moveBoardDone: async () => true,
+    recordDone: async () => false,
+  });
+  assert.equal(result.status, "board_ack_failed");
 });
