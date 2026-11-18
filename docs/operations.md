@@ -19,6 +19,13 @@ no external network, and a non-functional provider key. It also checks disposabl
 This does not verify real model availability, paid calls, or production routing.
 The launcher uses `--pull=never`; its pinned Hermes image must already be cached.
 
+For an opt-in live check, set `OPENROUTER_API_KEY` in the environment and run
+`node compose/v4/test/council-live-smoke.mjs --live`. This sends a fixed synthetic RFC
+and the v1 rubric to three model routes, costs money, and has no enforced spend cap.
+Costs depend on token use and [OpenRouter's current model prices](https://openrouter.ai/models).
+The result reports the panel decision and verdicts; it does not route work or prove
+the identity of the models actually served. Judge egress remains unrestricted.
+
 ## Changing things safely
 
 - **Profile or install change:** merge, then re-run `init` for every instance. Verify a SOUL or config hash against `main` ([infrastructure.md](infrastructure.md#is-what-is-live-what-is-on-main)). Setting `container_persistent: false` affects new sessions; containers started under the old persistent setting remain until separately removed when idle. Workspace files remain in the host-mounted `/workspace`; files and caches under `/root` do not survive session cleanup.
