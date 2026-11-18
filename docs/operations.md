@@ -13,6 +13,12 @@ How to stand Ralph up, change it safely, and recover it. Components are describe
 
 The separate v4 pilot uses a [dedicated adapter login](1-projects/v4-architecture/hermes-harness-integration.md#adapter-authentication) rather than a copy of a personal OAuth session.
 
+For the unwired v4 Council judge launcher, `python3 compose/v4/test/council-judge-docker.py`
+checks the cached pinned Hermes image with three synthetic model routes, no external network,
+and no provider key. It also checks disposable-container cleanup. This does not verify real
+model availability, paid calls, or production routing.
+The launcher uses `--pull=never`; its pinned Hermes image must already be cached.
+
 ## Changing things safely
 
 - **Profile or install change:** merge, then re-run `init` for every instance. Verify a SOUL or config hash against `main` ([infrastructure.md](infrastructure.md#is-what-is-live-what-is-on-main)). Setting `container_persistent: false` affects new sessions; containers started under the old persistent setting remain until separately removed when idle. Workspace files remain in the host-mounted `/workspace`; files and caches under `/root` do not survive session cleanup.

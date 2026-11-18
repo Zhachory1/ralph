@@ -26,6 +26,10 @@ function validVerdict(value) {
     && Array.isArray(value.non_blocking_notes) && Array.from(value.non_blocking_notes).every(nonempty);
 }
 
+export function validateCouncilVerdict(verdict) {
+  if (!validVerdict(verdict)) throw new TypeError("Invalid Council judge verdict");
+}
+
 // revisions is the number of completed author revision cycles, not the review round.
 export function councilDecision(verdicts, revisions) {
   if (!Number.isInteger(revisions) || revisions < 0 || revisions > MAX_COUNCIL_REVISIONS
