@@ -5,10 +5,11 @@
 // implement_spec, against one concrete adapter (mewrite), proving the
 // harness-agnostic contract from Sec 11.0 end to end.
 //
-// implement_spec opens a real draft PR via `gh` when the adapter produces
-// a diff. Non-goals: no pending_human_notes polling, no Docker sandboxing
-// (the spec reserves that for audit_pr on untrusted external code, not
-// needed for a repo this harness already trusts).
+// implement_spec and apply_pr_feedback both open/push to a real draft PR
+// via `gh` when the adapter produces a diff. Non-goals: no
+// pending_human_notes polling, no Docker sandboxing (the spec reserves
+// that for audit_pr on untrusted external code, not needed for a repo
+// this harness already trusts).
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -319,6 +320,44 @@ async function getWorktreeStatus(args) {
   };
 }
 
+// Shared by implement_spec and apply_pr_feedback: stage, commit under the
+// harness's own identity, and push/open-or-reuse a PR -- only when a real
+// diff exists. Mutates nothing if there is nothing to commit; returns the
+// pieces each caller assembles into its own return shape differently
+// (implement_spec needs pr_url, apply_pr_feedback needs commit_sha).
+async function commitAndSync(worktreePath, branch, ticketId, diffStat, commitMessage) {
+  const openQuestions = [];
+  let prUrl = null;
+  let commitSha = null;
+
+  if (!diffStat.trim()) return { prUrl, commitSha, openQuestions };
+
+  try {
+    // -c identity flags, not a global/repo git config write: this
+    // process's commits are attributed to the harness, without depending
+    // on (or silently overwriting) whatever git identity the host or
+    // operator already has configured -- found missing by hitting
+    // "Author identity unknown" on a real host with no global git
+    // user.name/email set at all.
+    await git([
+      "-c", "user.name=ralph-coding-harness",
+      "-c", "user.email=ralph-coding-harness@localhost",
+      "commit", "-m", commitMessage,
+    ], worktreePath);
+    commitSha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
+  } catch (err) {
+    openQuestions.push(`could not commit changes: ${err.message}`);
+  }
+
+  if (!openQuestions.length) {
+    const { pr_url, note } = await ensurePullRequest(worktreePath, branch, ticketId);
+    prUrl = pr_url;
+    if (note) openQuestions.push(note);
+  }
+
+  return { prUrl, commitSha, openQuestions };
+}
+
 async function implementSpec(args) {
   const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
 
@@ -368,31 +407,11 @@ async function implementSpec(args) {
 
   let prUrl = null;
   // Only on a real, completed diff: a failed run, or one that touched
-  // nothing, has nothing to open a PR for. The adapter's own edits are
-  // staged (git add -A above) but not committed -- committing here, right
-  // before the push, keeps the harness (not the adapter) as the one place
-  // that decides what constitutes a reviewable unit of work.
+  // nothing, has nothing to open a PR for.
   if (status === "completed" && diffStat.trim()) {
-    try {
-      // -c identity flags, not a global/repo git config write: this
-      // process's commits are attributed to the harness, without
-      // depending on (or silently overwriting) whatever git identity the
-      // host or operator already has configured -- found missing by
-      // hitting "Author identity unknown" on a real host with no global
-      // git user.name/email set at all.
-      await git([
-        "-c", "user.name=ralph-coding-harness",
-        "-c", "user.email=ralph-coding-harness@localhost",
-        "commit", "-m", `[ralph] ${ticket_id}`,
-      ], worktreePath);
-    } catch (err) {
-      openQuestions.push(`could not commit changes: ${err.message}`);
-    }
-    if (!openQuestions.length) {
-      const { pr_url, note } = await ensurePullRequest(worktreePath, branch, ticket_id);
-      prUrl = pr_url;
-      if (note) openQuestions.push(note);
-    }
+    const sync = await commitAndSync(worktreePath, branch, ticket_id, diffStat, `[ralph] ${ticket_id}`);
+    prUrl = sync.prUrl;
+    openQuestions.push(...sync.openQuestions);
   }
 
   return {
@@ -401,6 +420,85 @@ async function implementSpec(args) {
     branch,
     test_summary: finalText,
     diff_stats: diffStat.trim() || null,
+    open_questions: openQuestions,
+  };
+}
+
+function buildFeedbackPrompt(reviewComments) {
+  const comments = (reviewComments || [])
+    .map((c, i) => `${i + 1}. ${typeof c === "string" ? c : JSON.stringify(c)}`)
+    .join("\n");
+  return [
+    "Address the following code review feedback on this branch. Make the",
+    "smallest correct change that resolves each comment, run the project's",
+    "own tests if a test command is discoverable, and report what you did.",
+    "",
+    "--- Review comments ---",
+    comments || "(none given)",
+  ].join("\n");
+}
+
+function applyFeedbackErrorPayload(message) {
+  return {
+    status: "error",
+    commit_sha: null,
+    resolved_count: 0,
+    test_summary: null,
+    open_questions: [message],
+  };
+}
+
+async function applyPrFeedback(args) {
+  const { ticket_id, repo_path, branch, review_comments } = args;
+
+  // Unlike implement_spec, this never creates a worktree: feedback is
+  // addressed on a branch implement_spec already pushed and opened a PR
+  // for. A missing worktree here means the caller's ticket_id/repo_path
+  // do not match an in-flight implement_spec run -- a setup error, not
+  // something this tool should silently provision around.
+  const worktreeRoot = resolve(repo_path, "..", ".harness-worktrees");
+  const worktreePath = resolve(worktreeRoot, ticket_id);
+  if (!(await isValidWorktree(worktreePath))) {
+    return applyFeedbackErrorPayload(`no existing worktree for ticket ${ticket_id} at ${worktreePath}; apply_pr_feedback only works on a worktree implement_spec already created`);
+  }
+
+  const prompt = buildFeedbackPrompt(review_comments);
+  const adapter = ADAPTERS.mewrite;
+  let result;
+  try {
+    result = await runAdapter(adapter, worktreePath, prompt, []);
+  } catch (err) {
+    return applyFeedbackErrorPayload(`could not run adapter: ${err.message}`);
+  }
+  const { finalText, turnEndSeen } = parseJsonlCompletion(result.stdout);
+
+  await git(["add", "-A"], worktreePath).catch(() => {});
+  const diffStat = await git(["diff", "--stat", "HEAD"], worktreePath).catch(() => "");
+
+  const status = result.code === 0 && turnEndSeen ? "completed" : "failed";
+  const openQuestions = result.code !== 0 ? [`adapter exited ${result.code}: ${result.stderr.trim().slice(0, 500)}`] : [];
+
+  let commitSha = null;
+  // resolved_count counts comments this run pushed a fix for, not GitHub
+  // threads actually marked resolved: this tool pushes a commit, it does
+  // not call the Pull Request Review API to resolve review threads (spec
+  // Sec 6.1's own apply_pr_feedback row -- "Resolves/replies on thread"
+  // -- is a later slice's scope, not this one's). 0 whenever no commit
+  // landed, so a caller never reads a nonzero count against feedback
+  // that never reached GitHub.
+  let resolvedCount = 0;
+  if (status === "completed" && diffStat.trim()) {
+    const sync = await commitAndSync(worktreePath, branch, ticket_id, diffStat, `[ralph] address review feedback: ${ticket_id}`);
+    commitSha = sync.commitSha;
+    openQuestions.push(...sync.openQuestions);
+    if (commitSha) resolvedCount = (review_comments || []).length;
+  }
+
+  return {
+    status,
+    commit_sha: commitSha,
+    resolved_count: resolvedCount,
+    test_summary: finalText,
     open_questions: openQuestions,
   };
 }
@@ -442,6 +540,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticket_id", "repo_path"],
       },
     },
+    {
+      name: "apply_pr_feedback",
+      description:
+        "Addresses review comments on an existing implement_spec worktree/PR and pushes a fix commit (spec Sec 11). Requires a worktree implement_spec already created for this ticket_id; never creates one. resolved_count counts comments a commit was pushed for, not GitHub threads actually marked resolved.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_id: { type: "string" },
+          repo_path: { type: "string" },
+          branch: { type: "string" },
+          review_comments: { type: "array", items: {} },
+        },
+        required: ["ticket_id", "repo_path", "branch", "review_comments"],
+      },
+    },
   ],
 }));
 
@@ -452,6 +565,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     payload = await implementSpec(toolArgs);
   } else if (name === "get_worktree_status") {
     payload = await getWorktreeStatus(toolArgs);
+  } else if (name === "apply_pr_feedback") {
+    payload = await applyPrFeedback(toolArgs);
   } else {
     throw new Error(`unknown tool: ${name}`);
   }
