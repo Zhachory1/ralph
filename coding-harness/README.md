@@ -8,12 +8,13 @@ the tool signatures below.
 
 ## Status
 
-Two tools implemented: `implement_spec` and `get_worktree_status`, against
-one adapter (`mewrite`). `implement_spec` opens a real draft PR via `gh`
-when the adapter produces a diff. Not yet built: `apply_pr_feedback`,
-`fix_ci_failure`, `audit_pr`, `reproduce_and_patch` (spec Sec 11's other
-four), and the skill-synthesis loop (Sec 11.0.1) — that needs a real
-judgment-making profile to own it, not this server.
+Three tools implemented: `implement_spec`, `get_worktree_status`, and
+`apply_pr_feedback`, against one adapter (`mewrite`). `implement_spec` and
+`apply_pr_feedback` publish changes when the adapter produces a diff.
+Only `implement_spec` can open a draft PR. Not yet built: `fix_ci_failure`, `audit_pr`,
+`reproduce_and_patch` (spec Sec 11's other three), and the skill-synthesis
+loop (Sec 11.0.1) — that needs a real judgment-making profile to own it,
+not this server.
 
 ## Setup
 
@@ -105,6 +106,49 @@ which git itself would otherwise report as if it were a real branch name.
 integration and no `pending_human_notes` table exist yet. An honest stub is
 correct here, not a shortcut to fix later in this same tool -- those need
 their own slices (CI webhook wiring, the Postgres table from spec Sec 11.2).
+
+`apply_pr_feedback` takes `{ ticket_id, repo_path, branch, review_comments }`
+and returns:
+
+```json
+{
+  "status": "completed | failed | error",
+  "commit_sha": "the pushed commit's SHA, or null if nothing changed/was committed",
+  "resolved_count": 0,
+  "test_summary": "the adapter's final message, or null on error",
+  "open_questions": ["present on error/failed, or a non-fatal commit/PR note"]
+}
+```
+
+Unlike `implement_spec`, this tool **never creates a worktree**: it
+operates on the worktree `implement_spec` already created for `ticket_id`,
+and returns `status: "error"` if none exists -- a caller passing a
+`ticket_id`/`repo_path` that was never run through `implement_spec` first
+gets a clear error, not a worktree silently created out of thin air for a
+tool whose whole point is reacting to feedback on existing work.
+
+Feedback requires an existing open PR on the branch in the GitHub `origin`
+push repository. It never creates a PR. `resolved_count` stays `0` because
+this tool does not resolve review threads. If publishing fails, it returns
+an error with `commit_sha: null`; any local commit is retained.
+
+Before touching the worktree, `apply_pr_feedback` verifies it is actually
+checked out to the `branch` argument the caller passed (not just that it
+is *some* valid worktree) -- a stale or mismatched `branch` would
+otherwise push whatever the worktree happens to be on to a remote ref
+named after the caller's claim, silently landing feedback on the wrong
+branch.
+
+Both `implement_spec` and `apply_pr_feedback` serialize every call for one
+`ticket_id` through a filesystem lock (`.<ticket_id>.lock` next to the
+worktrees, created with `O_EXCL`), so two concurrent calls -- either tool,
+against either tool -- never run their adapter processes or mutate the
+git index in the same worktree at the same time. An in-process lock would
+not work here: each MCP client connection spawns its own `node server.js`
+process, confirmed directly while testing this. Verified against a real
+race: two concurrent `apply_pr_feedback` calls for the same ticket_id ran
+sequentially (not concurrently), producing two real, correctly-ordered
+commits on the sandbox repo rather than a corrupted worktree.
 
 ## Known limitations, accepted for this slice
 

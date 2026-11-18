@@ -5,18 +5,20 @@
 // implement_spec, against one concrete adapter (mewrite), proving the
 // harness-agnostic contract from Sec 11.0 end to end.
 //
-// implement_spec opens a real draft PR via `gh` when the adapter produces
-// a diff. Non-goals: no pending_human_notes polling, no Docker sandboxing
-// (the spec reserves that for audit_pr on untrusted external code, not
-// needed for a repo this harness already trusts).
+// implement_spec and apply_pr_feedback both open/push to a real draft PR
+// via `gh` when the adapter produces a diff. Non-goals: no
+// pending_human_notes polling, no Docker sandboxing (the spec reserves
+// that for audit_pr on untrusted external code, not needed for a repo
+// this harness already trusts).
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, constants as fsConstants } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADAPTERS = JSON.parse(readFileSync(resolve(HERE, "adapters.json"), "utf8"));
@@ -120,6 +122,56 @@ async function isValidWorktree(path) {
     return out.trim() === "true";
   } catch {
     return false;
+  }
+}
+
+// Serializes any run (implement_spec or apply_pr_feedback) against one
+// ticket's worktree. ensureWorktree already guards worktree *creation*
+// against a concurrent duplicate-create; nothing previously guarded two
+// calls that both operate inside an *existing* worktree at the same time
+// (e.g. apply_pr_feedback racing implement_spec, or two apply_pr_feedback
+// calls), which could run two adapter processes writing files and
+// mutating the git index in the same directory simultaneously. A plain
+// in-process lock (e.g. a Map) would not help: each MCP client connection
+// spawns its own `node server.js` process, confirmed directly while
+// testing implement_spec's own worktree-creation race -- only a
+// filesystem-level lock, visible across processes, actually serializes
+// this. O_EXCL makes the create atomic: two processes racing to open the
+// same lock file, only one gets ENOENT's opposite (success); the other
+// gets EEXIST and retries.
+async function withWorktreeLock(worktreeRoot, ticketId, fn) {
+  const lockPath = resolve(worktreeRoot, `.${ticketId}.lock`);
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    try {
+      const fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY);
+      writeFileSync(fd, String(process.pid));
+      closeSync(fd);
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      // A holder killed mid-run never reaches the finally below, so its
+      // lock would wedge the ticket forever. The lock records the holder's
+      // pid; once that process is gone, the lock is reclaimed.
+      const holder = Number(readFileSync(lockPath, "utf8").trim());
+      let alive = false;
+      if (holder > 0) {
+        try { process.kill(holder, 0); alive = true; } catch (e) { alive = e.code === "EPERM"; }
+      }
+      if (holder > 0 && !alive) {
+        try { unlinkSync(lockPath); } catch {}
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for worktree lock held by another run (ticket ${ticketId})`);
+      }
+      await sleep(250);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    unlinkSync(lockPath);
   }
 }
 
@@ -319,6 +371,44 @@ async function getWorktreeStatus(args) {
   };
 }
 
+// Shared by implement_spec and apply_pr_feedback: stage, commit under the
+// harness's own identity, and push/open-or-reuse a PR -- only when a real
+// diff exists. Mutates nothing if there is nothing to commit; returns the
+// pieces each caller assembles into its own return shape differently
+// (implement_spec needs pr_url, apply_pr_feedback needs commit_sha).
+async function commitAndSync(worktreePath, branch, ticketId, diffStat, commitMessage) {
+  const openQuestions = [];
+  let prUrl = null;
+  let commitSha = null;
+
+  if (!diffStat.trim()) return { prUrl, commitSha, openQuestions };
+
+  try {
+    // -c identity flags, not a global/repo git config write: this
+    // process's commits are attributed to the harness, without depending
+    // on (or silently overwriting) whatever git identity the host or
+    // operator already has configured -- found missing by hitting
+    // "Author identity unknown" on a real host with no global git
+    // user.name/email set at all.
+    await git([
+      "-c", "user.name=ralph-coding-harness",
+      "-c", "user.email=ralph-coding-harness@localhost",
+      "commit", "-m", commitMessage,
+    ], worktreePath);
+    commitSha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
+  } catch (err) {
+    openQuestions.push(`could not commit changes: ${err.message}`);
+  }
+
+  if (!openQuestions.length) {
+    const { pr_url, note } = await ensurePullRequest(worktreePath, branch, ticketId);
+    prUrl = pr_url;
+    if (note) openQuestions.push(note);
+  }
+
+  return { prUrl, commitSha, openQuestions };
+}
+
 async function implementSpec(args) {
   const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
 
@@ -326,14 +416,31 @@ async function implementSpec(args) {
     return errorPayload(branch, `rfc_path does not exist: ${rfc_path}`);
   }
 
+  const worktreeRoot = resolve(repo_path, "..", ".harness-worktrees");
+  mkdirSync(worktreeRoot, { recursive: true });
+  try {
+    return await withWorktreeLock(worktreeRoot, ticket_id, () =>
+      implementSpecLocked(args, worktreeRoot)
+    );
+  } catch (err) {
+    return errorPayload(branch, `could not acquire worktree lock: ${err.message}`);
+  }
+}
+
+async function implementSpecLocked(args, worktreeRoot) {
+  const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
+
   let worktreePath;
   try {
     worktreePath = await ensureWorktree(repo_path, branch, ticket_id);
   } catch (err) {
     // Every setup failure (missing repo_path, a stray non-worktree
-    // directory, a concurrent call racing this one) returns the
-    // structured payload the MCP contract promises, rather than letting
-    // the rejection propagate as an unhandled protocol-level error.
+    // directory) returns the structured payload the MCP contract
+    // promises, rather than letting the rejection propagate as an
+    // unhandled protocol-level error. The concurrent-create race
+    // ensureWorktree's own comment describes is now moot: withWorktreeLock
+    // above already serializes every call for this ticket_id, so two
+    // calls never reach ensureWorktree at the same time in the first place.
     return errorPayload(branch, `could not provision worktree: ${err.message}`);
   }
 
@@ -368,31 +475,11 @@ async function implementSpec(args) {
 
   let prUrl = null;
   // Only on a real, completed diff: a failed run, or one that touched
-  // nothing, has nothing to open a PR for. The adapter's own edits are
-  // staged (git add -A above) but not committed -- committing here, right
-  // before the push, keeps the harness (not the adapter) as the one place
-  // that decides what constitutes a reviewable unit of work.
+  // nothing, has nothing to open a PR for.
   if (status === "completed" && diffStat.trim()) {
-    try {
-      // -c identity flags, not a global/repo git config write: this
-      // process's commits are attributed to the harness, without
-      // depending on (or silently overwriting) whatever git identity the
-      // host or operator already has configured -- found missing by
-      // hitting "Author identity unknown" on a real host with no global
-      // git user.name/email set at all.
-      await git([
-        "-c", "user.name=ralph-coding-harness",
-        "-c", "user.email=ralph-coding-harness@localhost",
-        "commit", "-m", `[ralph] ${ticket_id}`,
-      ], worktreePath);
-    } catch (err) {
-      openQuestions.push(`could not commit changes: ${err.message}`);
-    }
-    if (!openQuestions.length) {
-      const { pr_url, note } = await ensurePullRequest(worktreePath, branch, ticket_id);
-      prUrl = pr_url;
-      if (note) openQuestions.push(note);
-    }
+    const sync = await commitAndSync(worktreePath, branch, ticket_id, diffStat, `[ralph] ${ticket_id}`);
+    prUrl = sync.prUrl;
+    openQuestions.push(...sync.openQuestions);
   }
 
   return {
@@ -401,6 +488,115 @@ async function implementSpec(args) {
     branch,
     test_summary: finalText,
     diff_stats: diffStat.trim() || null,
+    open_questions: openQuestions,
+  };
+}
+
+function buildFeedbackPrompt(reviewComments) {
+  const comments = (reviewComments || [])
+    .map((c, i) => `${i + 1}. ${typeof c === "string" ? c : JSON.stringify(c)}`)
+    .join("\n");
+  return [
+    "Address the following code review feedback on this branch. Make the",
+    "smallest correct change that resolves each comment, run the project's",
+    "own tests if a test command is discoverable, and report what you did.",
+    "",
+    "--- Review comments ---",
+    comments || "(none given)",
+  ].join("\n");
+}
+
+function applyFeedbackErrorPayload(message) {
+  return {
+    status: "error",
+    commit_sha: null,
+    resolved_count: 0,
+    test_summary: null,
+    open_questions: [message],
+  };
+}
+
+async function applyPrFeedback(args) {
+  const { repo_path, branch, ticket_id } = args;
+  const worktreeRoot = resolve(repo_path, "..", ".harness-worktrees");
+  mkdirSync(worktreeRoot, { recursive: true });
+  try {
+    return await withWorktreeLock(worktreeRoot, ticket_id, () =>
+      applyPrFeedbackLocked(args, worktreeRoot)
+    );
+  } catch (err) {
+    return applyFeedbackErrorPayload(`could not apply feedback: ${err.message}`);
+  }
+}
+
+async function applyPrFeedbackLocked(args, worktreeRoot) {
+  const { ticket_id, repo_path, branch, review_comments } = args;
+
+  // Unlike implement_spec, this never creates a worktree: feedback is
+  // addressed on a branch implement_spec already pushed and opened a PR
+  // for. A missing worktree here means the caller's ticket_id/repo_path
+  // do not match an in-flight implement_spec run -- a setup error, not
+  // something this tool should silently provision around.
+  const worktreePath = resolve(worktreeRoot, ticket_id);
+  if (!(await isValidWorktree(worktreePath))) {
+    return applyFeedbackErrorPayload(`no existing worktree for ticket ${ticket_id} at ${worktreePath}; apply_pr_feedback only works on a worktree implement_spec already created`);
+  }
+
+  // isValidWorktree only confirms this path is some git worktree, not
+  // that it is checked out to the branch the caller believes it is on.
+  // Without this check, a stale or mismatched `branch` argument would
+  // push whatever HEAD the worktree is actually on to a remote ref named
+  // after the caller's claim -- silently pushing to the wrong branch and
+  // opening/reusing a PR against it.
+  const actualBranch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath).catch(() => "")).trim();
+  if (actualBranch !== branch) {
+    return applyFeedbackErrorPayload(`worktree for ticket ${ticket_id} is on branch '${actualBranch}', not the requested '${branch}'; refusing to push feedback to the wrong branch`);
+  }
+
+  const commonDir = async (cwd) => (await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd)).trim();
+  if (await commonDir(repo_path) !== await commonDir(worktreePath)) {
+    return applyFeedbackErrorPayload("worktree belongs to a different repository");
+  }
+  const origin = (await git(["remote", "get-url", "--push", "origin"], worktreePath)).trim();
+  const target = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+)$/.exec(origin)?.[1].replace(/\.git$/, "");
+  if (!target) return applyFeedbackErrorPayload("expected a GitHub origin push URL");
+  const prs = JSON.parse(await gh(["pr", "list", "--repo", target, "--head", branch, "--json", "headRefName,isCrossRepository"], worktreePath));
+  if (!prs.some((pr) => pr.headRefName === branch && !pr.isCrossRepository)) {
+    return applyFeedbackErrorPayload("no existing pull request for this branch");
+  }
+  const prompt = buildFeedbackPrompt(review_comments);
+  const adapter = ADAPTERS.mewrite;
+  let result;
+  try {
+    result = await runAdapter(adapter, worktreePath, prompt, []);
+  } catch (err) {
+    return applyFeedbackErrorPayload(`could not run adapter: ${err.message}`);
+  }
+  const { finalText, turnEndSeen } = parseJsonlCompletion(result.stdout);
+
+  await git(["add", "-A"], worktreePath).catch(() => {});
+  const diffStat = await git(["diff", "--stat", "HEAD"], worktreePath).catch(() => "");
+
+  const status = result.code === 0 && turnEndSeen ? "completed" : "failed";
+  const openQuestions = result.code !== 0 ? [`adapter exited ${result.code}: ${result.stderr.trim().slice(0, 500)}`] : [];
+
+  let commitSha = null;
+  if (status === "completed" && diffStat.trim()) {
+    try {
+      await git(["-c", "user.name=ralph-coding-harness", "-c", "user.email=ralph-coding-harness@localhost", "commit", "-m", `[ralph] address review feedback: ${ticket_id}`], worktreePath);
+      const sha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
+      await git(["push", "origin", `refs/heads/${branch}:refs/heads/${branch}`], worktreePath);
+      commitSha = sha;
+    } catch (err) {
+      return { ...applyFeedbackErrorPayload(`could not publish feedback: ${err.message}`), test_summary: finalText };
+    }
+  }
+
+  return {
+    status,
+    commit_sha: commitSha,
+    resolved_count: 0,
+    test_summary: finalText,
     open_questions: openQuestions,
   };
 }
@@ -442,6 +638,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticket_id", "repo_path"],
       },
     },
+    {
+      name: "apply_pr_feedback",
+      description:
+        "Addresses review comments on an existing implement_spec worktree/PR and pushes a fix commit (spec Sec 11). Requires a worktree implement_spec already created for this ticket_id; never creates one. Requires an existing open PR. resolved_count is zero; threads are not resolved by this tool.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_id: { type: "string" },
+          repo_path: { type: "string" },
+          branch: { type: "string" },
+          review_comments: { type: "array", items: {} },
+        },
+        required: ["ticket_id", "repo_path", "branch", "review_comments"],
+      },
+    },
   ],
 }));
 
@@ -452,6 +663,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     payload = await implementSpec(toolArgs);
   } else if (name === "get_worktree_status") {
     payload = await getWorktreeStatus(toolArgs);
+  } else if (name === "apply_pr_feedback") {
+    payload = await applyPrFeedback(toolArgs);
   } else {
     throw new Error(`unknown tool: ${name}`);
   }
