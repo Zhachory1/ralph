@@ -276,8 +276,8 @@ Hermes + harness + swe:
 ```
 HERMES_IMAGE=nousresearch/hermes-agent:v0.22.2 \
 HERMES_HOME_VOLUME=/tmp/hermes-home \
-MEWRITE_AUTH_SOURCE=~/.mewrite/agent/auth.json \
   ./compose/v4/bootstrap-hermes.sh
+# Sign in to mewrite from the persistent adapter home; see hermes-harness-integration.md.
 # then once per fresh profile: hermes -p ralph-swe config set
 #   model.provider anthropic / model.default claude-sonnet-5 /
 #   platform_toolsets.cli ["file"] / agent.disabled_toolsets [...]

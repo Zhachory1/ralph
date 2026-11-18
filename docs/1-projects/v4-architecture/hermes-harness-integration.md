@@ -59,26 +59,24 @@ Hermes home volume and confirmed no duplicated config or gitconfig entries
 --add` always appends, so a naive re-run doubled the `safe.directory`
 entry; fixed with a check-before-add).
 
-## A fifth finding, documented rather than fixed this slice
+## Adapter authentication
 
-**OAuth access tokens are short-lived (minutes), and copying a static
-`auth.json` snapshot into a container is fragile once it expires.** Hit
-this directly: a fresh copy worked, the same copy failed minutes later with
-mewrite reporting "No API key for provider: anthropic" -- the access token
-had expired and whatever refresh mewrite attempts from a cold, isolated
-`$HOME` did not succeed (not diagnosed further; could be network-path
-differences inside the container, or mewrite expecting live session state
-beyond `auth.json` alone). `bootstrap-hermes.sh` copies the credential once,
-same as the manual test did; it does not solve token refresh. Re-run the
-auth-copy step (or point `MEWRITE_AUTH_SOURCE` at a live, actively-refreshed
-file) if a session fails with that error.
+The earlier bootstrap copied a short-lived OAuth snapshot from the host.
+It now leaves authentication to the operator and preserves the adapter's
+writable home across restarts. For OAuth, sign in once with a dedicated
+automation identity from the same mounted home the adapter uses:
 
-This is flagged, not fixed, because solving it properly is its own
-decision (keep mewrite's `$HOME` as a live bind mount to the host's actual
-`~/.mewrite` instead of a copy? build a refresh step into the harness
-itself? neither is free of its own tradeoffs) and belongs in a slice that
-actually wires this for unattended, longer-running use -- not a one-off
-proof.
+```bash
+docker run --rm -it -v "$HERMES_HOME_VOLUME:/opt/data" "$HERMES_IMAGE" \
+  sh -c 'HOME=/opt/data/mewrite-home /opt/data/npm-global/bin/mewrite login anthropic'
+```
+
+Use the provider configured for your adapter. Mewrite owns token refresh
+and writes its refreshed credential back to the same directory. Do not
+share that writable directory with an interactive login or mount a host
+credential snapshot. The test verifies persistence wiring, not a live
+provider refresh. If refresh fails, check the provider and reauthenticate
+from the same dedicated home.
 
 ## `swe` profile (new)
 
@@ -113,7 +111,6 @@ matches.
   harness's own README).
 - No skill-synthesis loop actually exercised -- `SOUL.md` describes the
   judgment call `swe` is meant to make, but nothing has triggered it yet.
-- OAuth token refresh for a long-running setup, per the finding above.
 
 ## Verification done this slice
 
@@ -121,7 +118,6 @@ matches.
 cd compose/v4
 HERMES_IMAGE=nousresearch/hermes-agent:v0.22.2 \
   HERMES_HOME_VOLUME=<fresh dir> \
-  MEWRITE_AUTH_SOURCE=~/.mewrite/agent/auth.json \
   ./bootstrap-hermes.sh
 # ... run twice, confirmed no duplicated config/gitconfig entries
 
@@ -134,7 +130,7 @@ docker run --rm -v <hermes_home_volume>:/opt/data nousresearch/hermes-agent:v0.2
 # ... plus model.default, platform_toolsets.cli, agent.disabled_toolsets,
 # and a copy of a valid (non-expired) Hermes auth.json into the profile
 
-# with a fresh MEWRITE_AUTH_SOURCE copy and a repo_path/rfc_path writable
+# after adapter login and with a repo_path/rfc_path writable
 # by the container's uid (created inside the Colima VM directly, not
 # bind-mounted from macOS -- see the virtiofs note below):
 docker run --rm -v <hermes_home_volume>:/opt/data \
