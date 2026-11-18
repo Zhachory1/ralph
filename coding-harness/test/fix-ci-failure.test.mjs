@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -37,20 +37,21 @@ function setup(prs) {
   mkdirSync(bin);
   script(join(bin, "gh"), `echo '${JSON.stringify(prs)}'`);
   const promptFile = join(root, "prompt.txt");
+  const argvFile = join(root, "argv.txt");
   script(join(bin, "mewrite"),
-    `for a; do last="$a"; done; printf '%s' "$last" > ${promptFile}\n` +
+    `printf '%s\\n' "$@" > "${argvFile}"\nfor a; do last="$a"; done; printf '%s' "$last" > "${promptFile}"\n` +
     `echo fixed > ci.txt\n` +
     // printf, not echo: macOS sh's echo expands \n into a raw newline,
     // which makes the JSON line invalid.
     `printf '%s\\n' '{"type":"turn_end","message":{"content":[{"type":"text","text":"CI log excerpt:\\nROOT CAUSE: outdated diagnosis\\nPatched it.\\nROOT CAUSE: missing import in util.js"}]}}'`);
-  return { root, repo, bare, worktree, bin, promptFile };
+  return { root, repo, bare, worktree, bin, promptFile, argvFile };
 }
 
-async function fixCi(bin, args) {
+async function fixCi(bin, args, env = {}) {
   const transport = new StdioClientTransport({
     command: "node",
     args: [SERVER],
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env },
   });
   const client = new Client({ name: "test", version: "0" });
   await client.connect(transport);
@@ -63,6 +64,29 @@ async function fixCi(bin, args) {
 }
 
 const OPEN_PR = [{ headRefName: "b", isCrossRepository: false }];
+
+test("passes only the current project's approved skills to the adapter", async (t) => {
+  const { root, repo, bin, argvFile } = setup(OPEN_PR);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const skills = realpathSync(root);
+  mkdirSync(join(skills, "outside"));
+  writeFileSync(join(skills, "outside", "SKILL.md"), "synthetic fixture\n");
+  const configured = join(skills, "skills");
+  mkdirSync(configured);
+  mkdirSync(join(configured, "selected"));
+  const expected = join(configured, "selected", "SKILL.md");
+  writeFileSync(expected, "synthetic fixture\n");
+  symlinkSync(join(skills, "outside"), join(configured, "escape"), "dir");
+  mkdirSync(join(configured, "file-escape"));
+  symlinkSync(join(skills, "outside", "SKILL.md"), join(configured, "file-escape", "SKILL.md"));
+  const result = await fixCi(bin, { ticket_id: "tk", repo_path: repo, branch: "b", failed_logs: "fixture" }, {
+    RALPH_PROJECT_SKILLS: JSON.stringify({ [realpathSync(repo)]: configured, [join(skills, "unused")]: join(skills, "outside") }),
+  });
+  assert.equal(result.status, "completed");
+  const argv = readFileSync(argvFile, "utf8").split("\n");
+  assert.deepEqual(argv.slice(0, 5), ["-p", "--mode", "json", "--skill", expected]);
+  assert.equal(argv.filter((argument) => argument === "--skill").length, 1);
+});
 
 test("pushes a fix and reports the adapter's root cause", async () => {
   const { repo, bare, bin } = setup(OPEN_PR);
