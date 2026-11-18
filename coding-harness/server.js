@@ -28,6 +28,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADAPTERS = JSON.parse(readFileSync(resolve(HERE, "adapters.json"), "utf8"));
+const HARNESS_EMAIL = "ralph-coding-harness@localhost";
 
 function git(args, cwd) {
   return new Promise((resolvePromise, reject) => {
@@ -414,7 +415,7 @@ async function commitAndSync(worktreePath, branch, ticketId, diffStat, commitMes
     // user.name/email set at all.
     await git([
       "-c", "user.name=ralph-coding-harness",
-      "-c", "user.email=ralph-coding-harness@localhost",
+      "-c", `user.email=${HARNESS_EMAIL}`,
       "commit", "-m", commitMessage,
     ], worktreePath);
     commitSha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
@@ -453,8 +454,16 @@ async function implementSpecLocked(args, worktreeRoot) {
   const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
 
   let worktreePath;
+  const requireMatchingWorktree = async () => {
+    const commonDir = (cwd) => git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
+    if (await commonDir(repo_path) !== await commonDir(worktreePath)
+        || (await git(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath)).trim() !== branch) {
+      throw new Error("Implementation worktree does not match the requested repository and branch");
+    }
+  };
   try {
     worktreePath = await ensureWorktree(repo_path, branch, ticket_id);
+    await requireMatchingWorktree();
   } catch (err) {
     // Every setup failure (missing repo_path, a stray non-worktree
     // directory) returns the structured payload the MCP contract
@@ -484,6 +493,11 @@ async function implementSpecLocked(args, worktreeRoot) {
     return errorPayload(branch, `could not run adapter: ${err.message}`);
   }
   const { finalText, turnEndSeen } = parseJsonlCompletion(result.stdout);
+  try {
+    await requireMatchingWorktree();
+  } catch (err) {
+    return errorPayload(branch, `could not safely sync implementation: ${err.message}`);
+  }
 
   // --stat HEAD alone misses new untracked files -- a CLI run that only
   // creates files (no edits to tracked ones) would report an empty diff
@@ -496,12 +510,31 @@ async function implementSpecLocked(args, worktreeRoot) {
   const openQuestions = result.code !== 0 ? [`adapter exited ${result.code}: ${result.stderr.trim().slice(0, 500)}`] : [];
 
   let prUrl = null;
-  // Only on a real, completed diff: a failed run, or one that touched
-  // nothing, has nothing to open a PR for.
-  if (status === "completed" && diffStat.trim()) {
-    const sync = await commitAndSync(worktreePath, branch, ticket_id, diffStat, `[ralph] ${ticket_id}`);
-    prUrl = sync.prUrl;
-    openQuestions.push(...sync.openQuestions);
+  if (status === "completed") {
+    const commitMessage = `[ralph] ${ticket_id}`;
+    try {
+      if (diffStat.trim()) {
+        const sync = await commitAndSync(worktreePath, branch, ticket_id, diffStat, commitMessage);
+        prUrl = sync.prUrl;
+        openQuestions.push(...sync.openQuestions);
+      } else if (!(await git(["status", "--porcelain"], worktreePath)).trim()) {
+        const commit = (await git(["log", "-1", "--format=%ae%n%ce%n%s"], worktreePath)).trim();
+        if (commit === `${HARNESS_EMAIL}\n${HARNESS_EMAIL}\n${commitMessage}`) {
+          const head = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
+          const closed = await gh(["pr", "list", "--head", branch, "--state", "all", "--json", "headRefOid,state",
+            "--jq", '.[] | select(.state != "OPEN") | .headRefOid'], worktreePath);
+          if (closed.split(/\s+/).includes(head)) {
+            openQuestions.push("A closed pull request already recorded this implementation head; no draft was reopened");
+          } else {
+            const draft = await ensurePullRequest(worktreePath, branch, ticket_id);
+            prUrl = draft.pr_url;
+            if (draft.note) openQuestions.push(draft.note);
+          }
+        }
+      }
+    } catch (error) {
+      openQuestions.push(`could not safely sync implementation: ${error.message}`);
+    }
   }
 
   return {
