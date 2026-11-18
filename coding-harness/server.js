@@ -722,6 +722,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticket_id", "repo_path", "branch", "failed_logs"],
       },
     },
+    {
+      name: "audit_pr",
+      description: "Runs operator-configured checks against a pinned PR head in isolated containers.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          pr_number: { type: "integer", minimum: 1 },
+          head_sha: { type: "string" },
+        },
+        required: ["repo_path", "pr_number", "head_sha"],
+      },
+    },
   ],
 }));
 
@@ -736,6 +749,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     payload = await applyPrFeedback(toolArgs);
   } else if (name === "fix_ci_failure") {
     payload = await fixCiFailure(toolArgs);
+  } else if (name === "audit_pr") {
+    const { auditPr } = await import("./audit-pr.js");
+    payload = await auditPr(toolArgs);
   } else {
     throw new Error(`unknown tool: ${name}`);
   }
