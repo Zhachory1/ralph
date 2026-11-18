@@ -73,12 +73,25 @@ and `python3 compose/v4/test/council-profile-docker.py` for synthetic checks. Th
 cached image and Colima's bridge, sends no external model requests, and creates temporary disposable
 containers. These checks do not verify real provider access or model output.
 
+### Standalone v4 RFC drafting
+
+From a host process, import `draftRfc` from `compose/v4/author.mjs` and pass `{brief, model}`.
+For a revision, also pass `currentDraft` and `feedback`. Use an OpenRouter `provider/model`
+and set `OPENROUTER_API_KEY` privately. The brief and feedback together can be at most 4 KiB;
+the current draft and returned Markdown can each be at most 16 KiB. The pinned Hermes image
+must be cached. Drafting sends the input to the provider and can incur charges. It never
+publishes, previews, or requests Council automatically.
+
+Run `node --test compose/v4/test/author.test.mjs` and
+`python3 compose/v4/test/council-judge-docker.py` for synthetic draft and revision checks,
+including the actual pinned Hermes worker without external networking.
+
 ### Standalone v4 Docs-as-PRs
 
 Set `RALPH_DOCS_REPO` to the single GitHub docs repository and
 `RALPH_DOCS_GITHUB_TOKEN` to a fine-grained token for a dedicated bot account scoped to that
-repository, with Contents and Pull requests write permissions. Pass the draft to the host from a
-credential-free drafting runtime; this publisher does not provision one. Do not use the legacy
+repository, with Contents and Pull requests write permissions. Pass draft text to the host; the
+author worker does not need this token. Do not use the legacy
 credentialed `ralph-author` profile for that handoff. Before using it, protect the default branch:
 require pull requests and approval from the human docs owner (for example with CODEOWNERS),
 dismiss stale approvals after updates, and do not give the bot bypass rights. Limit writes to

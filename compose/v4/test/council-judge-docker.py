@@ -1,4 +1,4 @@
-"""Exercise the real Hermes judge worker against a synthetic endpoint without network access."""
+"""Exercise the provider-only Hermes workers with synthetic responses and no network access."""
 import json
 import os
 from pathlib import Path
@@ -25,7 +25,17 @@ expected_models = {
     "security_blast_radius": "google/gemini-3.8-flash",
     "scope_pragmatism": "openai/gpt-6.2-sol",
 }
-assert fixture["job"]["model"] == expected_models[fixture["job"]["role"]]
+is_judge = "role" in fixture["job"]
+if is_judge:
+    assert fixture["job"]["model"] == expected_models[fixture["job"]["role"]]
+    output = json.dumps({"judge_role": fixture["job"]["role"], "verdict": "PASS", "confidence": 0.9,
+                         "blocking_issues": [], "non_blocking_notes": []})
+else:
+    for kind in ("HTTP", "HTTPS", "FTP", "ALL", "NO"):
+        for name in (kind + "_PROXY", (kind + "_PROXY").lower()):
+            assert os.environ.get(name, "") == "", name
+    assert fixture["job"]["model"] == "test/model"
+    output = "# Revised RFC" if "feedback" in fixture["job"] else "# Draft RFC"
 calls = []
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
@@ -34,10 +44,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.path.endswith("/chat/completions"):
             self.send_response(404); self.end_headers(); return
         calls.append(request)
-        verdict = json.dumps({"judge_role": fixture["job"]["role"], "verdict": "PASS", "confidence": 0.9,
-                              "blocking_issues": [], "non_blocking_notes": []})
         chunk = {"id": "fixture", "object": "chat.completion.chunk", "created": 1, "model": request["model"],
-                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": verdict}, "finish_reason": None}]}
+                 "choices": [{"index": 0, "delta": {"role": "assistant", "content": output}, "finish_reason": None}]}
         end = {"id": "fixture", "object": "chat.completion.chunk", "created": 1, "model": request["model"],
                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
         body = ("data: " + json.dumps(chunk) + "\n\ndata: " + json.dumps(end) + "\n\ndata: [DONE]\n\n").encode()
@@ -49,7 +57,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 patch = """import os
 _exec = os.execvpe
 def fake_endpoint(file, args, env):
-    assert not any(key in env for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'VIKUNJA_API_TOKEN'))
+    assert set(env) == {'HOME', 'HERMES_HOME', 'PATH', 'OPENROUTER_API_KEY'}
     env['OPENROUTER_BASE_URL'] = %r
     _exec(file, args, env)
 os.execvpe = fake_endpoint
@@ -59,14 +67,15 @@ result = subprocess.run([sys.executable, "-c", patch + fixture["worker"]], input
 server.shutdown()
 if result.returncode != 0:
     raise RuntimeError("Hermes synthetic worker failed: " + result.stderr[-300:])
-assert json.loads(result.stdout)["judge_role"] == fixture["job"]["role"]
+assert result.stdout.strip() == output
 assert calls and all(call.get("model") == fixture["job"]["model"] and not call.get("tools") for call in calls)
 assert any(json.dumps(fixture["job"], ensure_ascii=True) in str(message.get("content", ""))
            for call in calls for message in call.get("messages", []))
-config = pathlib.Path("/tmp/council-judge/config.yaml").read_text()
+home = "council-judge" if is_judge else "ralph-author"
+config = (pathlib.Path("/tmp") / home / "config.yaml").read_text()
 denied = config.split("disabled_toolsets: [", 1)[1].split("]", 1)[0].split(", ")
 assert all(name in denied for name in ("terminal", "file", "kanban", "delegation", "code_execution", "web", "browser"))
-print("Hermes synthetic judge passed:", fixture["job"]["role"])
+print(result.stdout.strip())
 '''
 
 for role, model in MODELS.items():
@@ -83,7 +92,7 @@ for role, model in MODELS.items():
     result = subprocess.run(command, input=json.dumps(fixture), text=True, capture_output=True, timeout=100)
     if result.returncode:
         raise RuntimeError("Docker synthetic test failed: " + result.stderr[-500:])
-    print(result.stdout.strip())
+    print("Hermes synthetic judge passed:", role)
 
 # Exercise the real Node launcher and Docker flags, replacing only the worker's
 # provider endpoint with the in-container fixture and disabling external network.
@@ -91,8 +100,6 @@ with tempfile.TemporaryDirectory() as directory:
     worker = (ROOT / "council-judge-worker.py").read_text()
     probe = PROBE.replace('fixture = json.load(sys.stdin)',
                           'fixture = {"job": json.load(sys.stdin), "worker": ' + repr(worker) + '}')
-    probe = probe.replace('print("Hermes synthetic judge passed:", fixture["job"]["role"])',
-                          'print(result.stdout.strip())')
     docker = Path(directory) / "docker"
     docker.write_text("#!/usr/bin/env python3\nimport os, sys\nargs = sys.argv[1:]\n"
                       "if args[0] == 'run':\n    args.insert(1, '--network=none')\n"
@@ -118,6 +125,34 @@ with tempfile.TemporaryDirectory() as directory:
     if result.returncode:
         raise RuntimeError("Real Council panel synthetic test failed: " + result.stderr[-500:])
     print("Real Docker three-judge panel passed")
+    author_worker = (ROOT / "author-worker.py").read_text()
+    author_probe = PROBE.replace('fixture = json.load(sys.stdin)',
+                                  'fixture = {"job": json.load(sys.stdin), "worker": ' + repr(author_worker) + '}')
+    docker.write_text(docker.read_text().replace(repr(probe), repr(author_probe)))
+    config = Path(directory) / "docker-config"
+    config.mkdir()
+    (config / "config.json").write_text(json.dumps({"proxies": {"default": {
+        kind: "http://fixture:fixture@example.invalid:8080"
+        for kind in ("httpProxy", "httpsProxy", "ftpProxy", "allProxy", "noProxy")
+    }}}))
+    docker_host = os.environ.get("DOCKER_HOST") if not os.environ.get("DOCKER_CONTEXT") else None
+    if not docker_host:
+        docker_host = subprocess.check_output(
+            ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], text=True).strip()
+    env.pop("DOCKER_CONTEXT", None)
+    env.update(RALPH_DOCS_GITHUB_TOKEN="synthetic-docs", VIKUNJA_API_TOKEN="synthetic-board",
+               RALPH_COUNCIL_MCP_TOKEN="synthetic-council", RALPH_COUNCIL_JOB_TOKEN="synthetic-job",
+               DOCKER_HOST=docker_host, DOCKER_CONFIG=str(config))
+    script = ('import { draftRfc } from ' + json.dumps((ROOT / "author.mjs").as_uri()) + '; '
+              'const request = {brief:"Synthetic brief",model:"test/model"}; '
+              'const draft = await draftRfc(request); if (draft.trim() !== "# Draft RFC") throw Error("draft"); '
+              'const revision = await draftRfc({...request,currentDraft:draft,feedback:"Synthetic revision"}); '
+              'if (revision.trim() !== "# Revised RFC") throw Error("revision");')
+    result = subprocess.run(["node", "--input-type=module", "-e", script], env=env,
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise RuntimeError("Real Docker author synthetic test failed: " + result.stderr[-500:])
+    print("Real Docker author draft and revision passed")
 
 # Exercise the same in-container watchdog without waiting for a real judge.
 watchdog = subprocess.run(["docker", "run", "--rm", "--pull=never", "--init", "--network", "none", "--read-only",
