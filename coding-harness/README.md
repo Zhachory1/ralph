@@ -8,13 +8,15 @@ the tool signatures below.
 
 ## Status
 
-Three tools implemented: `implement_spec`, `get_worktree_status`, and
-`apply_pr_feedback`, against one adapter (`mewrite`). `implement_spec` and
-`apply_pr_feedback` publish changes when the adapter produces a diff.
-Only `implement_spec` can open a draft PR. Not yet built: `fix_ci_failure`, `audit_pr`,
-`reproduce_and_patch` (spec Sec 11's other three), and the skill-synthesis
+Four tools implemented: `implement_spec`, `get_worktree_status`,
+`apply_pr_feedback`, and `fix_ci_failure`, against one adapter (`mewrite`).
+All but `get_worktree_status` publish changes when the adapter produces a
+diff. Only `implement_spec` can open a draft PR. Not yet built: `audit_pr`,
+`reproduce_and_patch` (spec Sec 11's other two), and the skill-synthesis
 loop (Sec 11.0.1) — that needs a real judgment-making profile to own it,
 not this server.
+
+Tests: `npm test` (offline; fake `gh` and adapter, local bare repo).
 
 ## Setup
 
@@ -139,11 +141,27 @@ otherwise push whatever the worktree happens to be on to a remote ref
 named after the caller's claim, silently landing feedback on the wrong
 branch.
 
-Both `implement_spec` and `apply_pr_feedback` serialize every call for one
-`ticket_id` through a filesystem lock (`.<ticket_id>.lock` next to the
-worktrees, created with `O_EXCL`), so two concurrent calls -- either tool,
-against either tool -- never run their adapter processes or mutate the
-git index in the same worktree at the same time. An in-process lock would
+`fix_ci_failure` takes `{ ticket_id, repo_path, branch, failed_logs }` and
+returns `{ status, commit_sha, root_cause, test_summary, open_questions }`.
+It has the same preconditions as `apply_pr_feedback` (existing worktree on
+that branch, existing open PR; never creates either) and shares its code
+path. Only the last 20,000 characters of `failed_logs` reach the adapter:
+CI logs can be huge and the failure is at the end. `root_cause` is the
+adapter's final nonblank line if it starts with `ROOT CAUSE:`, or `null`
+otherwise. It is not a verified diagnosis and may repeat CI log content.
+
+The origin's GitHub repository is read from the configured
+`remote.origin.pushurl` (else `remote.origin.url`), not from
+`git remote get-url --push`. That command applies `url.<base>.insteadOf`
+rewrites, which would hide which GitHub repo the remote names.
+
+All three writing tools serialize every call for one `ticket_id` through a
+filesystem lock (`.<ticket_id>.lock` next to the worktrees, created with
+`O_EXCL`), so two concurrent calls -- any tool, against any tool -- never
+run their adapter processes or mutate the git index in the same worktree
+at the same time. The lock records the holder's pid; a lock whose holder
+has exited (killed mid-run, never reaching cleanup) is reclaimed instead of
+wedging that ticket. An in-process lock would
 not work here: each MCP client connection spawns its own `node server.js`
 process, confirmed directly while testing this. Verified against a real
 race: two concurrent `apply_pr_feedback` calls for the same ticket_id ran
