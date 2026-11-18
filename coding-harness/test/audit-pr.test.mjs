@@ -4,7 +4,25 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { auditPr } from "../audit-pr.js";
+
+test("MCP exposes audit_pr and rejects unconfigured repositories", async (t) => {
+  const client = new Client({ name: "audit-fixture", version: "1" });
+  t.after(() => client.close());
+  await client.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [fileURLToPath(new URL("../server.js", import.meta.url))],
+    env: { RALPH_AUDIT_REPOS: "{}" },
+  }));
+  const { tools } = await client.listTools();
+  assert.ok(tools.some(({ name }) => name === "audit_pr"));
+  await assert.rejects(client.callTool({ name: "audit_pr", arguments: {
+    repo_path: process.cwd(), pr_number: 1, head_sha: "0".repeat(40),
+  } }), /requires an operator-configured image/);
+});
 
 test("pins the PR head and runs checks without host mounts or networking", async (t) => {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ralph-audit-test-")));
