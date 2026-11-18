@@ -9,11 +9,11 @@ the tool signatures below.
 ## Status
 
 Two tools implemented: `implement_spec` and `get_worktree_status`, against
-one adapter (`mewrite`). Not yet built: `apply_pr_feedback`, `fix_ci_failure`,
-`audit_pr`, `reproduce_and_patch` (spec Sec 11's other four), real GitHub PR
-creation (`pr_url` is always `null`), and the skill-synthesis loop (Sec
-11.0.1) — that needs a real judgment-making profile to own it, not this
-server.
+one adapter (`mewrite`). `implement_spec` opens a real draft PR via `gh`
+when the adapter produces a diff. Not yet built: `apply_pr_feedback`,
+`fix_ci_failure`, `audit_pr`, `reproduce_and_patch` (spec Sec 11's other
+four), and the skill-synthesis loop (Sec 11.0.1) — that needs a real
+judgment-making profile to own it, not this server.
 
 ## Setup
 
@@ -44,13 +44,26 @@ runs the configured adapter non-interactively inside it, and returns:
 ```json
 {
   "status": "completed | failed | error",
-  "pr_url": null,
+  "pr_url": "a real https://github.com/... draft PR URL, or null",
   "branch": "...",
   "test_summary": "the adapter's final message",
   "diff_stats": "git diff --stat output, or null if nothing changed",
-  "open_questions": ["present only on error/failed"]
+  "open_questions": ["present on error/failed, or a non-fatal PR/commit note"]
 }
 ```
+
+`pr_url` is only populated when `status` is `"completed"` **and** the
+adapter actually produced a diff: a run that finds nothing to change (the
+spec was already satisfied) commits nothing and opens nothing. When a diff
+exists, the harness commits it under its own identity (`-c user.name=
+ralph-coding-harness`, not the host's or operator's git config -- found
+missing by hitting "Author identity unknown" on a host with no global git
+identity set at all), pushes the branch, and opens a draft PR
+(`gh pr create --draft`) or reuses the existing one for that branch
+(`gh pr list --head`). A push/PR failure is never fatal to the call: it is
+reported as an `open_questions` note alongside the real `status`/`diff_stats`
+that already reflect whether the adapter's code change succeeded,
+independent of whether GitHub access happened to work this run.
 
 `"error"` means setup/infra failed before the adapter ever ran (bad
 `rfc_path`, a broken or raced worktree, the adapter binary missing). `"failed"`
@@ -107,6 +120,18 @@ reads stdin itself — not documented behavior, found by the spawned call
 hanging indefinitely with zero output while the identical invocation from a
 shell (which closes stdin or inherits a TTY) completed in seconds. Fixed by
 setting `stdio: ["ignore", "pipe", "pipe"]` explicitly (`server.js`).
+
+## A second bug this slice found: a stale PR on re-run
+
+The first version of PR creation checked for an existing open PR on the
+branch and returned its URL immediately if found -- skipping the push
+entirely. That meant a second `implement_spec` call against a branch that
+already had an open PR committed its new changes locally but never pushed
+them: the returned `pr_url` and `diff_stats` both looked correct, but the
+PR on GitHub silently went stale. Caught by actually pushing a second real
+change through this path on a live test repo and finding the remote branch
+one commit behind local -- not by code inspection. Fixed by always pushing
+first, then checking for an existing PR to reuse or creating a new one.
 
 ## A bug the pipeline itself caught
 
