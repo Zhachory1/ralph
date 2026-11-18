@@ -6,6 +6,13 @@ Where each part of Ralph runs, what it can touch, and how to check it is healthy
 
 ![Ralph system overview](diagrams/system.svg)
 
+The v4 Council pilot also has an **unwired** judge launcher in `compose/v4/council-judge.mjs`.
+Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or
+repository/board credentials; it receives the model-provider key. Bridge-network egress is not
+restricted to the provider. The pinned Hermes invocation exposes no tools in synthetic model
+requests; rerun the offline Docker fixture before changing its image or tool configuration.
+Docker-daemon administrators can inspect the container's provider key while it runs.
+
 Three bands: **I/O** (how people and services reach Ralph and how it answers), **System** (intake → plan → work → review → deliver, with the gates and guards that keep it reliable), and **Tools** (runtime, context and knowledge, external tools, and what is planned but not wired). The same picture, one band at a time:
 
 - [I/O](diagrams/io.svg): who reaches Ralph, through what, and how it answers.
