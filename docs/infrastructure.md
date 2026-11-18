@@ -6,7 +6,8 @@ Where each part of Ralph runs, what it can touch, and how to check it is healthy
 
 ![Ralph system overview](diagrams/system.svg)
 
-The v4 Council pilot also has an **unwired** judge launcher in `compose/v4/council-judge.mjs`.
+The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
+in `compose/v4/council-judge.mjs`; neither is connected to board routing.
 Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or
 repository/board credentials; it receives the model-provider key. Bridge-network egress is not
 restricted to the provider. The pinned Hermes invocation exposes no tools in synthetic model
