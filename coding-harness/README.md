@@ -24,7 +24,9 @@ Tests: `npm test` (offline; fake `gh` and adapter, local bare repo).
 serves Streamable HTTP at `http://127.0.0.1:8765/mcp` by default. To enable
 it, set `RALPH_HARNESS_HTTP_GRANTS` to an operator-managed JSON array of
 objects with `token` (generate with `openssl rand -hex 32`) and
-`tools` (an explicit list of allowed tool names). Clients send
+`tools` (an explicit list of allowed tool names) and `repos` (canonical
+absolute paths to allowed checkouts, including any existing worktree you
+grant). Clients send
 `Authorization: Bearer <token>`. Both discovery and invocation enforce
 the grant. The listener rejects browser Origin headers and never binds a
 non-loopback interface. `RALPH_HARNESS_HTTP_PORT` overrides the port.

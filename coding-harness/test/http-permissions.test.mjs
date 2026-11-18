@@ -6,16 +6,20 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import { networkInterfaces } from "node:os";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { join, delimiter } from "node:path";
+import { networkInterfaces, tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const serverPath = fileURLToPath(new URL("../server.js", import.meta.url));
+const repo = realpathSync(process.cwd());
 
 test("HTTP refuses to start with invalid grant configuration", () => {
-  const grant = { token: randomBytes(32).toString("hex"), tools: ["audit_pr"] };
+  const grant = { token: randomBytes(32).toString("hex"), tools: ["audit_pr"], repos: [repo] };
   for (const [port, grants] of [["0", [grant]], ["8765", [{ ...grant, token: "invalid" }]],
-    ["8765", [{ ...grant, tools: [] }]], ["8765", [grant, grant]]]) {
+    ["8765", [{ ...grant, tools: [] }]], ["8765", [grant, grant]],
+    ["8765", [{ ...grant, repos: [] }]], ["8765", [{ ...grant, repos: ["relative"] }]]]) {
     const processResult = spawnSync(process.execPath, [serverPath, "--http"], {
       env: { ...process.env, RALPH_HARNESS_HTTP_PORT: port, RALPH_HARNESS_HTTP_GRANTS: JSON.stringify(grants) },
       encoding: "utf8", timeout: 3000,
@@ -31,9 +35,18 @@ test("loopback MCP requires a bearer grant for discovery and direct calls", asyn
   const { port } = probe.address();
   await new Promise((resolve) => probe.close(resolve));
   const token = randomBytes(32).toString("hex");
+  const bin = mkdtempSync(join(tmpdir(), "ralph-http-git-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+test -z "\${RALPH_HARNESS_HTTP_GRANTS+x}" || exit 1
+case "$1 $2" in
+  'rev-parse --is-inside-work-tree') echo true ;;
+  'rev-parse --abbrev-ref') echo fixture ;;
+esac
+`, { mode: 0o755 });
   const server = spawn(process.execPath, [serverPath, "--http"], {
-    env: { ...process.env, RALPH_HARNESS_HTTP_PORT: String(port),
-      RALPH_HARNESS_HTTP_GRANTS: JSON.stringify([{ token, tools: ["get_worktree_status"] }]) },
+    env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, RALPH_HARNESS_HTTP_PORT: String(port),
+      RALPH_HARNESS_HTTP_GRANTS: JSON.stringify([{ token, tools: ["get_worktree_status"], repos: [repo] }]) },
     stdio: ["ignore", "ignore", "inherit"],
   });
   t.after(() => server.kill());
@@ -58,6 +71,7 @@ test("loopback MCP requires a bearer grant for discovery and direct calls", asyn
   await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
   assert.deepEqual((await client.listTools()).tools.map(({ name }) => name), ["get_worktree_status"]);
   await assert.rejects(client.callTool({ name: "audit_pr", arguments: {} }), /Tool not granted/);
-  const result = await client.callTool({ name: "get_worktree_status", arguments: {} });
-  assert.equal(JSON.parse(result.content[0].text).status, "completed");
+  await assert.rejects(client.callTool({ name: "get_worktree_status", arguments: { repo_path: bin } }), /Repository not granted/);
+  const result = await client.callTool({ name: "get_worktree_status", arguments: { repo_path: repo } });
+  assert.equal(JSON.parse(result.content[0].text).branch, "fixture");
 });
