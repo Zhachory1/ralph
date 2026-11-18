@@ -38,6 +38,22 @@ The HTTP grant is not OS-level isolation. Keep granted checkout paths and
 their parents under trusted filesystem ownership; path validation does not
 protect against another local process replacing a checkout during a call.
 
+### SWE procedural skills
+
+Give each product's SWE profile its own writable skill directory outside
+the checkout. Set `skills.create_dir` on that profile, for example with
+`hermes -p ralph-swe config set skills.create_dir /project-skills` inside
+the worker runtime. Mount only that product's skill store writable and
+keep credentials and other products' stores out of the worker's mounts.
+
+In the harness environment, set `RALPH_PROJECT_SKILLS` to a JSON object
+mapping canonical checkout paths to canonical skill directories. The
+harness supplies `<directory>/<name>/SKILL.md` as explicit adapter skill
+arguments on later implementation, feedback, and CI-fix runs. Keep
+skills uncategorized; symlinked entries are ignored. These are trusted
+procedural inputs, not a permission mechanism. Only the SWE profile
+decides when a verified result is worth preserving as a skill.
+
 ```
 cd coding-harness
 npm install

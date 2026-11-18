@@ -18,7 +18,7 @@ import { createServer as createHttpServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, realpathSync, constants as fsConstants } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, realpathSync, readdirSync, lstatSync, constants as fsConstants } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -242,6 +242,22 @@ function buildPrompt(rfcContent, acceptanceCriteria) {
   ].join("\n");
 }
 
+function projectSkillPaths(repoPath) {
+  if (!process.env.RALPH_PROJECT_SKILLS) return [];
+  const byRepo = JSON.parse(process.env.RALPH_PROJECT_SKILLS);
+  const repo = realpathSync(repoPath);
+  if (!Object.hasOwn(byRepo, repo)) return [];
+  const root = byRepo[repo];
+  if (typeof root !== "string" || resolve(root) !== root || realpathSync(root) !== root) {
+    throw new Error("Configured project skills directory must be a canonical absolute path");
+  }
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => resolve(root, entry.name, "SKILL.md"))
+    .filter((path) => lstatSync(path, { throwIfNoEntry: false })?.isFile())
+    .sort();
+}
+
 // Runs the configured adapter's CLI non-interactively in the worktree and
 // parses its JSONL event stream for the final assistant message and exit
 // status -- the "machine-parseable completion signal" half of the Sec 11.0
@@ -458,7 +474,7 @@ async function implementSpecLocked(args, worktreeRoot) {
   const adapter = ADAPTERS.mewrite;
   let result;
   try {
-    result = await runAdapter(adapter, worktreePath, prompt, []);
+    result = await runAdapter(adapter, worktreePath, prompt, projectSkillPaths(repo_path));
   } catch (err) {
     // spawn() itself failing (adapter binary missing, etc.) is also a
     // setup failure, not the adapter "running and failing".
@@ -625,7 +641,7 @@ async function updateExistingPrLocked(args, worktreeRoot, opts) {
   const adapter = ADAPTERS.mewrite;
   let result;
   try {
-    result = await runAdapter(adapter, worktreePath, opts.prompt, []);
+    result = await runAdapter(adapter, worktreePath, opts.prompt, projectSkillPaths(repo_path));
   } catch (err) {
     return fail(`could not run adapter: ${err.message}`);
   }
