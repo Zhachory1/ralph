@@ -199,8 +199,10 @@ Call with `ticket_id`, `repo_path`, and
 An alert selects a registered check but cannot provide an executable or
 raw logs. The harness verifies before and after the adapter attempt and
 publishes a draft `hotfix/<ticket_id>` PR only if it observed failure,
-then success, with a real diff. Unverified work remains local. The result
-contains `reproduced`, adapter-reported `root_cause`, `pr_url`,
+then success, with a real diff. Unverified edits remain in the local
+worktree. A retry on the same ticket refuses to overwrite those edits;
+inspect and save them before cleaning the worktree, or use a new ticket.
+The result contains `reproduced`, adapter-reported `root_cause`, `pr_url`,
 `test_summary`, and `open_questions`.
 
 ## `audit_pr`

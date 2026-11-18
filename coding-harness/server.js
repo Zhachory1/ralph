@@ -663,7 +663,10 @@ function runRegressionCheck([command, ...args], cwd) {
     const child = execFile(command, args, {
       cwd, env: { PATH: "/usr/bin:/bin" }, timeout: 120_000, maxBuffer: 256 * 1024,
     }, (error, stdout, stderr) => {
-      if (error && error.code !== 1) return reject(new Error("Regression verifier did not complete normally"));
+      if (error && error.code !== 1) {
+        const reason = error.killed ? "timeout" : error.code ?? error.signal ?? "unknown error";
+        return reject(new Error(`Regression verifier did not complete normally (${reason})`));
+      }
       resolvePromise({ passed: !error, summary: `${stdout}\n${stderr}`.trim().slice(-4000) });
     });
     child.stdin.end();
@@ -692,9 +695,10 @@ async function reproduceAndPatch({ ticket_id, repo_path, alert_payload }) {
       const worktree = await ensureWorktree(repo_path, branch, ticket_id);
       const common = (cwd) => git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
       const currentBranch = () => git(["rev-parse", "--abbrev-ref", "HEAD"], worktree);
-      if (await common(repo_path) !== await common(worktree) || (await currentBranch()).trim() !== branch
-          || (await git(["status", "--porcelain"], worktree)).trim()) {
-        throw new Error("Expected a clean hotfix worktree for this repository and ticket");
+      if (await common(repo_path) !== await common(worktree)) throw new Error("Hotfix worktree belongs to another repository");
+      if ((await currentBranch()).trim() !== branch) throw new Error(`Hotfix worktree is not on ${branch}`);
+      if ((await git(["status", "--porcelain"], worktree)).trim()) {
+        throw new Error(`Uncommitted changes retained at ${worktree}; inspect and save them before cleaning the worktree or retry with a new ticket`);
       }
       const head = await git(["rev-parse", "HEAD"], worktree);
       const before = await runRegressionCheck(command, worktree);
@@ -712,7 +716,10 @@ async function reproduceAndPatch({ ticket_id, repo_path, alert_payload }) {
       if (adapter.code !== 0 || !turnEndSeen) throw new Error("Adapter did not complete the patch");
       const after = await runRegressionCheck(command, worktree);
       result.test_summary = after.summary || (after.passed ? "Verifier passed after the patch" : "Verifier still fails after the patch");
-      if (!after.passed) return;
+      if (!after.passed) {
+        result.open_questions.push(`Verifier still fails; inspect the unpublished changes at ${worktree}`);
+        return;
+      }
       if (await git(["rev-parse", "HEAD"], worktree) !== head || (await currentBranch()).trim() !== branch) {
         throw new Error("Adapter changed the worktree branch or committed unexpectedly; nothing was published");
       }

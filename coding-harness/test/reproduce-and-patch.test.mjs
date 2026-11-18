@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -53,6 +53,10 @@ printf '%s\\n' '{"type":"turn_end","message":{"content":[{"type":"text","text":"
   const stillFailing = await run("not-fixed", { kind: "application_regression", check: "format" });
   assert.equal(stillFailing.reproduced, true);
   assert.equal(stillFailing.pr_url, null);
+  const retry = await run("not-fixed", { kind: "application_regression", check: "format" });
+  assert.equal(retry.pr_url, null);
+  assert.match(retry.open_questions[0], /Uncommitted changes retained.*retry with a new ticket/);
+  assert.equal(readFileSync(join(root, ".harness-worktrees", "not-fixed", "format.txt"), "utf8"), "still-broken\n");
   assert.equal(git(remote, "for-each-ref", "--format=%(refname)"), "");
   const ok = await run("tk", { kind: "application_regression", check: "format" });
   assert.equal(ok.reproduced, true);
