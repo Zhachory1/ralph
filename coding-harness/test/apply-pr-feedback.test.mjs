@@ -86,6 +86,6 @@ test("a failed push is an error with no commit_sha, and the local commit is kept
   assert.equal(out.status, "error");
   assert.equal(out.commit_sha, null);
   assert.equal(out.resolved_count, 0);
-  assert.match(out.open_questions[0], /could not publish feedback/);
+  assert.match(out.open_questions[0], /could not publish the change/);
   assert.notEqual(git(worktree, "rev-parse", "HEAD").trim(), before);
 });
