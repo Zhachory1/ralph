@@ -511,12 +511,12 @@ async function applyPrFeedback(args) {
       applyPrFeedbackLocked(args, worktreeRoot)
     );
   } catch (err) {
-    return applyFeedbackErrorPayload(`could not acquire worktree lock: ${err.message}`);
+    return applyFeedbackErrorPayload(`could not apply feedback: ${err.message}`);
   }
 }
 
 async function applyPrFeedbackLocked(args, worktreeRoot) {
-  const { ticket_id, branch, review_comments } = args;
+  const { ticket_id, repo_path, branch, review_comments } = args;
 
   // Unlike implement_spec, this never creates a worktree: feedback is
   // addressed on a branch implement_spec already pushed and opened a PR
@@ -539,6 +539,17 @@ async function applyPrFeedbackLocked(args, worktreeRoot) {
     return applyFeedbackErrorPayload(`worktree for ticket ${ticket_id} is on branch '${actualBranch}', not the requested '${branch}'; refusing to push feedback to the wrong branch`);
   }
 
+  const commonDir = async (cwd) => (await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd)).trim();
+  if (await commonDir(repo_path) !== await commonDir(worktreePath)) {
+    return applyFeedbackErrorPayload("worktree belongs to a different repository");
+  }
+  const origin = (await git(["remote", "get-url", "--push", "origin"], worktreePath)).trim();
+  const target = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+)$/.exec(origin)?.[1].replace(/\.git$/, "");
+  if (!target) return applyFeedbackErrorPayload("expected a GitHub origin push URL");
+  const prs = JSON.parse(await gh(["pr", "list", "--repo", target, "--head", branch, "--json", "headRefName,isCrossRepository"], worktreePath));
+  if (!prs.some((pr) => pr.headRefName === branch && !pr.isCrossRepository)) {
+    return applyFeedbackErrorPayload("no existing pull request for this branch");
+  }
   const prompt = buildFeedbackPrompt(review_comments);
   const adapter = ADAPTERS.mewrite;
   let result;
@@ -556,25 +567,21 @@ async function applyPrFeedbackLocked(args, worktreeRoot) {
   const openQuestions = result.code !== 0 ? [`adapter exited ${result.code}: ${result.stderr.trim().slice(0, 500)}`] : [];
 
   let commitSha = null;
-  // resolved_count counts comments this run pushed a fix for, not GitHub
-  // threads actually marked resolved: this tool pushes a commit, it does
-  // not call the Pull Request Review API to resolve review threads (spec
-  // Sec 6.1's own apply_pr_feedback row -- "Resolves/replies on thread"
-  // -- is a later slice's scope, not this one's). 0 whenever no commit
-  // landed, so a caller never reads a nonzero count against feedback
-  // that never reached GitHub.
-  let resolvedCount = 0;
   if (status === "completed" && diffStat.trim()) {
-    const sync = await commitAndSync(worktreePath, branch, ticket_id, diffStat, `[ralph] address review feedback: ${ticket_id}`);
-    commitSha = sync.commitSha;
-    openQuestions.push(...sync.openQuestions);
-    if (commitSha) resolvedCount = (review_comments || []).length;
+    try {
+      await git(["-c", "user.name=ralph-coding-harness", "-c", "user.email=ralph-coding-harness@localhost", "commit", "-m", `[ralph] address review feedback: ${ticket_id}`], worktreePath);
+      const sha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
+      await git(["push", "origin", `refs/heads/${branch}:refs/heads/${branch}`], worktreePath);
+      commitSha = sha;
+    } catch (err) {
+      return { ...applyFeedbackErrorPayload(`could not publish feedback: ${err.message}`), test_summary: finalText };
+    }
   }
 
   return {
     status,
     commit_sha: commitSha,
-    resolved_count: resolvedCount,
+    resolved_count: 0,
     test_summary: finalText,
     open_questions: openQuestions,
   };
@@ -620,7 +627,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "apply_pr_feedback",
       description:
-        "Addresses review comments on an existing implement_spec worktree/PR and pushes a fix commit (spec Sec 11). Requires a worktree implement_spec already created for this ticket_id; never creates one. resolved_count counts comments a commit was pushed for, not GitHub threads actually marked resolved.",
+        "Addresses review comments on an existing implement_spec worktree/PR and pushes a fix commit (spec Sec 11). Requires a worktree implement_spec already created for this ticket_id; never creates one. Requires an existing open PR. resolved_count is zero; threads are not resolved by this tool.",
       inputSchema: {
         type: "object",
         properties: {
