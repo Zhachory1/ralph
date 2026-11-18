@@ -14,6 +14,12 @@ restricted to the provider. The pinned Hermes invocation exposes no tools in syn
 requests; rerun the offline Docker fixture before changing its image or tool configuration.
 Docker-daemon administrators can inspect the container's provider key while it runs.
 
+The separate, opt-in v4 docs preview in `compose/v4/docs-preview.yml` mounts an operator-selected
+docs checkout read-only. MkDocs and Kroki publish only on loopback; neither authenticates clients.
+Mermaid and Excalidraw companions have no published ports and use an internal network. MkDocs and
+Kroki also have an access network with outbound connectivity; Kroki runs in secure mode. The
+services are separate and do not automatically embed rendered diagrams in MkDocs pages.
+
 Three bands: **I/O** (how people and services reach Ralph and how it answers), **System** (intake → plan → work → review → deliver, with the gates and guards that keep it reliable), and **Tools** (runtime, context and knowledge, external tools, and what is planned but not wired). The same picture, one band at a time:
 
 - [I/O](diagrams/io.svg): who reaches Ralph, through what, and how it answers.

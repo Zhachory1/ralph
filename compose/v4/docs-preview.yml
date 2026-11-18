@@ -1,0 +1,57 @@
+name: ${RALPH_V4_DOCS_INSTANCE:-ralph-v4-docs}
+
+services:
+  docs-portal:
+    image: squidfunk/mkdocs-material:9.8.1@sha256:f797da217ff01b20b298d2185eb9d88fb81f5a322c439eba854f2e4de8a48e65
+    command: ["serve", "--dev-addr=0.0.0.0:8000"]
+    ports:
+      - "127.0.0.1:${RALPH_V4_DOCS_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ${RALPH_V4_DOCS_ROOT:?set RALPH_V4_DOCS_ROOT to the docs repository root}
+        target: /docs
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [access]
+
+  kroki:
+    image: yuzutech/kroki:0.36.0@sha256:de0f2fdc42e926d54706ac962aa5cfb38c5c387035a1b30d07ce297bbc37057b
+    environment:
+      KROKI_SAFE_MODE: secure
+      KROKI_MERMAID_HOST: mermaid
+      KROKI_EXCALIDRAW_HOST: excalidraw
+    depends_on:
+      mermaid:
+        condition: service_healthy
+      excalidraw:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${RALPH_V4_KROKI_PORT:-8001}:8000"
+    networks: [access, preview]
+
+  mermaid:
+    image: yuzutech/kroki-mermaid:0.36.0@sha256:0f9d9420d2577474f20909bb0679d398949561d5d88435e66e742b28db066bd2
+    # Kroki's companion images listen on their default ports, 8002 and 8004.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:http').get('http://127.0.0.1:8002/health',r=>{r.resume();if(r.statusCode!==200)process.exitCode=1}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    networks: [preview]
+
+  excalidraw:
+    image: yuzutech/kroki-excalidraw:0.36.0@sha256:5d32b0fd58b311bf19ac1b1c7c779e003007638f501a05d1f57fa4a5e129856a
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('node:net').connect(8004,'127.0.0.1');s.on('connect',()=>s.destroy());s.on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [preview]
+
+networks:
+  access: {}
+  preview:
+    internal: true

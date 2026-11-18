@@ -26,6 +26,35 @@ Costs depend on token use and [OpenRouter's current model prices](https://openro
 The result reports the panel decision and verdicts; it does not route work or prove
 the identity of the models actually served. Judge egress remains unrestricted.
 
+### Optional v4 docs preview
+
+Set `RALPH_V4_DOCS_ROOT` to an absolute path shared with Docker. It must be a docs checkout
+with `mkdocs.yml` at its root. From the Ralph repository root:
+
+```bash
+export RALPH_V4_DOCS_ROOT=/absolute/path/to/org-docs
+COMPOSE_DISABLE_ENV_FILE=1 docker compose -f compose/v4/docs-preview.yml up -d
+COMPOSE_DISABLE_ENV_FILE=1 docker compose -f compose/v4/docs-preview.yml down
+```
+
+The preview serves the selected checkout at `127.0.0.1:8000` and Kroki at `127.0.0.1:8001`;
+override ports with `RALPH_V4_DOCS_PORT` and `RALPH_V4_KROKI_PORT`. These endpoints have no
+authentication; other local users can read the preview. MkDocs and Kroki have outbound network
+access. The services have no resource limits; do not expose them to untrusted users or diagrams.
+Use only a trusted MkDocs configuration and plugins. See Material's
+[privacy guidance](https://squidfunk.github.io/mkdocs-material/setup/ensuring-data-privacy/) to
+disable external theme assets if browsers must not contact third parties. Kroki provides Mermaid,
+Graphviz and PlantUML PNG, and Excalidraw SVG; it does not render Excalidraw PNG. For example,
+`curl -H 'Content-Type: text/plain' --data-binary @diagram.mmd http://127.0.0.1:8001/mermaid/svg`
+returns SVG. MkDocs and Kroki are separate: this stack does not automatically embed Kroki diagrams.
+It serves drafts present in the checkout, but does not fetch drafts from other PR branches.
+Material for MkDocs reaches end of life on 2027-05-05; its built-in server is for local preview,
+not production hosting.
+
+For a disposable integration check, run `TMPDIR="$HOME" python3 compose/v4/test/docs-preview.py`
+with `TMPDIR` set to a Docker-shared directory. It pulls the pinned images if missing, creates a
+synthetic docs tree and a separate Compose project, and removes that project's containers.
+
 ## Changing things safely
 
 - **Profile or install change:** merge, then re-run `init` for every instance. Verify a SOUL or config hash against `main` ([infrastructure.md](infrastructure.md#is-what-is-live-what-is-on-main)). Setting `container_persistent: false` affects new sessions; containers started under the old persistent setting remain until separately removed when idle. Workspace files remain in the host-mounted `/workspace`; files and caches under `/root` do not survive session cleanup.

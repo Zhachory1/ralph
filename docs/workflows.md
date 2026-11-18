@@ -6,6 +6,10 @@ The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and return
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.
 
+The optional v4 docs preview serves the operator-selected checkout and exposes a separate Kroki
+rendering API. It does not automatically embed diagrams, fetch PR branches, publish documents,
+attach diagrams, or advance a gate.
+
 ![Ralph System: intake, plan, work, review, deliver](diagrams/system-flow.svg)
 
 ## Feature: PRD → design → plan → build
