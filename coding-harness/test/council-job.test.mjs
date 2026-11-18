@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -124,6 +124,7 @@ process.stdin.on("end", () => {
   }
   assert.equal(job.status, "completed");
   assert.equal(job.result.decision, "escalate");
+  assert.equal(job.artifactSha256, createHash("sha256").update("original artifact").digest("hex"));
   const jobs = readFileSync(calls, "utf8").trim().split("\n").map(JSON.parse);
   assert.equal(jobs.length, 3);
   assert.ok(jobs.every((job) => job.artifact === "original artifact"));

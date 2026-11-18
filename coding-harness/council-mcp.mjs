@@ -1,5 +1,5 @@
 // Standalone Council job service and job-scoped MCP tool.
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, lstatSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { isAbsolute, join } from "node:path";
@@ -135,7 +135,9 @@ createServer(async (req, res) => {
   }
   if (job && req.url === `/jobs/${job.id}`) {
     if (req.method === "GET") {
-      return send(res, 200, { status: job.status, profileActive: job.profileActive, ...(job.result && { result: job.result }),
+      return send(res, 200, { status: job.status, profileActive: job.profileActive, ...(job.result && {
+        result: job.result, artifactSha256: createHash("sha256").update(job.artifact).digest("hex"),
+      }),
         ...(job.error && { error: job.error }) });
     }
     if (req.method === "DELETE") {

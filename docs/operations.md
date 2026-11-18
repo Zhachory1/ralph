@@ -52,8 +52,8 @@ the master token can register jobs repeatedly; there is no total spend limit. Th
 Results remain in service memory until acknowledged; they do not survive a service restart.
 After recording a result, send an authenticated `DELETE /jobs/<jobId>` to release the slot.
 The master token also permits `GET /jobs` (current ID and status) and `GET /jobs/<jobId>` (status,
-profile activity, and result). A disconnected tool client does not cancel paid judges: the result
-remains retrievable while the service stays up. If registration's response is lost, use `GET /jobs`
+profile activity, result, and the reviewed artifact's SHA-256). A disconnected tool client does
+not cancel paid judges: the result remains retrievable while the service stays up. If registration's response is lost, use `GET /jobs`
 to find the ID. The slot cannot be released until the host confirms profile cleanup; the launcher
 does this after the container exits or its removal is confirmed. Do not put bearer tokens in
 command arguments or logs.
@@ -72,6 +72,32 @@ Run `node --test coding-harness/test/council-mcp.test.mjs coding-harness/test/co
 and `python3 compose/v4/test/council-profile-docker.py` for synthetic checks. The latter uses the
 cached image and Colima's bridge, sends no external model requests, and creates temporary disposable
 containers. These checks do not verify real provider access or model output.
+
+### Standalone v4 Docs-as-PRs
+
+Set `RALPH_DOCS_REPO` to the single GitHub docs repository and
+`RALPH_DOCS_GITHUB_TOKEN` to a fine-grained token for a dedicated bot account scoped to that
+repository, with Contents and Pull requests write permissions. Pass the draft to the host from a
+credential-free drafting runtime; this publisher does not provision one. Do not use the legacy
+credentialed `ralph-author` profile for that handoff. Before using it, protect the default branch:
+require pull requests and approval from the human docs owner (for example with CODEOWNERS),
+dismiss stale approvals after updates, and do not give the bot bypass rights. Limit writes to
+`docs/rfc-*` to trusted publishers. Verify these protections in a sandbox; a draft PR is not a
+merge guard.
+
+Run `node compose/v4/docs-pr.mjs <job.json>` on the host with `slug` and `artifact` (Markdown
+text, up to 16 KiB). It returns `pr_url` and `head_sha`. To revise an existing draft, include
+`expectedHead` with its current SHA; the publisher appends a commit and refuses stale updates.
+A retry with the same content returns the same draft. The publisher refuses PRs already marked
+ready for review, but GitHub cannot atomically check draft status and push a Git ref. Finish
+publishing before marking a PR ready or closing it. If they race, the update may land and the
+publisher reports the pushed SHA for inspection. The publisher does not approve or merge.
+
+Council is separate and not required to publish. If you use it, match `artifactSha256` from
+the completed job to the RFC bytes at the commit being reviewed before attaching any findings.
+Do not carry a verdict forward to changed text.
+
+Run `node --test compose/v4/test/docs-pr.test.mjs` for the local Git and synthetic GitHub check.
 
 ### Optional v4 docs preview
 
