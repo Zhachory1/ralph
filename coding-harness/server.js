@@ -542,7 +542,7 @@ function buildCiFixPrompt(failedLogs) {
 }
 
 function parseRootCause(text) {
-  const m = /ROOT CAUSE:\s*(.+)/i.exec(text || "");
+  const m = /^ROOT CAUSE:\s*(.+)$/i.exec((text || "").trimEnd().split("\n").at(-1).trimStart());
   return m ? m[1].trim() : null;
 }
 

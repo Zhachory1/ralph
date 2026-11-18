@@ -42,7 +42,7 @@ function setup(prs) {
     `echo fixed > ci.txt\n` +
     // printf, not echo: macOS sh's echo expands \n into a raw newline,
     // which makes the JSON line invalid.
-    `printf '%s\\n' '{"type":"turn_end","message":{"content":[{"type":"text","text":"Patched it.\\nROOT CAUSE: missing import in util.js"}]}}'`);
+    `printf '%s\\n' '{"type":"turn_end","message":{"content":[{"type":"text","text":"CI log excerpt:\\nROOT CAUSE: outdated diagnosis\\nPatched it.\\nROOT CAUSE: missing import in util.js"}]}}'`);
   return { root, repo, bare, worktree, bin, promptFile };
 }
 

@@ -147,8 +147,8 @@ It has the same preconditions as `apply_pr_feedback` (existing worktree on
 that branch, existing open PR; never creates either) and shares its code
 path. Only the last 20,000 characters of `failed_logs` reach the adapter:
 CI logs can be huge and the failure is at the end. `root_cause` is the
-adapter's own `ROOT CAUSE:` line, or `null` if it gave none; it is the
-adapter's claim, not a verified diagnosis.
+adapter's final nonblank line if it starts with `ROOT CAUSE:`, or `null`
+otherwise. It is not a verified diagnosis and may repeat CI log content.
 
 The origin's GitHub repository is read from the configured
 `remote.origin.pushurl` (else `remote.origin.url`), not from
