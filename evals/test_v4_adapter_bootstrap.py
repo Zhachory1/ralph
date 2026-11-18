@@ -16,9 +16,10 @@ class AdapterBootstrapTests(unittest.TestCase):
             env = {**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                    "HERMES_IMAGE": "fixture:1", "HERMES_HOME_VOLUME": directory,
                    "CALLS": str(root / "calls")}
-            env.pop("MEWRITE_AUTH_SOURCE", None)
+            env.pop("MEWRITE_AUTH_SOURCE", None)  # Ignore an ambient setting from the old bootstrap.
             result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = (root / "calls").read_text()
-            self.assertIn("env.HOME\n/opt/data/mewrite-home", calls)
+            self.assertIn("env.HOME\n/opt/data/mewrite-adapter-home", calls)
+            self.assertNotIn("/opt/data/mewrite-home", calls)
             self.assertNotIn("auth.json", calls)

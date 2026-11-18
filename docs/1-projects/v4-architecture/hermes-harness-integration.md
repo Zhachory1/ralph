@@ -68,15 +68,16 @@ automation identity from the same mounted home the adapter uses:
 
 ```bash
 docker run --rm -it -v "$HERMES_HOME_VOLUME:/opt/data" "$HERMES_IMAGE" \
-  sh -c 'HOME=/opt/data/mewrite-home /opt/data/npm-global/bin/mewrite login anthropic'
+  sh -c 'HOME=/opt/data/mewrite-adapter-home /opt/data/npm-global/bin/mewrite login anthropic'
 ```
 
 Use the provider configured for your adapter. Mewrite owns token refresh
 and writes its refreshed credential back to the same directory. Do not
 share that writable directory with an interactive login or mount a host
-credential snapshot. The test verifies persistence wiring, not a live
-provider refresh. If refresh fails, check the provider and reauthenticate
-from the same dedicated home.
+credential snapshot. On upgrade, rerun bootstrap and sign in again: it
+uses a new home and neither reads nor removes the old snapshot. The test
+verifies persistence wiring, not a live provider refresh. If refresh fails,
+check the provider and reauthenticate from the same dedicated home.
 
 ## `swe` profile (new)
 

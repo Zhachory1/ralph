@@ -235,8 +235,7 @@ whole commit/PR step is skipped entirely -- the branch stays pushed with no
 PR and no further attempt, until a caller notices the stale `open_questions`
 note from the one run that hit it. Narrow (needs a `gh` failure in that
 exact few-hundred-millisecond window) and not reproduced; documented rather
-than guarded against, same as the OAuth-token-expiry limitation above --
-fixing it means always attempting `ensurePullRequest` even when `diffStat`
+than guarded against. Fixing it means attempting `ensurePullRequest` even when `diffStat`
 is empty, which needs its own slice to get the "was this branch ever
 actually PR'd" check right, not stapled onto this one.
 
