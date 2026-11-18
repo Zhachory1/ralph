@@ -183,8 +183,9 @@ must match. PRs with a missing or stale merge ref fail closed. Each check
 gets a fresh copy of the Git archive in bounded scratch space. The archive
 does not include Git metadata, untracked files, or submodule contents and
 honors Git export attributes. Results describe these configured checks,
-not an independent security assessment of the PR. The tool does not post
-GitHub reviews.
+not an independent security assessment of the PR. Setup and sandbox errors
+are returned as MCP errors, distinct from a failed check. The tool does
+not post GitHub reviews. Profile grants are a separate deployment step.
 
 Set `RALPH_AUDIT_TEST_IMAGE` to a local digest-pinned shell image when
 running `npm test` to exercise the synthetic fixture against real Docker.

@@ -55,12 +55,14 @@ test("pins the PR head and runs checks without host mounts or networking", async
   configure();
   const input = { repo_path: cwd, pr_number: 1, head_sha: head };
   await assert.rejects(auditPr({ ...input, head_sha: base }), /head SHA mismatch/);
-  if (!process.env.RALPH_AUDIT_TEST_IMAGE) return;
-  await assert.rejects(auditPr(input), /Audit sandbox failed/);
-  config.image = process.env.RALPH_AUDIT_TEST_IMAGE;
-  configure();
-  writeFileSync(join(cwd, ".env"), "SYNTHETIC_FIXTURE=1\n");
-  assert.deepEqual(await auditPr(input), {
-    tests_passed: true, test_summary: "", lint_issues: [], changed_files: ["fixture.txt"],
+  const image = process.env.RALPH_AUDIT_TEST_IMAGE;
+  await t.test("real Docker isolation and missing-image denial", { skip: !image && "set RALPH_AUDIT_TEST_IMAGE" }, async () => {
+    await assert.rejects(auditPr(input), /Audit sandbox failed/);
+    config.image = image;
+    configure();
+    writeFileSync(join(cwd, ".env"), "SYNTHETIC_FIXTURE=1\n");
+    assert.deepEqual(await auditPr(input), {
+      tests_passed: true, test_summary: "", lint_issues: [], changed_files: ["fixture.txt"],
+    });
   });
 });

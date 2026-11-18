@@ -64,7 +64,8 @@ export async function auditPr({ repo_path, pr_number, head_sha }) {
       lint_issues: lint.passed ? [] : [lint.output || "Lint command failed"],
       changed_files: changed.toString().split("\0").filter(Boolean) };
   } finally {
-    await git(["update-ref", "-d", `${ref}/head`]);
-    await git(["update-ref", "-d", `${ref}/merge`]);
+    for (const suffix of ["head", "merge"]) {
+      await git(["update-ref", "-d", `${ref}/${suffix}`]).catch((error) => console.error(error.message));
+    }
   }
 }
