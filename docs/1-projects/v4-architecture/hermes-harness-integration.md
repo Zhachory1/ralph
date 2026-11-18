@@ -75,7 +75,8 @@ Use the provider configured for your adapter. Mewrite owns token refresh
 and writes its refreshed credential back to the same directory. Do not
 share that writable directory with an interactive login or mount a host
 credential snapshot. On upgrade, rerun bootstrap and sign in again: it
-uses a new home and neither reads nor removes the old snapshot. The test
+uses a new home and neither reads nor removes the old snapshot. Once the
+new login works, the operator can remove the old adapter home. The test
 verifies persistence wiring, not a live provider refresh. If refresh fails,
 check the provider and reauthenticate from the same dedicated home.
 

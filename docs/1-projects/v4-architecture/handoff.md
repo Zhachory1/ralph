@@ -194,10 +194,10 @@ These cost real time. Do not rediscover them.
   `typeVersion: 2.5` (2.6 silently fails activation with an unrelated
   error).
 - **OAuth access tokens expire in minutes.** A copied `auth.json`
-  snapshot works for a demo, then fails with "No API key for provider".
-  Documented as deferred, not fixed: keep mewrite's `$HOME` as a live
-  bind mount to the host's real `~/.mewrite`, or build refresh into the
-  harness.
+  snapshot worked for a demo, then failed with "No API key for provider".
+  v4 bootstrap now uses a dedicated persistent adapter home instead of
+  copying a personal OAuth session. Live provider refresh still needs a
+  pilot with an operator-provisioned identity.
 - **No global git identity on this host.** Any commit from automation
   needs `-c user.name=... -c user.email=...` scoped flags.
 - **macOS `/bin/sh` `echo` expands `\n`** — use `printf` for JSON in
@@ -252,7 +252,7 @@ own volume burned the OAuth window.
    n8n (or manual trigger) → `swe`/`implement_spec` dispatch, closing the
    loop #198 did by hand.
 4. Skill-synthesis loop (Sec 11.0.1).
-5. OAuth token refresh for mewrite-in-container (see gotchas).
+5. Verify live provider refresh for the dedicated mewrite home during the pilot.
 6. Transient-gh-after-push stuck branch (documented in
    `coding-harness/README.md`).
 7. `.gitignore` has `coding-harness/.harness-worktrees/`, but worktrees
