@@ -20,6 +20,12 @@ import json, os, pathlib, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 fixture = json.load(sys.stdin)
+expected_models = {
+    "architecture_scale": "anthropic/claude-sonnet-5.5",
+    "security_blast_radius": "google/gemini-3.8-flash",
+    "scope_pragmatism": "openai/gpt-6.2-sol",
+}
+assert fixture["job"]["model"] == expected_models[fixture["job"]["role"]]
 calls = []
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
@@ -55,6 +61,8 @@ if result.returncode != 0:
     raise RuntimeError("Hermes synthetic worker failed: " + result.stderr[-300:])
 assert json.loads(result.stdout)["judge_role"] == fixture["job"]["role"]
 assert calls and all(call.get("model") == fixture["job"]["model"] and not call.get("tools") for call in calls)
+assert any(json.dumps(fixture["job"], ensure_ascii=True) in str(message.get("content", ""))
+           for call in calls for message in call.get("messages", []))
 config = pathlib.Path("/tmp/council-judge/config.yaml").read_text()
 denied = config.split("disabled_toolsets: [", 1)[1].split("]", 1)[0].split(", ")
 assert all(name in denied for name in ("terminal", "file", "kanban", "delegation", "code_execution", "web", "browser"))
@@ -98,6 +106,14 @@ with tempfile.TemporaryDirectory() as directory:
     if result.returncode:
         raise RuntimeError("Real judge launcher synthetic test failed: " + result.stderr[-500:])
     print("Real Docker judge launcher passed")
+    script = ('import { runV1Council } from ' + json.dumps((ROOT / "council-v1.mjs").as_uri()) + '; '
+              'const result = await runV1Council({artifact:"synthetic panel artifact", revisions:0}); '
+              'if (result.rubricVersion !== "v1" || result.decision !== "advance" '
+              '|| result.verdicts.length !== 3) throw new Error("invalid panel result");')
+    result = subprocess.run(["node", "--input-type=module", "-e", script], env=env, capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise RuntimeError("Real Council panel synthetic test failed: " + result.stderr[-500:])
+    print("Real Docker three-judge panel passed")
 
 # Exercise the same in-container watchdog without waiting for a real judge.
 watchdog = subprocess.run(["docker", "run", "--rm", "--pull=never", "--init", "--network", "none", "--read-only",

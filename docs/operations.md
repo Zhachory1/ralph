@@ -13,10 +13,10 @@ How to stand Ralph up, change it safely, and recover it. Components are describe
 
 The separate v4 pilot uses a [dedicated adapter login](1-projects/v4-architecture/hermes-harness-integration.md#adapter-authentication) rather than a copy of a personal OAuth session.
 
-For the unwired v4 Council judge launcher, `python3 compose/v4/test/council-judge-docker.py`
-checks the cached pinned Hermes image with three synthetic model routes, no external network,
-and no provider key. It also checks disposable-container cleanup. This does not verify real
-model availability, paid calls, or production routing.
+For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
+checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
+no external network, and a non-functional provider key. It also checks disposable-container cleanup.
+This does not verify real model availability, paid calls, or production routing.
 The launcher uses `--pull=never`; its pinned Hermes image must already be cached.
 
 ## Changing things safely

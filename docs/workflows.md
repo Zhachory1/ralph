@@ -2,8 +2,9 @@
 
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
-The v4 Council judge launcher is not yet connected to the panel, a board, or an approval gate.
-Its output is a validated judge verdict, not an approval or a routing action.
+The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
+verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
+or route work.
 
 ![Ralph System: intake, plan, work, review, deliver](diagrams/system-flow.svg)
 
