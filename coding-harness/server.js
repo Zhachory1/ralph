@@ -89,8 +89,9 @@ async function ensurePullRequest(worktreePath, branch, ticketId) {
     if (existingUrl) return { pr_url: existingUrl, note: null };
 
     try {
+      // Shallow single-branch clones may not have a remote-tracking ref for the pushed branch.
       const createdUrl = await gh(
-        ["pr", "create", "--draft", "--title", `[ralph] ${ticketId}`,
+        ["pr", "create", "--draft", "--head", branch, "--title", `[ralph] ${ticketId}`,
          "--body", `Opened by the coding harness for ticket ${ticketId}. Draft: review before merging.`],
         worktreePath
       );

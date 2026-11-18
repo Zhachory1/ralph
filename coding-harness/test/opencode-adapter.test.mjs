@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -26,12 +27,14 @@ function fixture(t, scenario, { code = 0, writeFile = true } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ralph-opencode-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], { cwd, encoding: "utf8" }).trim();
-  const remote = join(root, "remote.git"), repo = join(root, "repo"), bin = join(root, "bin"), out = join(root, "out");
-  mkdirSync(repo); mkdirSync(bin); mkdirSync(out);
+  const remote = join(root, "remote.git"), repo = join(root, "repo"), seed = join(root, "seed");
+  const bin = join(root, "bin"), out = join(root, "out");
+  mkdirSync(seed); mkdirSync(bin); mkdirSync(out);
   git(root, "init", "-q", "--bare", remote);
-  git(repo, "init", "-q", "-b", "main");
-  git(repo, "commit", "-qm", "init", "--allow-empty");
-  git(repo, "remote", "add", "origin", remote);
+  git(seed, "init", "-q", "-b", "main");
+  git(seed, "commit", "-qm", "init", "--allow-empty");
+  git(seed, "push", "-q", remote, "main");
+  git(root, "clone", "-q", "--depth", "1", "--branch", "main", pathToFileURL(remote).href, repo);
   const rfc = join(root, "accepted.md");
   writeFileSync(rfc, "Write the fixture.");
   writeFileSync(join(bin, "opencode"), `#!/bin/sh
@@ -46,7 +49,9 @@ EVENTS
 exit ${code}
 `, { mode: 0o755 });
   writeFileSync(join(bin, "gh"), `#!/bin/sh
-case "$2" in create) echo 'https://github.com/example/project/pull/7' ;; esac
+case "$2" in create)
+  case " $* " in *" --head ralph/vikunja-4 "*) echo 'https://github.com/example/project/pull/7' ;; *) echo 'missing explicit head' >&2; exit 1 ;; esac ;;
+esac
 `, { mode: 0o755 });
   return { root, repo, remote, bin, out, rfc, git };
 }
@@ -99,6 +104,7 @@ test("runs OpenCode headless in an isolated home without credentials or global i
   assert.ok(denied.includes("shell:*") && denied.includes("external_directory:*"));
   assert.deepEqual(config.skills, []);
   assert.equal(f.git(f.remote, "log", "-1", "--format=%s", "refs/heads/ralph/vikunja-4"), "[ralph] vikunja-4");
+  assert.equal(f.git(f.repo, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/ralph/vikunja-4"), "");
 });
 
 test("supplies approved skills through isolated config and never writes them into the worktree", async (t) => {
