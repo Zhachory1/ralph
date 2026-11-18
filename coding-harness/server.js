@@ -94,6 +94,10 @@ async function ensurePullRequest(worktreePath, branch, ticketId) {
       // makes a loser of that race return the winner's URL instead of an
       // error -- the same race ensureWorktree already guards for worktree
       // creation, applied to PR creation.
+      // The recheck's own failure is swallowed to "" on purpose, not a
+      // bug: if it fails too, recheckUrl is empty either way, and
+      // createErr -- the real create error, not a generic "recheck
+      // failed" message -- is what gets thrown and reported below.
       const recheck = await gh(
         ["pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"],
         worktreePath
