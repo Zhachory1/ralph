@@ -15,7 +15,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, constants as fsConstants } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, constants as fsConstants } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -144,10 +144,24 @@ async function withWorktreeLock(worktreeRoot, ticketId, fn) {
   const deadline = Date.now() + 60_000;
   for (;;) {
     try {
-      closeSync(openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY));
+      const fd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY);
+      writeFileSync(fd, String(process.pid));
+      closeSync(fd);
       break;
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
+      // A holder killed mid-run never reaches the finally below, so its
+      // lock would wedge the ticket forever. The lock records the holder's
+      // pid; once that process is gone, the lock is reclaimed.
+      const holder = Number(readFileSync(lockPath, "utf8").trim());
+      let alive = false;
+      if (holder > 0) {
+        try { process.kill(holder, 0); alive = true; } catch (e) { alive = e.code === "EPERM"; }
+      }
+      if (holder > 0 && !alive) {
+        try { unlinkSync(lockPath); } catch {}
+        continue;
+      }
       if (Date.now() > deadline) {
         throw new Error(`timed out waiting for worktree lock held by another run (ticket ${ticketId})`);
       }

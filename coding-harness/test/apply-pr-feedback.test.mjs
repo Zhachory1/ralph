@@ -63,6 +63,14 @@ test("rejects a worktree from a different repository", async () => {
   assert.match(out.open_questions[0], /different repository/);
 });
 
+test("reclaims a lock left by a dead process", async () => {
+  const { root, repo, bin } = setup([]);
+  const dead = execFileSync("sh", ["-c", "sh -c 'echo $$' && true"], { encoding: "utf8" }).trim();
+  writeFileSync(join(root, ".harness-worktrees", ".tk.lock"), dead);
+  const out = await applyFeedback(bin, { ticket_id: "tk", repo_path: repo, branch: "b", review_comments: ["x"] });
+  assert.match(out.open_questions[0], /no existing pull request/);
+});
+
 test("rejects a branch with no existing pull request", async () => {
   const { repo, bin } = setup([]);
   const out = await applyFeedback(bin, { ticket_id: "tk", repo_path: repo, branch: "b", review_comments: ["x"] });
