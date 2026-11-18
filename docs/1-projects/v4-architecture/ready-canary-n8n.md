@@ -30,6 +30,16 @@ into a disposable instance, executed the manual trigger, and observed one
 authenticated pass on the host. Scheduled activation and live canary
 credentials remain operator steps.
 
+For a repeatable local exercise with real Postgres and Vikunja and
+synthetic SWE/GitHub, run from the repository root:
+
+```bash
+python3 compose/v4/test/ready-canary-integration.py
+```
+
+It uses the cached pinned Postgres and Vikunja images, creates disposable
+containers, and doesn't use provider credentials or the operator's board.
+
 ## Live canary checklist
 
 1. Use a disposable repo whose target branch supports enforced protection.
