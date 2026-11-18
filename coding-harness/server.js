@@ -15,9 +15,10 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync, constants as fsConstants } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADAPTERS = JSON.parse(readFileSync(resolve(HERE, "adapters.json"), "utf8"));
@@ -121,6 +122,42 @@ async function isValidWorktree(path) {
     return out.trim() === "true";
   } catch {
     return false;
+  }
+}
+
+// Serializes any run (implement_spec or apply_pr_feedback) against one
+// ticket's worktree. ensureWorktree already guards worktree *creation*
+// against a concurrent duplicate-create; nothing previously guarded two
+// calls that both operate inside an *existing* worktree at the same time
+// (e.g. apply_pr_feedback racing implement_spec, or two apply_pr_feedback
+// calls), which could run two adapter processes writing files and
+// mutating the git index in the same directory simultaneously. A plain
+// in-process lock (e.g. a Map) would not help: each MCP client connection
+// spawns its own `node server.js` process, confirmed directly while
+// testing implement_spec's own worktree-creation race -- only a
+// filesystem-level lock, visible across processes, actually serializes
+// this. O_EXCL makes the create atomic: two processes racing to open the
+// same lock file, only one gets ENOENT's opposite (success); the other
+// gets EEXIST and retries.
+async function withWorktreeLock(worktreeRoot, ticketId, fn) {
+  const lockPath = resolve(worktreeRoot, `.${ticketId}.lock`);
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY));
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for worktree lock held by another run (ticket ${ticketId})`);
+      }
+      await sleep(250);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    unlinkSync(lockPath);
   }
 }
 
@@ -365,14 +402,31 @@ async function implementSpec(args) {
     return errorPayload(branch, `rfc_path does not exist: ${rfc_path}`);
   }
 
+  const worktreeRoot = resolve(repo_path, "..", ".harness-worktrees");
+  mkdirSync(worktreeRoot, { recursive: true });
+  try {
+    return await withWorktreeLock(worktreeRoot, ticket_id, () =>
+      implementSpecLocked(args, worktreeRoot)
+    );
+  } catch (err) {
+    return errorPayload(branch, `could not acquire worktree lock: ${err.message}`);
+  }
+}
+
+async function implementSpecLocked(args, worktreeRoot) {
+  const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
+
   let worktreePath;
   try {
     worktreePath = await ensureWorktree(repo_path, branch, ticket_id);
   } catch (err) {
     // Every setup failure (missing repo_path, a stray non-worktree
-    // directory, a concurrent call racing this one) returns the
-    // structured payload the MCP contract promises, rather than letting
-    // the rejection propagate as an unhandled protocol-level error.
+    // directory) returns the structured payload the MCP contract
+    // promises, rather than letting the rejection propagate as an
+    // unhandled protocol-level error. The concurrent-create race
+    // ensureWorktree's own comment describes is now moot: withWorktreeLock
+    // above already serializes every call for this ticket_id, so two
+    // calls never reach ensureWorktree at the same time in the first place.
     return errorPayload(branch, `could not provision worktree: ${err.message}`);
   }
 
@@ -449,17 +503,40 @@ function applyFeedbackErrorPayload(message) {
 }
 
 async function applyPrFeedback(args) {
-  const { ticket_id, repo_path, branch, review_comments } = args;
+  const { repo_path, branch, ticket_id } = args;
+  const worktreeRoot = resolve(repo_path, "..", ".harness-worktrees");
+  mkdirSync(worktreeRoot, { recursive: true });
+  try {
+    return await withWorktreeLock(worktreeRoot, ticket_id, () =>
+      applyPrFeedbackLocked(args, worktreeRoot)
+    );
+  } catch (err) {
+    return applyFeedbackErrorPayload(`could not acquire worktree lock: ${err.message}`);
+  }
+}
+
+async function applyPrFeedbackLocked(args, worktreeRoot) {
+  const { ticket_id, branch, review_comments } = args;
 
   // Unlike implement_spec, this never creates a worktree: feedback is
   // addressed on a branch implement_spec already pushed and opened a PR
   // for. A missing worktree here means the caller's ticket_id/repo_path
   // do not match an in-flight implement_spec run -- a setup error, not
   // something this tool should silently provision around.
-  const worktreeRoot = resolve(repo_path, "..", ".harness-worktrees");
   const worktreePath = resolve(worktreeRoot, ticket_id);
   if (!(await isValidWorktree(worktreePath))) {
     return applyFeedbackErrorPayload(`no existing worktree for ticket ${ticket_id} at ${worktreePath}; apply_pr_feedback only works on a worktree implement_spec already created`);
+  }
+
+  // isValidWorktree only confirms this path is some git worktree, not
+  // that it is checked out to the branch the caller believes it is on.
+  // Without this check, a stale or mismatched `branch` argument would
+  // push whatever HEAD the worktree is actually on to a remote ref named
+  // after the caller's claim -- silently pushing to the wrong branch and
+  // opening/reusing a PR against it.
+  const actualBranch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath).catch(() => "")).trim();
+  if (actualBranch !== branch) {
+    return applyFeedbackErrorPayload(`worktree for ticket ${ticket_id} is on branch '${actualBranch}', not the requested '${branch}'; refusing to push feedback to the wrong branch`);
   }
 
   const prompt = buildFeedbackPrompt(review_comments);
