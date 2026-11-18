@@ -170,6 +170,8 @@ commits on the sandbox repo rather than a corrupted worktree.
 
 ## `audit_pr`
 
+Run the audit-enabled server from the complete harness directory on the
+Docker host, not from the SWE container's single-file `server.js` mount.
 Configure `RALPH_AUDIT_REPOS` in the server environment as a JSON object
 keyed by the repository's canonical absolute path. Each entry supplies a
 locally installed, digest-pinned `image` and trusted shell commands `test`

@@ -19,7 +19,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { auditPr } from "./audit-pr.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADAPTERS = JSON.parse(readFileSync(resolve(HERE, "adapters.json"), "utf8"));
@@ -751,6 +750,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } else if (name === "fix_ci_failure") {
     payload = await fixCiFailure(toolArgs);
   } else if (name === "audit_pr") {
+    const { auditPr } = await import("./audit-pr.js");
     payload = await auditPr(toolArgs);
   } else {
     throw new Error(`unknown tool: ${name}`);
