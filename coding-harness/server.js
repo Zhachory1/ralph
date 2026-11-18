@@ -177,6 +177,49 @@ function errorPayload(branch, message) {
   };
 }
 
+function worktreeStatusErrorPayload(message) {
+  // Same shape as errorPayload, minus branch (get_worktree_status has no
+  // target branch argument to echo back) -- the ticket this tool was built
+  // from asked explicitly for "the same error-payload pattern implement_spec
+  // uses"; returning only {status, open_questions} the first time this was
+  // implemented did not meet that, caught by independently calling the tool
+  // with an invalid repo_path rather than trusting the adapter's own report.
+  return {
+    status: "error",
+    branch: null,
+    clean: null,
+    ci_state: null,
+    pending_notes_count: null,
+    open_questions: [message],
+  };
+}
+
+async function getWorktreeStatus(args) {
+  const { repo_path } = args;
+  if (!(await isValidWorktree(repo_path))) {
+    return worktreeStatusErrorPayload(`repo_path is not a valid git working tree: ${repo_path}`);
+  }
+  let branch, porcelain;
+  try {
+    branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)).trim();
+    porcelain = await git(["status", "--porcelain"], repo_path);
+  } catch (err) {
+    return worktreeStatusErrorPayload(`could not read worktree status: ${err.message}`);
+  }
+  return {
+    status: "completed",
+    branch,
+    clean: porcelain.trim() === "",
+    // Stubs, not computed: no CI integration and no pending_human_notes
+    // table exist yet (spec Sec 11's own ci_state/pending_notes_count
+    // fields). An honest null/0 here is correct for this slice, not a
+    // shortcut -- see coding-harness/README.md.
+    ci_state: null,
+    pending_notes_count: 0,
+    open_questions: [],
+  };
+}
+
 async function implementSpec(args) {
   const { ticket_id, repo_path, branch, rfc_path, acceptance_criteria } = args;
 
@@ -257,15 +300,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["ticket_id", "repo_path", "branch", "rfc_path"],
       },
     },
+    {
+      name: "get_worktree_status",
+      description:
+        "Reports a worktree's current branch and clean/dirty state (spec Sec 11). ci_state and pending_notes_count are always stubbed (null/0) until CI integration and pending_human_notes exist.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ticket_id: { type: "string" },
+          repo_path: { type: "string" },
+        },
+        required: ["ticket_id", "repo_path"],
+      },
+    },
   ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: toolArgs } = request.params;
-  if (name !== "implement_spec") {
+  let payload;
+  if (name === "implement_spec") {
+    payload = await implementSpec(toolArgs);
+  } else if (name === "get_worktree_status") {
+    payload = await getWorktreeStatus(toolArgs);
+  } else {
     throw new Error(`unknown tool: ${name}`);
   }
-  const payload = await implementSpec(toolArgs);
   return { content: [{ type: "text", text: JSON.stringify(payload) }] };
 });
 
