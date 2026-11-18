@@ -268,18 +268,15 @@ hanging indefinitely with zero output while the identical invocation from a
 shell (which closes stdin or inherits a TTY) completed in seconds. Fixed by
 setting `stdio: ["ignore", "pipe", "pipe"]` explicitly (`server.js`).
 
-## Known limitation, accepted for this slice: a transient `gh` failure right after a successful push can leave a branch with no PR
+## Recovering an unfinished `implement_spec` publication
 
-If `git push` succeeds but the immediate `gh pr list` call fails (a network
-blip), `ensurePullRequest` returns a note and `pr_url: null`. On retry, if
-the adapter finds nothing further to change, `diffStat` is empty and the
-whole commit/PR step is skipped entirely -- the branch stays pushed with no
-PR and no further attempt, until a caller notices the stale `open_questions`
-note from the one run that hit it. Narrow (needs a `gh` failure in that
-exact few-hundred-millisecond window) and not reproduced; documented rather
-than guarded against. Fixing it means attempting `ensurePullRequest` even when `diffStat`
-is empty, which needs its own slice to get the "was this branch ever
-actually PR'd" check right, not stapled onto this one.
+If a push succeeds but the GitHub call fails, the tool returns a note and
+`pr_url: null`. Retry the same ticket and branch. A completed retry with no
+new diff will retry publication only from a clean matching worktree whose
+HEAD has the harness author, committer, and exact ticket commit subject.
+No new commit is made; an existing open PR is reused, and a head that
+already has a closed PR is not reopened by an empty retry. This recovery
+is for trusted managed worktrees, not a proof of Git authorship.
 
 ## A second bug this slice found: a stale PR on re-run
 
