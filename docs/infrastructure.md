@@ -24,6 +24,11 @@ key, but no host mounts, master token, or repository/board credentials. It does 
 shared Hermes home. Network egress is unrestricted, the bridge uses plain HTTP, and Docker
 administrators can inspect credentials and artifacts. Neither component is connected to board routing.
 
+The v4 RFC publisher (`compose/v4/docs-pr.mjs`) uses a repository-scoped bot credential on the
+host. It opens and updates drafts without calling Council. The Council service reports a digest of
+the exact text reviewed. GitHub protection on the docs repository, not draft status, must prevent
+the bot from bypassing human review.
+
 The separate, opt-in v4 docs preview in `compose/v4/docs-preview.yml` mounts an operator-selected
 docs checkout read-only. MkDocs and Kroki publish only on loopback; neither authenticates clients.
 Mermaid and Excalidraw companions have no published ports and use an internal network. MkDocs and

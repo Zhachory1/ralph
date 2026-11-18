@@ -10,6 +10,12 @@ the argument-free `review_artifact` tool. The isolated profile can call it; the 
 the validated result separately rather than trusting the profile's model-generated response.
 This remains a standalone check, not an automated gate.
 
+Docs-as-PRs is optional. The host can open and revise an RFC draft at
+`docs/1-projects/<slug>/rfc.md` on `docs/rfc-<slug>` without calling Council. If Council is used,
+record its findings against the exact text reviewed, not against later revisions. Publishing a
+draft does not approve it. Inline feedback polling, diagram attachments, and merge-to-Ready
+routing are not wired into this path.
+
 The optional v4 docs preview serves the operator-selected checkout and exposes a separate Kroki
 rendering API. It does not automatically embed diagrams, fetch PR branches, publish documents,
 attach diagrams, or advance a gate.
