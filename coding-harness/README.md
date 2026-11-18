@@ -64,13 +64,21 @@ retrying; a `"failed"` is a legitimate adapter outcome.
 ```json
 {
   "status": "completed | error",
-  "branch": "current branch name, or null on error",
+  "branch": "current branch name, or null on error or detached HEAD",
   "clean": "true iff `git status --porcelain` is empty, or null on error",
   "ci_state": null,
   "pending_notes_count": 0,
-  "open_questions": ["present only on error"]
+  "open_questions": ["present on error, or a detached-HEAD note"]
 }
 ```
+
+`ticket_id` is carried but not used to derive a path: `repo_path` is
+already the worktree to inspect (matching the spec's description for the
+harness's other "checks out existing worktree" tools), unlike
+`implement_spec`'s `repo_path`, which is the base repo a *new* worktree is
+provisioned from. A detached-HEAD worktree returns `branch: null` with an
+explanatory `open_questions` entry rather than the literal string `"HEAD"`,
+which git itself would otherwise report as if it were a real branch name.
 
 `ci_state` and `pending_notes_count` are always stubbed (`null`/`0`): no CI
 integration and no `pending_human_notes` table exist yet. An honest stub is
@@ -109,6 +117,16 @@ uses." `swe`'s own self-report claimed `status: "completed"` with all criteria
 met. Independently calling the resulting tool directly (not trusting that
 report) found the error path actually returned `{status, open_questions}`
 only, missing `branch`/`clean`/`ci_state`/`pending_notes_count`. Fixed to
-match `implement_spec`'s shape (`worktreeStatusErrorPayload` in `server.js`),
-and re-verified directly against three real cases (invalid repo, dirty
-repo, clean repo) before trusting it again.
+return its own full payload shape, nulled out, and re-verified directly
+against three real cases (invalid repo, dirty repo, clean repo) before
+trusting it again.
+
+An independent review on this PR caught two more gaps the self-report also
+missed: `ticket_id` was declared required in the tool's schema with no
+comment on why it is unused (it genuinely is unused -- `repo_path` is
+already the worktree to inspect, same as the harness's other "checks out
+existing worktree" tools -- now documented, not just silently dropped),
+and a detached-HEAD worktree would have silently reported the literal
+string `"HEAD"` as if it were a real branch name. Both fixed and
+re-verified (a detached-HEAD checkout now returns `branch: null` with an
+explanatory note) before merge.

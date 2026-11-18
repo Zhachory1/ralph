@@ -178,12 +178,14 @@ function errorPayload(branch, message) {
 }
 
 function worktreeStatusErrorPayload(message) {
-  // Same shape as errorPayload, minus branch (get_worktree_status has no
-  // target branch argument to echo back) -- the ticket this tool was built
-  // from asked explicitly for "the same error-payload pattern implement_spec
+  // Mirrors getWorktreeStatus's own success keys, nulled out -- not
+  // implementSpec's errorPayload shape (pr_url/test_summary/diff_stats),
+  // which this tool has no equivalent fields for. The ticket this tool was
+  // built from asked for "the same error-payload pattern implement_spec
   // uses"; returning only {status, open_questions} the first time this was
-  // implemented did not meet that, caught by independently calling the tool
-  // with an invalid repo_path rather than trusting the adapter's own report.
+  // implemented did not meet that -- fixed here, and the fix is returning
+  // every field this tool's own success payload has, nulled, not borrowing
+  // implement_spec's unrelated field names.
   return {
     status: "error",
     branch: null,
@@ -195,6 +197,13 @@ function worktreeStatusErrorPayload(message) {
 }
 
 async function getWorktreeStatus(args) {
+  // ticket_id is not used to derive a path: unlike implement_spec (which
+  // provisions a *new* worktree from a base repo_path), this tool's
+  // repo_path argument is already the worktree to inspect, matching the
+  // spec's description for the harness's other "checks out existing
+  // worktree" tools. ticket_id is carried for logging/future use, same as
+  // implement_spec's unused `product` argument -- intentionally, not an
+  // oversight.
   const { repo_path } = args;
   if (!(await isValidWorktree(repo_path))) {
     return worktreeStatusErrorPayload(`repo_path is not a valid git working tree: ${repo_path}`);
@@ -205,6 +214,21 @@ async function getWorktreeStatus(args) {
     porcelain = await git(["status", "--porcelain"], repo_path);
   } catch (err) {
     return worktreeStatusErrorPayload(`could not read worktree status: ${err.message}`);
+  }
+  // A detached HEAD makes git itself print the literal string "HEAD", not
+  // a real branch name or an error -- returning that silently as `branch`
+  // would read as a working branch called "HEAD". Surfaced explicitly
+  // instead: null branch, with the real reason carried in open_questions,
+  // same as any other field this tool cannot honestly answer.
+  if (branch === "HEAD") {
+    return {
+      status: "completed",
+      branch: null,
+      clean: porcelain.trim() === "",
+      ci_state: null,
+      pending_notes_count: 0,
+      open_questions: ["worktree is in detached HEAD state; no branch name to report"],
+    };
   }
   return {
     status: "completed",
