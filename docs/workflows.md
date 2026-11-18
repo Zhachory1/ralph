@@ -10,6 +10,10 @@ the argument-free `review_artifact` tool. The isolated profile can call it; the 
 the validated result separately rather than trusting the profile's model-generated response.
 This remains a standalone check, not an automated gate.
 
+The standalone v4 author drafts an RFC from a brief or revises it from a current draft and
+feedback. The caller receives Markdown and chooses what to do next; the worker cannot publish,
+call Council, or move a card.
+
 Docs-as-PRs is optional. The host can open and revise an RFC draft at
 `docs/1-projects/<slug>/rfc.md` on `docs/rfc-<slug>` without calling Council. If Council is used,
 record its findings against the exact text reviewed, not against later revisions. Publishing a

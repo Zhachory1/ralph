@@ -24,6 +24,11 @@ key, but no host mounts, master token, or repository/board credentials. It does 
 shared Hermes home. Network egress is unrestricted, the bridge uses plain HTTP, and Docker
 administrators can inspect credentials and artifacts. Neither component is connected to board routing.
 
+The v4 RFC drafter (`compose/v4/author.mjs`) uses a disposable, tool-free Hermes container
+with the provider key and no host binds, GitHub, board, or Council credentials. It shares the
+provider-only Docker launcher with the Council judges. Model output is returned to the host
+as text, not written to a checkout. Network egress is unrestricted.
+
 The v4 RFC publisher (`compose/v4/docs-pr.mjs`) uses a repository-scoped bot credential on the
 host. It opens and updates drafts without calling Council. The Council service reports a digest of
 the exact text reviewed. GitHub protection on the docs repository, not draft status, must prevent
