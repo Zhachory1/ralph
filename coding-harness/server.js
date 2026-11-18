@@ -5,10 +5,10 @@
 // implement_spec, against one concrete adapter (mewrite), proving the
 // harness-agnostic contract from Sec 11.0 end to end.
 //
-// Non-goals this slice: no GitHub PR creation (pr_url is always null until
-// that lands), no pending_human_notes polling, no Docker sandboxing (the
-// spec reserves that for audit_pr on untrusted external code, not needed
-// for a repo this harness already trusts).
+// implement_spec opens a real draft PR via `gh` when the adapter produces
+// a diff. Non-goals: no pending_human_notes polling, no Docker sandboxing
+// (the spec reserves that for audit_pr on untrusted external code, not
+// needed for a repo this harness already trusts).
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -37,6 +37,81 @@ function git(args, cwd) {
     // this one call -- confirmed by reproducing it directly.
     proc.on("error", reject);
   });
+}
+
+function gh(args, cwd) {
+  return new Promise((resolvePromise, reject) => {
+    const proc = spawn("gh", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    proc.stdout.on("data", (d) => (stdout += d));
+    proc.stderr.on("data", (d) => (stderr += d));
+    proc.on("close", (code) => {
+      if (code !== 0) reject(new Error(`gh ${args.join(" ")} failed: ${stderr.trim()}`));
+      else resolvePromise(stdout);
+    });
+    proc.on("error", reject);
+  });
+}
+
+// Pushes the branch and opens a draft PR, or finds the existing one for
+// this branch -- idempotent, same reasoning as ensureWorktree: a retried
+// implement_spec call for a branch already pushed must not open a second
+// PR. Returns { pr_url, note } rather than throwing: a push/PR failure
+// does not undo the real code change the adapter already made, so this is
+// reported as a note alongside a successful diff, never as the whole
+// call's failure.
+async function ensurePullRequest(worktreePath, branch, ticketId) {
+  try {
+    // Always push first: an existing PR's branch still needs this run's
+    // new commits to reach GitHub. The early-return-on-existing-PR this
+    // replaced skipped the push entirely on a second call, so the PR
+    // silently went stale -- the local commit existed, diff_stats
+    // described it, but it never left the worktree. Caught by pushing a
+    // second real change through this path and finding the remote branch
+    // one commit behind local, not by inspection.
+    await git(["push", "-u", "origin", branch], worktreePath);
+
+    const existing = await gh(
+      ["pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"],
+      worktreePath
+    );
+    const existingUrl = existing.trim();
+    if (existingUrl) return { pr_url: existingUrl, note: null };
+
+    try {
+      const createdUrl = await gh(
+        ["pr", "create", "--draft", "--title", `[ralph] ${ticketId}`,
+         "--body", `Opened by the coding harness for ticket ${ticketId}. Draft: review before merging.`],
+        worktreePath
+      );
+      return { pr_url: createdUrl.trim(), note: null };
+    } catch (createErr) {
+      // The list-then-create sequence above has a window: two concurrent
+      // implement_spec calls for the same branch can both pass the list
+      // check before either creates, and gh itself refuses the second
+      // `pr create` for a branch that already has one. Re-checking here
+      // (rather than treating that refusal as a real failure) is what
+      // makes a loser of that race return the winner's URL instead of an
+      // error -- the same race ensureWorktree already guards for worktree
+      // creation, applied to PR creation.
+      // The recheck's own failure is swallowed to "" on purpose, not a
+      // bug: if it fails too, recheckUrl is empty either way, and
+      // createErr -- the real create error, not a generic "recheck
+      // failed" message -- is what gets thrown and reported below.
+      const recheck = await gh(
+        ["pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"],
+        worktreePath
+      ).catch(() => "");
+      const recheckUrl = recheck.trim();
+      if (recheckUrl) return { pr_url: recheckUrl, note: null };
+      throw createErr;
+    }
+  } catch (err) {
+    // Deliberately not fatal: implement_spec's status still reflects
+    // whether the adapter produced a correct diff, independent of whether
+    // GitHub access happened to work this run.
+    return { pr_url: null, note: `could not open a pull request: ${err.message}` };
+  }
 }
 
 async function isValidWorktree(path) {
@@ -288,15 +363,45 @@ async function implementSpec(args) {
   await git(["add", "-A"], worktreePath).catch(() => {});
   const diffStat = await git(["diff", "--stat", "HEAD"], worktreePath).catch(() => "");
 
+  const status = result.code === 0 && turnEndSeen ? "completed" : "failed";
+  const openQuestions = result.code !== 0 ? [`adapter exited ${result.code}: ${result.stderr.trim().slice(0, 500)}`] : [];
+
+  let prUrl = null;
+  // Only on a real, completed diff: a failed run, or one that touched
+  // nothing, has nothing to open a PR for. The adapter's own edits are
+  // staged (git add -A above) but not committed -- committing here, right
+  // before the push, keeps the harness (not the adapter) as the one place
+  // that decides what constitutes a reviewable unit of work.
+  if (status === "completed" && diffStat.trim()) {
+    try {
+      // -c identity flags, not a global/repo git config write: this
+      // process's commits are attributed to the harness, without
+      // depending on (or silently overwriting) whatever git identity the
+      // host or operator already has configured -- found missing by
+      // hitting "Author identity unknown" on a real host with no global
+      // git user.name/email set at all.
+      await git([
+        "-c", "user.name=ralph-coding-harness",
+        "-c", "user.email=ralph-coding-harness@localhost",
+        "commit", "-m", `[ralph] ${ticket_id}`,
+      ], worktreePath);
+    } catch (err) {
+      openQuestions.push(`could not commit changes: ${err.message}`);
+    }
+    if (!openQuestions.length) {
+      const { pr_url, note } = await ensurePullRequest(worktreePath, branch, ticket_id);
+      prUrl = pr_url;
+      if (note) openQuestions.push(note);
+    }
+  }
+
   return {
-    status: result.code === 0 && turnEndSeen ? "completed" : "failed",
-    // Pull-request creation is out of scope for this slice (see header
-    // comment); real automation would open one here and fill this in.
-    pr_url: null,
+    status,
+    pr_url: prUrl,
     branch,
     test_summary: finalText,
     diff_stats: diffStat.trim() || null,
-    open_questions: result.code !== 0 ? [`adapter exited ${result.code}: ${result.stderr.trim().slice(0, 500)}`] : [],
+    open_questions: openQuestions,
   };
 }
 
