@@ -35,6 +35,7 @@ process.exit(child.status ?? 1);
   const saved = join(dir, "pr");
   const lostResponse = join(dir, "lost-response");
   const readyRace = join(dir, "ready-race");
+  const staleHead = join(dir, "stale-head");
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const {execFileSync} = require("node:child_process");
@@ -49,9 +50,19 @@ if (args[0] === "api" && args[1] === "user") console.log("fixture-bot");
 else if (args[0] === "repo") console.log("main");
 else if (args[1] === "list") console.log(fs.existsSync(${JSON.stringify(saved)})
   ? JSON.stringify(JSON.parse(fs.readFileSync(${JSON.stringify(saved)}, "utf8"))
-    .map(pr => ({...pr, headRefOid: pr.headRefOid ?? head(),
+    .map(pr => {
+      const current = head();
+      if (fs.existsSync(${JSON.stringify(staleHead)})) {
+        const old = fs.readFileSync(${JSON.stringify(staleHead)}, "utf8");
+        if (old !== current) {
+          fs.unlinkSync(${JSON.stringify(staleHead)});
+          return {...pr, headRefOid: old};
+        }
+      }
+      return {...pr, headRefOid: pr.headRefOid ?? current,
       isDraft: pr.isDraft && (!fs.existsSync(${JSON.stringify(readyRace)}) ||
-        fs.readFileSync(${JSON.stringify(readyRace)}, "utf8") === head())}))) : "[]");
+        fs.readFileSync(${JSON.stringify(readyRace)}, "utf8") === current)};
+    })) : "[]");
 else if (args[1] === "create") {
   if (!args.includes("--draft")) process.exit(3);
   const body = args[args.indexOf("--body") + 1];
@@ -101,6 +112,7 @@ else if (args[1] === "create") {
   const revised = { ...job, artifact: "# Revised RFC\n" };
   await assert.rejects(publish(revised), { stderr: /requires the current draft head SHA/ });
   const change = { ...revised, expectedHead: first.head_sha };
+  writeFileSync(staleHead, first.head_sha);
   const updated = JSON.parse((await publish(change)).stdout);
   assert.equal(updated.pr_url, first.pr_url);
   assert.notEqual(updated.head_sha, first.head_sha);

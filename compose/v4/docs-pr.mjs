@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, openSync, readSync, closeSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -114,7 +115,16 @@ async function publish({ slug, artifact, expectedHead }) {
     }
     const confirmed = (prs) => ({ pr_url: validatePr(prs, head), head_sha: head });
     if (existing.length) {
-      try { return confirmed(await list()); }
+      try {
+        // GitHub can briefly report the pre-push head. Retry only that known stale state.
+        for (const pause of [0, 250, 500, 1000, 2000]) {
+          if (pause) await delay(pause);
+          const prs = await list();
+          validatePr(prs);
+          if (prs[0].headRefOid !== oldHead) return confirmed(prs);
+        }
+        throw new Error("GitHub still reports the previous head");
+      }
       catch { throw new Error(`RFC commit ${head} was pushed, but draft state could not be confirmed; inspect the PR`); }
     }
     try {
