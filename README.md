@@ -55,9 +55,7 @@ All thirteen exist. Five have done real work: the orchestrator planned a feature
 
 Hermes can rewrite skill text, so a rule that exists only in a `SKILL.md` can be optimized away. The rules that matter are enforced where an agent can't reach them: per-profile scoped tokens, blocked commands in a profile's toolset, branch protection, and hard spend caps.
 
-The property that holds unconditionally:
-
-- **No agent can approve agent work.** Agent PRs are opened under your account, and GitHub never lets a PR's author approve their own PR. This one needs no configuration and no cooperation.
+An independent Reviewer may approve the technical work for a specific commit in Paperclip. The Developer cannot review its own work. This board decision does not submit a GitHub approval or authorize a merge.
 
 Merging is guarded rather than impossible. Branch protection on the target repository is the real control, backed by token scope; `hermes tools` works at toolset granularity, so it can't block `merge` while leaving the builder the terminal access it needs to run tests. Treat "agents don't merge" as a repository setting you own, not a property of this system, and configure branch protection before pointing a builder at a repo that matters.
 

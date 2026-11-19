@@ -2,6 +2,7 @@
 
 import runpy
 import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -90,11 +91,29 @@ def check_roster(container):
 
     bearer = runpy.run_path(str(TESTS / "paperclip-board-key-canary.py"))["bearer"]
     # A backlog assignment exercises native authorization without starting a model run.
-    recipient = board(f"{root}/agents", {"name": "Fixture assignee", "adapterType": "process",
-                                         "adapterConfig": {"command": "/bin/true"}})
+    def review_actor(name, expected):
+        script = (
+            'curl -sS -X PATCH -H "Authorization: Bearer $PAPERCLIP_API_KEY" '
+            '-H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" '
+            """--json '{"status":"done","comment":"Technical disposition for fixture commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' """
+            f'"{fixture["ORIGIN"]}/api/issues/$(cat /tmp/technical-review-issue)" '
+            f"""| python3 -c 'import sys,json; d=json.load(sys.stdin); assert d.get("status") == "{expected}", d.get("error", d.get("status"))'"""
+        )
+        agent = board(f"{root}/agents", {"name": name, "adapterType": "process",
+                                         "adapterConfig": {"command": "/bin/sh", "args": ["-ec", script]}})
+        deadline = time.monotonic() + 20
+        while board(f"agents/{agent['id']}").get("lifecycleState") != "ready":
+            assert time.monotonic() < deadline, "Fixture actor not ready"
+            time.sleep(0.5)
+        return agent
+
+    recipient = review_actor("Fixture assignee", "in_review")
+    reviewer = review_actor("Fixture reviewer", "done")
+    stage = {"type": "review", "participants": [{"type": "agent", "agentId": reviewer["id"]}]}
     key = board(f"agents/{manager}/keys", {"name": "Disposable manager"})["token"]
     status, delegated = bearer(container, key, f"{root}/issues", body={
         "title": "Delegate fixture task", "status": "backlog", "parentId": issue["id"], "assigneeAgentId": recipient["id"],
+        "executionPolicy": {"stages": [stage]},
     })
     assert status == 201 and delegated["createdByAgentId"] == manager, (status, delegated.get("error"))
     pending = board(f"issues/{issue['id']}/interactions", {
@@ -108,6 +127,28 @@ def check_roster(container):
     assert board(f"issues/{issue['id']}/interactions")[0]["status"] == "pending"
     assert board(endpoint, {})["status"] == "accepted"
     print("PASS: manager delegated a backlog task but could not resolve Director confirmation")
+
+    issue_path = f"issues/{delegated['id']}"
+    fixture["docker"]("exec", container, "sh", "-ec", 'echo "$1" > /tmp/technical-review-issue', "fixture", delegated["id"])
+    assert delegated["executionPolicy"]["stages"][0]["participants"][0]["agentId"] == reviewer["id"]
+    # A Developer attempting "done" must enter review, not approve its own work.
+    board(issue_path, {"status": "todo"}, "PATCH")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        state = board(issue_path)
+        if state["status"] == "done":
+            break
+        time.sleep(0.5)
+    if (state.get("executionState") or {}).get("lastDecisionOutcome") != "approved":
+        for row in board(f"{issue_path}/runs")[:4]:
+            detail = board(f"heartbeat-runs/{row['runId']}")
+            print(detail["status"], detail.get("error"), (detail.get("stderrExcerpt") or "")[-500:])
+        raise AssertionError(state["status"])
+    comments = board(f"{issue_path}/comments")
+    actors = {c["authorAgentId"] for c in comments if c["body"].startswith("Technical disposition")}
+    assert actors == {recipient["id"], reviewer["id"]}, actors
+    assert state["executionState"]["returnAssignee"]["agentId"] == recipient["id"]
+    print("PASS: Developer cannot decide its pending technical review; assigned independent Reviewer can")
 
     swe_id = roster["SWE"]
     for cents, expected in ((80, "warning"), (20, "hard_stop")):

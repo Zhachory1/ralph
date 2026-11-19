@@ -12,14 +12,19 @@ from uuid import UUID
 SEATS = (
     ("Orchestrator", "ceo", "hermes_local", "Route requests and assign approved work."),
     ("Author", "general", "hermes_local", "Draft and revise initiative RFCs."),
-    ("Reviewer", "general", "hermes_local", "Review exact-head evidence and report to the Director."),
-    ("SWE", "engineer", "opencode_local", "Implement assigned work in its issue worktree."),
+    ("Reviewer", "general", "hermes_local", "Follow the independent Reviewer policy below.\n\n"
+     + (Path(__file__).resolve().parents[2] / "profiles/reviewer/SOUL.md").read_text()),
+    ("SWE", "engineer", "opencode_local", "Implement assigned work in its issue worktree. "
+     "After addressing changes_requested, resubmit the tested commit with an in_review transition "
+     "and a comment naming the PR and full SHA. Do not decide your own review."),
     ("SRE", "engineer", "opencode_local", "Triage CI and maintain assigned repositories."),
 )
 
 
 WORKFLOW_SEATS = (
-    ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists."),
+    ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists. "
+     "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
+     "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch."),
     ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge."),
     ("Comms", "general", "hermes_local", "Triage communications; external sends require Director approval."),
