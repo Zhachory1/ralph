@@ -105,6 +105,8 @@ manual setup is lexical only and does not enable Hindsight retention or a new se
 ### Paperclip cold restore drill
 
 Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.
+Use a separate Docker host if the preview runs on a small VM. The drill refuses
+to run alongside the named pilot preview when Docker has less than 4 GiB of memory.
 The drill creates two authenticated, network-disabled containers without published ports,
 each with its own disposable named volume at `/paperclip`. It shuts down the source
 cleanly, copies `/paperclip` with `docker cp -a`, restores into the stopped target, and

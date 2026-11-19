@@ -16,6 +16,7 @@ FIXTURE = runpy.run_path(str(Path(__file__).with_name("paperclip-rfc-canary.py")
 DOCKER = FIXTURE["docker"]
 ORIGIN = FIXTURE["ORIGIN"]
 EMAIL = "restore@fixture.invalid"
+MIN_SHARED_DOCKER_MEMORY = 4 * 1024**3
 NATIVE_RESTORE = """
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -94,10 +95,12 @@ def restore_native(source, restored, env, user, issue, run):
     backup = board(source, "instance/database-backups", {})
     assert backup["trigger"] == "manual" and backup["sizeBytes"] > 0
     assert backup["backupFile"].endswith(".sql.gz")
-    start(restored)
     with TemporaryFile() as archive:
         subprocess.run(["docker", "exec", "-u", "node", source, "cat", "--", backup["backupFile"]],
                        env=env, stdout=archive, timeout=30, check=True)
+        # Keep only one embedded database running at a time on small Docker hosts.
+        stop(source)
+        start(restored)
         archive.seek(0)
         subprocess.run(["docker", "exec", "-i", "-u", "node", restored, "sh", "-ec",
                         "umask 077; cat > /tmp/restore-fixture.sql.gz"],
@@ -108,6 +111,9 @@ def restore_native(source, restored, env, user, issue, run):
 
 
 def drill(*, native=False):
+    if (int(DOCKER("info", "--format", "{{.MemTotal}}")) < MIN_SHARED_DOCKER_MEMORY
+            and DOCKER("ps", "-q", "--filter", "name=^/ralph-paperclip-preview$")):
+        raise SystemExit("Run this drill on a separate Docker host; the preview is running with less than 4 GiB.")
     suffix = uuid.uuid4().hex[:10]
     env = {key: os.environ[key] for key in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
            if key in os.environ}
