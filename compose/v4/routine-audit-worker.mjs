@@ -24,12 +24,24 @@ export async function runRoutineAudit({ board, companyId, routineId, runId, repo
       || issue.originId !== routineId || issue.originRunId !== runId) {
     throw new Error("Unexpected linked Routine issue");
   }
-  const hasDossier = async () => (await board(`${path}/documents`)).some((doc) => doc.key === "audit");
-  if (await hasDossier()) return "already_published";
   const { head_sha: head, pr_number: pr } = payload;
-  if (await currentHead(pr) !== head) return "stale";
+  const documents = () => board(`${path}/documents`);
+  const existing = await documents();
+  if (existing.some((doc) => doc.key === "audit-status")) return "superseded";
+  const observed = await currentHead(pr);
+  if (typeof observed !== "string" || !sha.test(observed)) throw new Error("Could not verify current PR head");
+  if (existing.some((doc) => doc.key === "audit")) {
+    if (observed === head) return "already_published";
+    await board(`${path}/documents/audit-status`, "PUT", {
+      title: "Audit superseded",
+      format: "markdown",
+      body: `The audit for \`${head}\` is historical. The PR moved to \`${observed}\`; run a new exact-head audit.\n`,
+    });
+    return "superseded";
+  }
+  if (observed !== head) return "stale";
   const result = await audit({ repo_path: repoPath, pr_number: pr, head_sha: head });
-  if (await hasDossier()) return "already_published";
+  if ((await documents()).some((doc) => doc.key === "audit")) return "already_published";
   if (await currentHead(pr) !== head) return "stale";
   const report = JSON.stringify(result, null, 2).split("\n").map((line) => `    ${line}`).join("\n");
   await board(`${path}/documents/audit`, "PUT", {

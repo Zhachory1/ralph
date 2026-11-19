@@ -54,6 +54,10 @@ access. Run one worker at a time. `published` means the linked Paperclip issue h
 document, `already_published` means the existing document was left alone, and `stale`
 means no dossier was written for the outdated head. Revoke the temporary key after use.
 This command does not create triggers, publish GitHub reviews, or close the issue.
+Run the worker again on a published Routine run to recheck it. If the PR moved, it
+returns `superseded` and adds an **Audit superseded** document without editing the
+original dossier. The marker is permanent even if the PR later returns to the same SHA.
+Audit the new head with its own run. Nothing checks this on a schedule.
 
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
 and Git to verify the approved Git search boundary, including replacement of the old search
