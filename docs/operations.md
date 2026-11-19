@@ -60,6 +60,48 @@ and Git to verify the approved Git search boundary, including replacement of the
 result after a refresh to a second approved revision. The probe uses lexical search only;
 it does not download embedding models, use the live index, or need a running qmd service.
 
+### Refresh a separate qmd index from approved PARA snapshots
+
+Use qmd 2.8.3 and a dedicated detached worktree of the approved PARA repository.
+`APPROVED_SHA` must be the full commit ID from the publication of the approved Markdown.
+Do not choose it from the newest draft, an issue's Done status, or the branch tip alone.
+Set `APPROVED_TREE` and `QMD_STATE` to separate absolute paths outside the ordinary
+checkout. The approved commit's `docs/` tree must contain only publishable documents.
+
+```sh
+# One-time setup from the local PARA clone:
+git worktree add --detach "$APPROVED_TREE" "$APPROVED_SHA"
+mkdir -p "$QMD_STATE/config" "$QMD_STATE/cache"
+export QMD_CONFIG_DIR="$QMD_STATE/config" XDG_CACHE_HOME="$QMD_STATE/cache"
+export INDEX_PATH="$QMD_STATE/cache/index.sqlite"
+```
+
+For the first index and each refresh, stop readers of this separate index first.
+Use the same environment paths and the verified `APPROVED_SHA`:
+
+```sh
+(
+  set -eu
+  worktree=$(git -C "$APPROVED_TREE" status --porcelain --ignored)
+  test -z "$worktree"
+  git -C "$APPROVED_TREE" switch --detach "$APPROVED_SHA"
+  test "$(git -C "$APPROVED_TREE" rev-parse HEAD)" = "$APPROVED_SHA"
+  entries=$(git -C "$APPROVED_TREE" ls-tree -r HEAD -- docs)
+  printf '%s\n' "$entries" | awk '$1 == "120000" || $1 == "160000" { bad=1 } END { exit bad }'
+  test -d "$APPROVED_TREE/docs"
+  cd "$QMD_STATE"
+  # Run this command only on the first index:
+  # qmd collection add "$APPROVED_TREE/docs" --name approved --mask '**/*.md'
+  qmd update
+)
+```
+
+Do not use `qmd update --pull`, add other collections to this index, or point the
+existing Ralph knowledge service at it. Check a distinctive term from the approved
+revision with `qmd search '<term>' -c approved` before resuming readers. If refresh
+fails, leave readers stopped until the last verified snapshot is re-indexed. This
+manual setup is lexical only and does not enable Hindsight retention or a new service.
+
 ### Paperclip cold restore drill
 
 Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.
