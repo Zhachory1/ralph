@@ -1,0 +1,15 @@
+# Disposable, local-only Paperclip fixture. Never attach real accounts or workspaces.
+services:
+  paperclip:
+    image: ralph-paperclip-canary:2026.1117.0
+    network_mode: none
+    environment:
+      HOST: 127.0.0.1
+      PAPERCLIP_DEPLOYMENT_MODE: local_trusted
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+      PAPERCLIP_TELEMETRY_DISABLED: "1"
+      PAPERCLIP_AGENT_JWT_SECRET: ${CANARY_AGENT_JWT_SECRET:?run the Paperclip canary test}
+    volumes:
+      - state:/paperclip
+volumes:
+  state:
