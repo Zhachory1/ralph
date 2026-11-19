@@ -23,6 +23,12 @@ Paperclip confirmations and assignment records. Initiative approval is requested
 Council PASS and read back for the exact revision before assignment. Denials, stale evidence,
 and unresolved gates create no assignment. This does not wire Hermes or Council into live routing.
 
+The manual Routine canary checks that replaying the same PR-head key reuses the Routine
+run and linked issue. The host driver reads the recorded head, runs the exact-head audit,
+and rechecks the fixture ref before storing the dossier on the linked issue. This proves
+the serial stale-head check, not atomic publication with an external PR update. It does not
+wire a production worker, schedule audits, or submit GitHub reviews.
+
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.

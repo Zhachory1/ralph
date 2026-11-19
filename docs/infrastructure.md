@@ -16,6 +16,10 @@ The separate RFC canary uses the same built image in authenticated mode with dis
 Director and operator accounts. It runs on container loopback only, with no live data,
 credentials, or published ports. The database and Git repository are removed with the container.
 
+The manual Routine canary uses that authenticated fixture and a temporary local Git repository.
+The host test driver runs the existing audit runner without GitHub credentials. Test and lint
+run in separate network-disabled containers with no bind mounts.
+
 The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
 in `compose/v4/council-judge.mjs`; neither is connected to board routing.
 Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or
