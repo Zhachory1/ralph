@@ -13,7 +13,9 @@ function fixture() {
     options: {
       ...settings,
       board: async (path, method, body) => {
-        if (path === "routines/routine") return { id: "routine", companyId: "company" };
+        if (path === "routines/routine") {
+          return { id: "routine", companyId: "company", concurrencyPolicy: "always_enqueue" };
+        }
         if (path === "routines/routine/run" && method === "POST") {
           calls.push(["run", body]);
           if (!runs.has(body.idempotencyKey)) {
@@ -51,6 +53,20 @@ test("replaying the same PR head reuses the same Routine run (native idempotency
   assert.equal(first[0].linked_issue_id, second[0].linked_issue_id);
   assert.equal(calls.length, 2);
   assert.equal(calls[0][1].idempotencyKey, calls[1][1].idempotencyKey);
+});
+
+test("an audit tick hands the linked run to the auditor and reports its result", async () => {
+  const { options } = fixture();
+  options.listRequestedPrs = async () => [7];
+  options.prHead = async () => head1;
+  const audited = [];
+  options.auditRun = async (runId, expected) => {
+    audited.push([runId, expected]);
+    return "published";
+  };
+  const [row] = await runInboundDiscovery(options);
+  assert.deepEqual(audited, [[row.run_id, { pr_number: 7, head_sha: head1 }]]);
+  assert.equal(row.audit_status, "published");
 });
 
 test("skips a PR whose head cannot be read without failing the others", async () => {

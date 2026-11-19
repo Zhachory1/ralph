@@ -16,7 +16,8 @@ WORKER = """
 import { spawnSync } from "node:child_process";
 import { auditPr } from "./coding-harness/audit-pr.js";
 import { runRoutineAudit } from "./compose/v4/routine-audit-worker.mjs";
-const { container, origin, ...input } = JSON.parse(process.argv[1]);
+import { runInboundDiscovery } from "./compose/v4/routine-discovery-worker.mjs";
+const { container, origin, discoveryHead, ...input } = JSON.parse(process.argv[1]);
 function call(command, args, options) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 15000, ...options });
   if (result.status !== 0) throw new Error(`${command} fixture command failed (${result.status})`);
@@ -30,14 +31,23 @@ function board(path, method = "GET", body) {
 }
 let report;
 try {
-  const status = await runRoutineAudit({
+  const auditRun = (runId, expected) => runRoutineAudit({
     ...input, board,
+    runId, expected,
     currentHead(pr) {
       return call("git", ["ls-remote", "origin", `refs/pull/${pr}/head`], { cwd: input.repoPath }).split(/\\s+/)[0];
     },
     async audit(request) { return report = await auditPr(request); },
   });
-  console.log(JSON.stringify({ status, report }));
+  if (discoveryHead) {
+    const [row] = await runInboundDiscovery({
+      ...input, board, auditRun, listRequestedPrs: () => [1], prHead: () => discoveryHead,
+    });
+    console.log(JSON.stringify({ ...row, report }));
+  } else {
+    const status = await auditRun(input.runId);
+    console.log(JSON.stringify({ status, report }));
+  }
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
@@ -60,7 +70,7 @@ def check_routine(container, repo):
     })
     routine = board(f"{company_path}/routines", {
         "title": "Read-only PR dossier", "assigneeAgentId": worker["id"],
-        "concurrencyPolicy": "coalesce_if_active",
+        "concurrencyPolicy": "always_enqueue",
     })
     route = f"routines/{routine['id']}"
 
@@ -101,11 +111,12 @@ def check_routine(container, repo):
             "payload": {"repo": "fixture/canary", "pr_number": 1, "head_sha": head},
         })
 
-    def audit(run):
+    def audit(run=None, *, discovery_head=None):
         result = subprocess.run(
             ["node", "--input-type=module", "-e", WORKER, json.dumps({
                 "container": container, "origin": FIXTURE["ORIGIN"], "companyId": company["id"],
-                "routineId": routine["id"], "runId": run["id"], "repoPath": str(repo), "repoName": "fixture/canary",
+                "routineId": routine["id"], "runId": run["id"] if run else None,
+                "discoveryHead": discovery_head, "repoPath": str(repo), "repoName": "fixture/canary",
             })], cwd=HERE.parents[2], env=env, text=True, capture_output=True, timeout=120,
         )
         assert result.returncode == 0, result.stderr
@@ -125,16 +136,17 @@ def check_routine(container, repo):
     board(f"issues/{first['linkedIssueId']}", {"status": "done"}, "PATCH")
     assert trigger(first_head)["id"] == first["id"], "Completed run was duplicated"
 
-    second = trigger(second_head)
+    second_result = audit(discovery_head=second_head)
+    second = {"id": second_result["run_id"], "linkedIssueId": second_result["linked_issue_id"]}
     assert second["id"] != first["id"] and second["linkedIssueId"] != first["linkedIssueId"]
-    second_result = audit(second)
-    assert second_result["status"] == "published"
+    assert second_result["audit_status"] == "published"
     report = second_result["report"]
     assert report["tests_passed"] and not report["lint_issues"] and report["changed_files"] == ["fixture.txt"]
     stored = board(f"issues/{second['linkedIssueId']}/documents/audit")
     assert stored["body"].startswith(f"Audit for `fixture/canary#1` at `{second_head}`\n")
     assert first_head not in stored["body"]
-    assert audit(second) == {"status": "already_published"}
+    replay = audit(discovery_head=second_head)
+    assert replay["audit_status"] == "already_published" and replay["run_id"] == second["id"]
     assert len(board(f"{route}/runs")) == 2
     third_head = new_head()
     assert audit(second) == {"status": "superseded"}
