@@ -12,6 +12,11 @@ published ports or host bind mounts, and no repository or provider credentials. 
 execute inside the fixture. This setup does not isolate agents from the Paperclip server and is
 not an authenticated deployment.
 
+The localhost pilot launcher runs an OpenRouter relay on the preview's dedicated Docker
+bridge with no published ports or mounts. It passes the provider key on stdin to the
+non-root relay, not to Paperclip or the agents. The relay limits requests and lifetime,
+but it does not enforce per-agent access or isolate agents from the Paperclip server.
+
 The separate RFC canary uses the same built image in authenticated mode with disposable
 Director and operator accounts. It runs on container loopback only, with no live data,
 credentials, or published ports. The database and Git repository are removed with the container.
