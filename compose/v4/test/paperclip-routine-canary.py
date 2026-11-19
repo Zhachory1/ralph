@@ -12,10 +12,32 @@ HERE = Path(__file__).resolve().parent
 FIXTURE = runpy.run_path(str(HERE / "paperclip-rfc-canary.py"))
 IMAGE = ("ghcr.io/paperclipai/paperclip:2026.1117.0"
          "@sha256:bdf38d10544dc6c831e16dc027f23ad586353ef3be1a1b2c6979e63b956aceb1")
-AUDIT = """
+WORKER = """
+import { spawnSync } from "node:child_process";
 import { auditPr } from "./coding-harness/audit-pr.js";
+import { runRoutineAudit } from "./compose/v4/routine-audit-worker.mjs";
+const { container, origin, ...input } = JSON.parse(process.argv[1]);
+function call(command, args, options) {
+  const result = spawnSync(command, args, { encoding: "utf8", timeout: 15000, ...options });
+  if (result.status !== 0) throw new Error(`${command} fixture command failed (${result.status})`);
+  return result.stdout;
+}
+function board(path, method = "GET", body) {
+  const args = body === undefined ? [] : ["--json", "@-"];
+  return JSON.parse(call("docker", ["exec", "-i", container, "curl", "-fsS", "--max-time", "10",
+    "-b", "/tmp/rfc-director.cookies", "-H", `Origin: ${origin}`, "-X", method,
+    ...args, `${origin}/api/${path}`], { input: body === undefined ? "" : JSON.stringify(body) }));
+}
+let report;
 try {
-  console.log(JSON.stringify(await auditPr(JSON.parse(process.argv[1]))));
+  const status = await runRoutineAudit({
+    ...input, board,
+    currentHead(pr) {
+      return call("git", ["ls-remote", "origin", `refs/pull/${pr}/head`], { cwd: input.repoPath }).split(/\\s+/)[0];
+    },
+    async audit(request) { return report = await auditPr(request); },
+  });
+  console.log(JSON.stringify({ status, report }));
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
@@ -74,23 +96,20 @@ def check_routine(container, repo):
         return head
 
     def trigger(head):
-        return board(f"{route}/run", {"idempotencyKey": f"pr-1-{head}", "payload": {"head_sha": head}})
+        return board(f"{route}/run", {
+            "source": "manual", "idempotencyKey": f"pr-1-{head}",
+            "payload": {"repo": "fixture/canary", "pr_number": 1, "head_sha": head},
+        })
 
-    def audit(head):
-        return subprocess.run(
-            ["node", "--input-type=module", "-e", AUDIT,
-             json.dumps({"repo_path": str(repo), "pr_number": 1, "head_sha": head})],
-            cwd=HERE.parents[2], env=env, text=True, capture_output=True, timeout=120,
+    def audit(run):
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", WORKER, json.dumps({
+                "container": container, "origin": FIXTURE["ORIGIN"], "companyId": company["id"],
+                "routineId": routine["id"], "runId": run["id"], "repoPath": str(repo), "repoName": "fixture/canary",
+            })], cwd=HERE.parents[2], env=env, text=True, capture_output=True, timeout=120,
         )
-
-    def publish(run, head, result):
-        assert run["triggerPayload"]["head_sha"] == head
-        if git("ls-remote", "origin", "refs/pull/1/head").split()[0] != head:
-            return False
-        board(f"issues/{run['linkedIssueId']}/documents/audit", {
-            "format": "markdown", "body": f"Audit for `{head}`\n\n```json\n{json.dumps(result)}\n```\n",
-        }, "PUT")
-        return True
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
 
     first_head = new_head()
     first = trigger(first_head)
@@ -100,27 +119,22 @@ def check_routine(container, repo):
     assert [row["id"] for row in board(f"{route}/runs")] == [first["id"]]
     print("PASS: duplicate manual trigger produced one Routine run and one linked issue")
 
-    first_result = audit(first["triggerPayload"]["head_sha"])
-    assert first_result.returncode == 0, first_result.stderr
-    report = json.loads(first_result.stdout)
-    assert report["tests_passed"] and not report["lint_issues"] and report["changed_files"] == ["fixture.txt"]
     second_head = new_head()
-    assert not publish(first, first_head, report), "Stale audit was published after head changed"
+    assert audit(first) == {"status": "stale"}, "Stale audit was published after head changed"
     assert not board(f"issues/{first['linkedIssueId']}/documents")
-    rejected = audit(first_head)
-    assert rejected.returncode != 0 and "PR head SHA mismatch" in rejected.stderr
     board(f"issues/{first['linkedIssueId']}", {"status": "done"}, "PATCH")
     assert trigger(first_head)["id"] == first["id"], "Completed run was duplicated"
 
     second = trigger(second_head)
     assert second["id"] != first["id"] and second["linkedIssueId"] != first["linkedIssueId"]
-    second_result = audit(second["triggerPayload"]["head_sha"])
-    assert second_result.returncode == 0, second_result.stderr
-    report = json.loads(second_result.stdout)
-    assert report["tests_passed"] and not report["lint_issues"]
-    assert publish(second, second_head, report)
+    second_result = audit(second)
+    assert second_result["status"] == "published"
+    report = second_result["report"]
+    assert report["tests_passed"] and not report["lint_issues"] and report["changed_files"] == ["fixture.txt"]
     stored = board(f"issues/{second['linkedIssueId']}/documents/audit")
-    assert f"Audit for `{second_head}`" in stored["body"] and first_head not in stored["body"]
+    assert stored["body"].startswith(f"Audit for `fixture/canary#1` at `{second_head}`\n")
+    assert first_head not in stored["body"]
+    assert audit(second) == {"status": "already_published"}
     assert len(board(f"{route}/runs")) == 2
     print("PASS: old head rejected, new head audited in isolation and stored only in Paperclip")
 
