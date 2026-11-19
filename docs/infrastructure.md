@@ -12,6 +12,10 @@ published ports or host bind mounts, and no repository or provider credentials. 
 execute inside the fixture. This setup does not isolate agents from the Paperclip server and is
 not an authenticated deployment.
 
+The separate RFC canary uses the same built image in authenticated mode with disposable
+Director and operator accounts. It runs on container loopback only, with no live data,
+credentials, or published ports. The database and Git repository are removed with the container.
+
 The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
 in `compose/v4/council-judge.mjs`; neither is connected to board routing.
 Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or

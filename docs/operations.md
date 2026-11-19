@@ -24,6 +24,12 @@ python3 compose/v4/test/paperclip-canary.py
 The test uses synthetic model responses and a disposable Git repo. It removes its container and
 volume and does not use live routing. The built image stays cached.
 
+Run `python3 compose/v4/test/paperclip-rfc-canary.py` with the same cached image to probe
+RFC approval and store the approved bytes in a disposable Git repository inside the container.
+It reports the known downstream gate gap ([#243](https://github.com/Zhachory1/ralph/issues/243));
+add `--require-downstream-gate` to make that gap fail the run. The probe does not push to a
+remote or change live routing.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.
