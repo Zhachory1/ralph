@@ -1,5 +1,6 @@
-"""Rehearse a cold Paperclip backup, restore, and rollback with synthetic data."""
+"""Rehearse Paperclip recovery with synthetic data."""
 
+import argparse
 import json
 import os
 import runpy
@@ -15,6 +16,33 @@ FIXTURE = runpy.run_path(str(Path(__file__).with_name("paperclip-rfc-canary.py")
 DOCKER = FIXTURE["docker"]
 ORIGIN = FIXTURE["ORIGIN"]
 EMAIL = "restore@fixture.invalid"
+MIN_SHARED_DOCKER_MEMORY = 4 * 1024**3
+NATIVE_RESTORE = """
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import {
+  createDb, ensurePostgresDatabase, runDatabaseRestore,
+} from "/app/server/dist-runtime/chunk-562TWVP3.mjs";
+
+const [account, issue, run] = JSON.parse(process.argv[1]);
+const port = readFileSync("/paperclip/instances/default/db/postmaster.pid", "utf8").split("\\n")[3];
+const server = `postgres://paperclip:paperclip@127.0.0.1:${port}`;
+const name = "restore_fixture";
+assert.equal(await ensurePostgresDatabase(`${server}/postgres`, name), "created");
+const connectionString = `${server}/${name}`;
+await runDatabaseRestore({ connectionString, backupFile: "/tmp/restore-fixture.sql.gz" });
+const sql = createDb(connectionString).$client;
+try {
+  const [user] = await sql`select id, email from "user" where id = ${account}`;
+  const [task] = await sql`select title, status from issues where id = ${issue}`;
+  const [heartbeat] = await sql`select status from heartbeat_runs where id = ${run}`;
+  assert.equal(user.email, "restore@fixture.invalid");
+  assert.deepEqual({ ...task }, { title: "Restore checkpoint", status: "done" });
+  assert.equal(heartbeat.status, "succeeded");
+} finally {
+  await sql.end();
+}
+"""
 
 
 def create(stack, name, env):
@@ -63,9 +91,33 @@ def record_run(container, issue, agent):
     raise AssertionError("Expected a successful fixture assignment run")
 
 
-def drill():
+def restore_native(source, restored, env, user, issue, run):
+    backup = board(source, "instance/database-backups", {})
+    assert backup["trigger"] == "manual" and backup["sizeBytes"] > 0
+    assert backup["backupFile"].endswith(".sql.gz")
+    with TemporaryFile() as archive:
+        subprocess.run(["docker", "exec", "-u", "node", source, "cat", "--", backup["backupFile"]],
+                       env=env, stdout=archive, timeout=30, check=True)
+        # Keep only one embedded database running at a time on small Docker hosts.
+        stop(source)
+        start(restored)
+        archive.seek(0)
+        subprocess.run(["docker", "exec", "-i", "-u", "node", restored, "sh", "-ec",
+                        "umask 077; cat > /tmp/restore-fixture.sql.gz"],
+                       env=env, stdin=archive, timeout=30, check=True)
+    DOCKER("exec", "-u", "node", restored, "node", "--input-type=module", "-e", NATIVE_RESTORE,
+           json.dumps([user, issue, run]), env=env)
+    print("PASS: native backup restored the account, issue, and completed run rows into a fresh database", flush=True)
+
+
+def drill(*, native=False):
+    if (int(DOCKER("info", "--format", "{{.MemTotal}}")) < MIN_SHARED_DOCKER_MEMORY
+            and DOCKER("ps", "-q", "--filter", "name=^/ralph-paperclip-preview$")):
+        raise SystemExit("Run this drill on a separate Docker host; the preview is running with less than 4 GiB.")
     suffix = uuid.uuid4().hex[:10]
-    env = {**os.environ, "PAPERCLIP_AGENT_JWT_SECRET": secrets.token_hex(32)}
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG")
+           if key in os.environ}
+    env["PAPERCLIP_AGENT_JWT_SECRET"] = secrets.token_hex(32)
     credentials = {"email": EMAIL, "password": secrets.token_hex(16)}
     with ExitStack() as stack:
         source = create(stack, f"ralph-paperclip-restore-source-{suffix}", env)
@@ -85,6 +137,9 @@ def drill():
         run_id = record_run(source, issue["id"], agent["id"])
         issue_path = f"issues/{issue['id']}"
         board(source, issue_path, {"status": "done"}, "PATCH")
+        if native:
+            restore_native(source, restored, env, user, issue["id"], run_id)
+            return
         before = board(source, f"heartbeat-runs/{run_id}")
         stop(source)
 
@@ -119,4 +174,6 @@ def drill():
 
 
 if __name__ == "__main__":
-    drill()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native", action="store_true", help="Verify the upstream logical backup in a fresh database.")
+    drill(native=parser.parse_args().native)

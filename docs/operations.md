@@ -105,6 +105,8 @@ manual setup is lexical only and does not enable Hindsight retention or a new se
 ### Paperclip cold restore drill
 
 Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.
+Use a separate Docker host if the preview runs on a small VM. The drill refuses
+to run alongside the named pilot preview when Docker has less than 4 GiB of memory.
 The drill creates two authenticated, network-disabled containers without published ports,
 each with its own disposable named volume at `/paperclip`. It shuts down the source
 cleanly, copies `/paperclip` with `docker cp -a`, restores into the stopped target, and
@@ -116,6 +118,12 @@ This exercises a cold copy of the embedded database and instance files at the sa
 version. It does not back up the current preview, test scheduled backups or external
 PostgreSQL, or preserve changes written after switching to the restored instance. A real
 restore also needs the matching deployment configuration and signing secret, handled separately.
+
+Add `--native` to exercise Paperclip's built-in manual database backup and upstream
+restore helper instead. The drill imports the compressed SQL archive into a new
+database on a separate disposable instance and checks the account, issue, and completed
+run rows. This proves logical data recovery, not application boot from the restored
+database, scheduled backups, or recovery of filesystem artifacts such as worktrees.
 
 ### Bootstrap a fresh private Paperclip preview
 
