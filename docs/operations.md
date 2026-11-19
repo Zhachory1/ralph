@@ -351,6 +351,18 @@ instructions alone cannot enforce the human merge/deploy boundary. Revoke the te
 board key after setup. If provisioning stops partway through, inspect the company before
 retrying: this command does not overwrite or reconcile existing seats.
 
+For v4.1 startup, run the same command **serially** after the board is ready, with
+`--reconcile "$COUNCIL_MODELS_FILE"`. The JSON object maps `Council Architecture`,
+`Council Security`, and `Council Scope` to explicit `provider/model` IDs from three
+distinct families. Use the same governance manifest, budgets and SWE model on restart.
+This mode adds the Feature and Review Workflow Managers, Librarian, Comms and Council;
+Comms reports to the human Director. The managers receive native task-assignment permission.
+It recognizes the pilot's `Ralph Orchestrator`, `RFC Author`, `OpenCode Developer` and
+`SRE Ops` names. Other seats, instructions, paused states and credentials are preserved.
+Resolve reported identity, model, budget, hiring, heartbeat or reporting conflicts on
+the board before retrying. Existing instructions and grants are not rewritten. This
+provisions seat definitions; the adapter credentials and dispatch checks are separate.
+
 ### Arm a prepared Paperclip sandbox task
 
 This is for the localhost preview only. Task and agent setup is separate. In Paperclip,
