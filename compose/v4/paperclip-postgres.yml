@@ -2,7 +2,7 @@
 services:
   paperclip:
     environment:
-      DATABASE_URL: "postgresql://paperclip:${PAPERCLIP_POSTGRES_PASSWORD:?Set a dedicated URL-safe PostgreSQL password}@postgres:5432/paperclip"
+      DATABASE_URL: "postgresql://paperclip:${PAPERCLIP_POSTGRES_PASSWORD:?Set a dedicated URL-safe PostgreSQL password}@postgres:5432/${PAPERCLIP_DATABASE_NAME:-paperclip}"
       PAPERCLIP_AUTH_PUBLIC_BASE_URL: "${PAPERCLIP_PUBLIC_URL:?Set the Paperclip origin}"
       PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_TAILNET_HOSTNAME:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
