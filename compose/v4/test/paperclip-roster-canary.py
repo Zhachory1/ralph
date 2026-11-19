@@ -15,6 +15,7 @@ def check_roster(container):
         if path.endswith("/budgets/policies"):
             assert response["warnPercent"] == 80
             assert response["hardStopEnabled"] is True and response["notifyEnabled"] is True
+            assert response["windowKind"] == "calendar_month_utc"
         return response
 
     board("auth/sign-up/email", {

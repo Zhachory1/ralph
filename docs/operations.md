@@ -196,7 +196,8 @@ python3 compose/v4/provision-paperclip.py "$PAPERCLIP_PUBLIC_URL" "$COMPANY_ID" 
 ```
 
 The command creates five seats, installs the shared instructions, and configures monthly
-budgets with 80% warnings and hard stops. It does not schedule tasks or add GitHub, provider,
+budgets with 80% warnings and hard stops. The orchestrator retains Paperclip's built-in
+CEO task assignment authority but cannot hire agents. The command does not schedule tasks or add GitHub, provider,
 or deploy credentials. Use protected branches and scoped connections before enabling work;
 instructions alone cannot enforce the human merge/deploy boundary. Revoke the temporary
 board key after setup. If provisioning stops partway through, inspect the company before

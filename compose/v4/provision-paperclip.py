@@ -29,7 +29,7 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents)
 
     def budget(scope, scope_id, amount):
         board(f"{company}/budgets/policies", {
-            "scopeType": scope, "scopeId": scope_id, "amount": amount,
+            "scopeType": scope, "scopeId": scope_id, "amount": amount, "windowKind": "calendar_month_utc",
             "warnPercent": 80, "hardStopEnabled": True, "notifyEnabled": True,
             "unpricedUsagePolicy": "block", "isActive": True,
         })
@@ -49,8 +49,9 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents)
         })
         roster[name] = seat["id"]
         if role == "ceo":
+            # Paperclip requires a separate hiring denial for the CEO, whose assignment rights are native.
             board(f"agents/{seat['id']}/permissions", {
-                "canCreateAgents": False, "canCreateSkills": False, "canAssignTasks": True,
+                "canCreateAgents": False, "canCreateSkills": False, "canAssignTasks": False,
             }, "PATCH")
         budget("agent", seat["id"], agent_cents)
     return roster
