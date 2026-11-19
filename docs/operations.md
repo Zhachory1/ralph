@@ -30,6 +30,10 @@ It reports the known downstream gate gap ([#243](https://github.com/Zhachory1/ra
 add `--require-downstream-gate` to make that gap fail the run. The probe does not push to a
 remote or change live routing.
 
+Run `python3 compose/v4/test/paperclip-routing-canary.py` with the same image and Node.js
+on the host. It uses scripted proposals and Council verdicts against an authenticated,
+disposable Paperclip board. It creates fixture assignments only on `advance`.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.

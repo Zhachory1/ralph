@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -17,6 +18,7 @@ test("runs Council without host mounts or repository and board credentials", asy
   const profileStops = [];
   const id = "b".repeat(64);
   const jobToken = "c".repeat(64);
+  const artifactSha256 = createHash("sha256").update("synthetic artifact").digest("hex");
   const server = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, `Bearer ${"a".repeat(64)}`);
     if (req.method === "POST" && req.url === "/jobs") {
@@ -30,7 +32,7 @@ test("runs Council without host mounts or repository and board credentials", asy
     } else if (req.method === "GET" && req.url === `/jobs/${id}`) {
       res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(
         registrations.at(-1).artifact === "fail" ? { status: "queued" } :
-          { status: "completed", result: { decision: "advance", verdicts: ["validated fixture"] } },
+           { status: "completed", artifactSha256, result: { decision: "advance", verdicts: ["validated fixture"] } },
       ));
     } else res.writeHead(404).end();
   }).listen(0, "127.0.0.1");
@@ -65,7 +67,10 @@ process.stdin.on("end", () => {
   });
   const result = await runCouncilProfile({ artifact: "synthetic artifact", revisions: 0,
     model: "test/model", port });
-  assert.deepEqual(result, { jobId: id, result: { decision: "advance", verdicts: ["validated fixture"] } });
+  assert.deepEqual(result, {
+    jobId: id, status: "completed", artifactSha256,
+    result: { decision: "advance", verdicts: ["validated fixture"] },
+  });
   const call = JSON.parse(readFileSync(capture, "utf8").trim().split("\n")[0]);
   assert.equal(call.env.GH_TOKEN, undefined);
   assert.equal(call.env.VIKUNJA_API_TOKEN, undefined);
@@ -79,6 +84,8 @@ process.stdin.on("end", () => {
   assert.equal(call.job.artifact, undefined);
   assert.deepEqual(registrations[0], { artifact: "synthetic artifact", revisions: 0 });
   assert.deepEqual(profileStops, [id]);
+  await assert.rejects(runCouncilProfile({ artifact: "different artifact", revisions: 0, model: "test/model", port }),
+    /artifact digest mismatch/);
   await assert.rejects(runCouncilProfile({ artifact: "fail", revisions: 0, model: "test/fail", port }),
     new RegExp(id));
   const cleanup = JSON.parse(readFileSync(capture, "utf8").trim().split("\n").at(-1));

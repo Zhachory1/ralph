@@ -6,6 +6,7 @@ import runpy
 import secrets
 import subprocess
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 fixture = runpy.run_path(str(Path(__file__).with_name("paperclip-canary.py")))
@@ -203,12 +204,9 @@ def check_review(container, *, require_downstream_gate):
     print("PASS: downstream stayed blocked without matching approval")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--require-downstream-gate", action="store_true",
-                        help="Fail on the native downstream approval gap tracked in #243.")
-    args = parser.parse_args()
-    container = f"ralph-paperclip-rfc-{uuid.uuid4().hex[:10]}"
+@contextmanager
+def authenticated_fixture(name):
+    container = f"ralph-paperclip-{name}-{uuid.uuid4().hex[:10]}"
     docker(
         "run", "-d", "--rm", "--pull", "never", "--network", "none", "--name", container,
         "-e", "HOST=127.0.0.1", "-e", "PAPERCLIP_DEPLOYMENT_MODE=authenticated",
@@ -219,7 +217,16 @@ if __name__ == "__main__":
     )
     try:
         fixture["wait_for_health"](container, f"{ORIGIN}/api/health", "Paperclip", paperclip=True)
-        check_review(container, require_downstream_gate=args.require_downstream_gate)
+        yield container
     finally:
         if docker("ps", "-q", "--filter", f"name=^{container}$"):
             docker("stop", "-t", "5", container)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--require-downstream-gate", action="store_true",
+                        help="Fail on the native downstream approval gap tracked in #243.")
+    args = parser.parse_args()
+    with authenticated_fixture("rfc") as container:
+        check_review(container, require_downstream_gate=args.require_downstream_gate)
