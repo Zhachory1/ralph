@@ -16,6 +16,8 @@ The localhost pilot launcher runs an OpenRouter relay on the preview's dedicated
 bridge with no published ports or mounts. It passes the provider key on stdin to the
 non-root relay, not to Paperclip or the agents. The relay limits requests and lifetime,
 but it does not enforce per-agent access or isolate agents from the Paperclip server.
+Paperclip board keys inherit the approving account's permissions, not the company selected
+in the CLI prompt. Use a sandbox-only operator account to restrict the key's authority.
 
 The separate RFC canary uses the same built image in authenticated mode with disposable
 Director and operator accounts. It runs on container loopback only, with no live data,

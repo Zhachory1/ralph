@@ -42,8 +42,8 @@ To process one manual audit Routine run on a local sandbox board, trigger it wit
 `source: "manual"` and a payload such as
 `{"repo":"OWNER/REPO","pr_number":7,"head_sha":"<full lowercase SHA>"}`. Reuse the same
 idempotency key for the same PR and head. Set `RALPH_AUDIT_REPOS` to the trusted clone path
-and its pinned image/test/lint configuration, and set a temporary company-scoped
-`PAPERCLIP_API_KEY` privately. Then run:
+and its pinned image/test/lint configuration. Set a temporary `PAPERCLIP_API_KEY` from
+an account that can access only the sandbox company. Then run:
 
 ```sh
 node compose/v4/routine-audit-worker.mjs http://127.0.0.1:PORT COMPANY_ID ROUTINE_ID RUN_ID OWNER/REPO LOCAL_CLONE
@@ -96,7 +96,15 @@ are off. The launcher checks Docker and the checkout, not the board's agent sett
    Approve the temporary Paperclip prompt. The command checks the assignment and
    verifies the expected test in a network-disabled container, then records Done and
    prevents rearming the same task. It does not use the provider key or rerun the agent.
-   Other task types need a verifier specific to their expected result.
+Other task types need a verifier specific to their expected result.
+
+Paperclip board keys inherit the approving user's authority. Selecting a company on the
+CLI approval prompt does not restrict the key to that company. Keep admin keys out of
+agents and long-lived configuration. For a credential rotation drill, run
+`python3 compose/v4/test/paperclip-board-key-canary.py`. It checks that a sandbox-only
+operator's key is denied access to the other company, that its replacement works, and
+that revoking either key does not leave it usable. This uses a disposable board and tests
+Paperclip board keys, not model-provider keys or deployment signing secrets.
 
 The relay allows up to 12 provider requests with bounded input, output, and per-response
 size; this is not a dollar cap. It cannot distinguish between agents sharing the preview
