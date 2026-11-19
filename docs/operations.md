@@ -183,6 +183,26 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` only for an approved collector. Rehearse boots
 with `python3 compose/v4/test/paperclip-private-canary.py --postgres`; it does not
 configure Tailscale, agents, or live routing.
 
+### Provision the Paperclip organization
+
+Create an empty company on the target and mint a temporary key from its administrator.
+Export it as `PAPERCLIP_API_KEY`. Supply your governance Markdown and an OpenCode adapter
+JSON file containing an explicit `model`, plus any `OPENCODE_CONFIG_CONTENT` overrides.
+Do not put provider keys in that file. Set budgets in integer cents:
+
+```sh
+python3 compose/v4/provision-paperclip.py "$PAPERCLIP_PUBLIC_URL" "$COMPANY_ID" \
+  "$MANIFEST_FILE" "$OPENCODE_ADAPTER_FILE" --company-cents 1000 --agent-cents 200
+```
+
+The command creates five seats, installs the shared instructions, and configures monthly
+budgets with 80% warnings and hard stops. The orchestrator retains Paperclip's built-in
+CEO task assignment authority but cannot hire agents. The command does not schedule tasks or add GitHub, provider,
+or deploy credentials. Use protected branches and scoped connections before enabling work;
+instructions alone cannot enforce the human merge/deploy boundary. Revoke the temporary
+board key after setup. If provisioning stops partway through, inspect the company before
+retrying: this command does not overwrite or reconcile existing seats.
+
 ### Arm a prepared Paperclip sandbox task
 
 This is for the localhost preview only. Task and agent setup is separate. In Paperclip,
