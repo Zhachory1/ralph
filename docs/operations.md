@@ -13,6 +13,17 @@ How to stand Ralph up, change it safely, and recover it. Components are describe
 
 The separate v4 pilot uses a [dedicated adapter login](1-projects/v4-architecture/hermes-harness-integration.md#adapter-authentication) rather than a copy of a personal OAuth session.
 
+After caching the two pinned images in `compose/v4/paperclip-canary.Dockerfile`, run from the
+repository root:
+
+```sh
+docker build --network none -t ralph-paperclip-canary:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+python3 compose/v4/test/paperclip-canary.py
+```
+
+The test uses synthetic model responses and a disposable Git repo. It removes its container and
+volume and does not use live routing. The built image stays cached.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.

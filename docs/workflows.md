@@ -2,6 +2,13 @@
 
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
+The Paperclip canary checks whether a board assignment wakes `hermes_local`, which uses its
+Paperclip run token to assign a child issue to `opencode_local`. It checks a tested change in
+the child issue's worktree, then a review comment that resumes the same OpenCode session in
+the same worktree. The base branch and checkout must stay unchanged. The pinned Hermes Gateway
+adapter does not forward the run token, and Paperclip rejected project-backed delegation with
+the scoped task-bridge key tested there.
+
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.

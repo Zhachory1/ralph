@@ -6,6 +6,12 @@ Where each part of Ralph runs, what it can touch, and how to check it is healthy
 
 ![Ralph system overview](diagrams/system.svg)
 
+The standalone Paperclip canary (`compose/v4/paperclip-canary.yml`) combines pinned Paperclip and
+Hermes images in one disposable container with embedded PostgreSQL. It has loopback only, no
+published ports or host bind mounts, and no repository or provider credentials. Both adapters
+execute inside the fixture. This setup does not isolate agents from the Paperclip server and is
+not an authenticated deployment.
+
 The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
 in `compose/v4/council-judge.mjs`; neither is connected to board routing.
 Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or
