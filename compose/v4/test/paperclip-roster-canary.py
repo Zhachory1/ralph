@@ -2,6 +2,7 @@
 
 import runpy
 import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,6 +109,39 @@ def check_roster(container):
     assert board(f"issues/{issue['id']}/interactions")[0]["status"] == "pending"
     assert board(endpoint, {})["status"] == "accepted"
     print("PASS: manager delegated a backlog task but could not resolve Director confirmation")
+
+    reviewer = board(f"{root}/agents", {"name": "Fixture reviewer", "adapterType": "process",
+                                        "adapterConfig": {"command": "/bin/true"}})
+    issue_path = f"issues/{delegated['id']}"
+    stage = {"type": "review", "participants": [{"type": "agent", "agentId": reviewer["id"]}]}
+    board(issue_path, {"executionPolicy": {"stages": [stage]}}, "PATCH")
+    # A Developer attempting "done" must enter review, not approve its own work.
+    script = (
+        'curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $PAPERCLIP_API_KEY" '
+        '-H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" '
+        """--json '{"status":"done","comment":"Technical disposition for fixture commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' """
+        f'{fixture["ORIGIN"]}/api/{issue_path}'
+    )
+    for agent, expected in ((recipient, "in_review"), (reviewer, "done")):
+        check = f""" | python3 -c 'import sys,json; assert json.load(sys.stdin)["status"] == "{expected}"'"""
+        board(f"agents/{agent['id']}", {"adapterConfig": {"command": "/bin/sh", "args": ["-ec", script + check]}}, "PATCH")
+        deadline = time.monotonic() + 20
+        while board(f"agents/{agent['id']}").get("lifecycleState") != "ready":
+            assert time.monotonic() < deadline, "Fixture actor not ready"
+            time.sleep(0.5)
+    board(issue_path, {"status": "todo"}, "PATCH")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        state = board(issue_path)
+        if state["status"] == "done":
+            break
+        time.sleep(0.5)
+    assert (state.get("executionState") or {}).get("lastDecisionOutcome") == "approved", state["status"]
+    comments = board(f"{issue_path}/comments")
+    actors = {c["authorAgentId"] for c in comments if c["body"].startswith("Technical disposition")}
+    assert actors == {recipient["id"], reviewer["id"]}, actors
+    assert state["executionState"]["returnAssignee"]["agentId"] == recipient["id"]
+    print("PASS: Developer cannot decide its pending technical review; assigned independent Reviewer can")
 
     swe_id = roster["SWE"]
     for cents, expected in ((80, "warning"), (20, "hard_stop")):
