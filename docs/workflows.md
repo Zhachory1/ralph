@@ -38,7 +38,7 @@ publication with a GitHub ref update. It does not schedule audits or submit GitH
 
 The opt-in discovery worker reads open PRs requesting this account's review in one allowlisted
 repo (`gh search prs`, `gh pr view`; read-only) and triggers a manual Routine run per discovered
-head, keyed `pr-<number>-<head>`. It relies on the Routine's own idempotency key, not a new
+head, keyed `pr-<repo>-<number>-<head>`. It relies on the Routine's own idempotency key, not a new
 state store, so a repeat discovery of the same head reuses the same run and linked issue instead
 of duplicating it. This is a one-tick command: it does not poll on a schedule, call the audit
 worker itself, or write to GitHub.

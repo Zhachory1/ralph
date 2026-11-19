@@ -31,7 +31,7 @@ export async function runInboundDiscovery({ board, companyId, routineId, repoNam
     }
     const run = await board(`routines/${routineId}/run`, "POST", {
       source: "manual",
-      idempotencyKey: `pr-${pr_number}-${head_sha}`,
+      idempotencyKey: `pr-${repoName.toLowerCase()}-${pr_number}-${head_sha}`,
       payload: { repo: repoName, pr_number, head_sha },
     });
     triggered.push({ pr_number, head_sha, run_id: run.id, linked_issue_id: run.linkedIssueId });

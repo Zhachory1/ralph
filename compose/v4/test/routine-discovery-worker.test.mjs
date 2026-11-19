@@ -37,7 +37,8 @@ test("triggers one idempotent Routine run per discovered PR head", async () => {
   const triggered = await runInboundDiscovery(options);
   assert.deepEqual(triggered.map((row) => row.pr_number), [7, 9]);
   assert.equal(triggered[0].head_sha, head1);
-  assert.deepEqual(calls.map((call) => call[1].idempotencyKey), [`pr-7-${head1}`, `pr-9-${head2}`]);
+  assert.deepEqual(calls.map((call) => call[1].idempotencyKey),
+    [`pr-fixture/canary-7-${head1}`, `pr-fixture/canary-9-${head2}`]);
 });
 
 test("replaying the same PR head reuses the same Routine run (native idempotency)", async () => {

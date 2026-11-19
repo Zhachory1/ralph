@@ -71,7 +71,7 @@ node compose/v4/routine-discovery-worker.mjs http://127.0.0.1:PORT COMPANY_ID RO
 This is a one-tick command, not a scheduled poller: run it by hand and inspect its JSON
 output before wiring it to any timer. For each open PR in `OWNER/REPO` requesting
 `REVIEWER`'s review (`@me` by default), it reads the current head SHA and triggers a
-manual Routine run with idempotency key `pr-<number>-<head>` and the same payload shape
+manual Routine run with idempotency key `pr-<repo>-<number>-<head>` and the same payload shape
 `routine-audit-worker.mjs` expects. Paperclip's own idempotency key dedups a repeat
 discovery of the same (repo, PR, head): a second trigger returns the same run and linked
 issue instead of creating another one, so this command is safe to run repeatedly by hand.
