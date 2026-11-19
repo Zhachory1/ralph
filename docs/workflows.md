@@ -9,6 +9,15 @@ the same worktree. The base branch and checkout must stay unchanged. The pinned 
 adapter does not forward the run token, and Paperclip rejected project-backed delegation with
 the scoped task-bridge key tested there.
 
+The authenticated RFC canary verifies that Paperclip preserves exact document revisions, remaps
+anchored comments, rejects stale pending confirmations, and restricts a confirmation addressed
+to the Director. It also found a gap: after the Director approved revision B and the RFC changed
+to C, a company operator could mark the RFC issue done without approval of C. The dependent
+issue could then resume. Do not use RFC issue status alone to authorize work or publication.
+The storage check re-reads the Director's accepted confirmation and fetches the immutable
+revision it names. It commits B byte-for-byte to a disposable Git repository, refuses
+unapproved C, and verifies a retry leaves the same commit in place. It is not a live publisher.
+
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.
