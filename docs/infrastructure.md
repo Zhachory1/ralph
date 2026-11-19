@@ -18,6 +18,11 @@ Compose bridge, and a named state volume. The bridge permits outbound traffic. I
 no Ralph-owned MCP server and does not start or replace any legacy stack. See the
 [bootstrap runbook](operations.md#bootstrap-a-fresh-private-paperclip-preview).
 
+The [PostgreSQL deployment](operations.md#prepare-a-private-paperclip-target) layers
+`compose/v4/paperclip-postgres.yml` over that file. PostgreSQL 17 has its own named
+volume and internal network with no published port. Paperclip keeps its loopback
+port; Tailscale Serve can expose it privately without opening a public listener.
+
 The localhost pilot launcher runs an OpenRouter relay on the preview's dedicated Docker
 bridge with no published ports or mounts. It passes the provider key on stdin to the
 non-root relay, not to Paperclip or the agents. The relay limits requests and lifetime,

@@ -1,5 +1,6 @@
 """Verify localhost bootstrap and persistence on a disposable Compose project."""
 
+import argparse
 import http.cookiejar
 import json
 import os
@@ -15,7 +16,7 @@ from uuid import uuid4
 COMPOSE = Path(__file__).resolve().parents[1] / "paperclip-private.yml"
 
 
-def check_private_bootstrap():
+def check_private_bootstrap(*, postgres=False):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -26,6 +27,9 @@ def check_private_bootstrap():
     env.update(PAPERCLIP_PORT=str(port), PAPERCLIP_AUTH_DISABLE_SIGN_UP="false",
                PAPERCLIP_AGENT_JWT_SECRET=secrets.token_hex(32))
     command = ["docker", "compose", "--env-file", os.devnull, "-p", project, "-f", str(COMPOSE)]
+    if postgres:
+        command.extend(("-f", str(COMPOSE.with_name("paperclip-postgres.yml"))))
+        env.update(PAPERCLIP_PUBLIC_URL=origin, PAPERCLIP_POSTGRES_PASSWORD=secrets.token_hex(32))
 
     def compose(*args):
         return subprocess.check_output([*command, *args], text=True, env=env, timeout=40).strip()
@@ -62,7 +66,8 @@ def check_private_bootstrap():
 
     compose("config", "--quiet")
     try:
-        assert compose("config", "--services") == "paperclip", "Unexpected services in standalone preview"
+        services = {"paperclip", "postgres"} if postgres else {"paperclip"}
+        assert set(compose("config", "--services").splitlines()) == services
         compose("up", "-d", "--no-build", "--pull", "never")
         cid = compose("ps", "-q", "paperclip")
         state = json.loads(subprocess.check_output(["docker", "inspect", cid], env=env, text=True, timeout=10))[0]
@@ -90,10 +95,17 @@ def check_private_bootstrap():
         restored = client()
         restored("auth/sign-in/email", account)
         assert restored(f"companies/{company['id']}")["id"] == company["id"]
+        if postgres:
+            assert compose("exec", "-T", "postgres", "psql", "-U", "paperclip", "-d", "paperclip",
+                           "-Atc", "SELECT id FROM companies") == company["id"]
+            db = json.loads(compose("ps", "--format", "json", "postgres"))
+            assert all(port["PublishedPort"] == 0 for port in db.get("Publishers") or [])
         print("PASS: localhost-only bootstrap, auth and origin checks, sign-up closed, account and board persisted")
     finally:
         compose("down", "--volumes")
 
 
 if __name__ == "__main__":
-    check_private_bootstrap()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--postgres", action="store_true", help="Use the external PostgreSQL overlay.")
+    check_private_bootstrap(postgres=parser.parse_args().postgres)
