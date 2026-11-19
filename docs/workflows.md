@@ -32,7 +32,8 @@ and unresolved gates create no assignment. This does not wire Hermes or Council 
 The manual Routine canary checks that replaying the same PR-head key reuses the Routine
 run and linked issue. The opt-in host worker reads that run, verifies the linked issue,
 runs the exact-head audit, and checks the PR head again before storing the dossier on the
-issue. This covers serial replay and stale-head checks, not concurrent processing or atomic
+issue. A manual recheck marks an outdated dossier superseded in a separate issue document
+without editing the historical report. This covers serial replay, not concurrent processing or atomic
 publication with a GitHub ref update. It does not schedule audits or submit GitHub reviews.
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result

@@ -33,6 +33,11 @@ function fixture() {
           documents.push({ key: "audit" });
           return { key: "audit" };
         }
+        if (path === "issues/issue/documents/audit-status" && method === "PUT") {
+          calls.push(["status", body]);
+          documents.push({ key: "audit-status" });
+          return { key: "audit-status" };
+        }
         throw new Error(`Unexpected board request: ${path}`);
       },
     },
@@ -54,6 +59,16 @@ test("withholds a dossier if the head changes while the audit runs", async () =>
   options.currentHead = async () => heads.shift();
   assert.equal(await runRoutineAudit(options), "stale");
   assert.deepEqual(calls.map(([call]) => call), ["audit"]);
+});
+
+test("rechecking an outdated dossier marks it superseded once without auditing again", async () => {
+  const { options, calls } = fixture();
+  assert.equal(await runRoutineAudit(options), "published");
+  options.currentHead = async () => "2".repeat(40);
+  assert.equal(await runRoutineAudit(options), "superseded");
+  assert.equal(await runRoutineAudit(options), "superseded");
+  assert.deepEqual(calls.map(([call]) => call), ["audit", "put", "status"]);
+  assert.match(calls[2][1].body, /historical/i);
 });
 
 test("rejects a linked issue created by another run", async () => {

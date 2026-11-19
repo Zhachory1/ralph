@@ -136,7 +136,15 @@ def check_routine(container, repo):
     assert first_head not in stored["body"]
     assert audit(second) == {"status": "already_published"}
     assert len(board(f"{route}/runs")) == 2
-    print("PASS: old head rejected, new head audited in isolation and stored only in Paperclip")
+    third_head = new_head()
+    assert audit(second) == {"status": "superseded"}
+    status_path = f"issues/{second['linkedIssueId']}/documents/audit-status"
+    status = board(status_path)
+    assert third_head in status["body"]
+    assert audit(second) == {"status": "superseded"}
+    assert board(status_path)["latestRevisionId"] == status["latestRevisionId"]
+    assert board(f"issues/{second['linkedIssueId']}/documents/audit")["body"] == stored["body"]
+    print("PASS: current head audited in isolation; stale dossier preserved and marked once in Paperclip")
 
 
 if __name__ == "__main__":
