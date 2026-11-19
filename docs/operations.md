@@ -26,13 +26,53 @@ volume and does not use live routing. The built image stays cached.
 
 Run `python3 compose/v4/test/paperclip-rfc-canary.py` with the same cached image to probe
 RFC approval and store the approved bytes in a disposable Git repository inside the container.
-It reports the known downstream gate gap ([#243](https://github.com/Zhachory1/ralph/issues/243));
-add `--require-downstream-gate` to make that gap fail the run. The probe does not push to a
-remote or change live routing.
+By default it exercises Paperclip's native behavior: Done resumes a blocked downstream issue
+regardless of which revision was approved ([#243](https://github.com/Zhachory1/ralph/issues/243)
+tracks hardening this). Add `--require-downstream-gate` only if your deployment wants an
+unmatched revision to fail the run instead. Publication safety is unaffected either way: the
+probe's separate Git-storage check (see [workflows](workflows.md)) never stores or overwrites
+bytes the Director did not approve. The probe does not push to a remote or change live routing.
 
 Run `python3 compose/v4/test/paperclip-routing-canary.py` with the same image and Node.js
 on the host. It uses scripted proposals and Council verdicts against an authenticated,
 disposable Paperclip board. It creates fixture assignments only on `advance`.
+
+### First integrated slice: RFC, Council, and a native Director review request
+
+Set `OPENROUTER_API_KEY` for drafting and the Council panel. Set a temporary scoped
+`PAPERCLIP_API_KEY` for the board -- the same loopback-origin, bearer-token convention as
+`routine-audit-worker.mjs` above, no new credential scheme. From the repository root, with a
+Paperclip board reachable at `http://127.0.0.1:PORT`:
+
+```sh
+echo '{"directorUserId":"<director-user-id>","issueId":"<issue-id>",
+       "brief":"<what the RFC should cover>","model":"openai/gpt-4.1-mini","domain":"non-coding"}' \
+  | node compose/v4/rfc-director-request.mjs http://127.0.0.1:PORT
+```
+
+The job is config, never a secret (`directorUserId`, `issueId`, `brief`, `model`, `domain` --
+`"coding"` or `"non-coding"` -- and optionally `currentDraft` and `feedback` to revise); it can
+also come from a file instead of stdin: `node compose/v4/rfc-director-request.mjs
+http://127.0.0.1:PORT job.json`. The command drafts the RFC (`author.mjs`), runs the real
+Council panel, and calls `decideRequestRoute` with `initiative: true`; only on route
+`"director"` does it `PUT` the draft as the issue's `rfc` document and open a Director-only
+`request_confirmation` naming that exact revision, printing the result as JSON. It never polls
+for the Director's decision or marks the issue done; accepting, publishing, and releasing a
+downstream native blocker are the same Paperclip primitives already covered by the RFC canary
+and the Git-storage check above. Drafting and the panel can incur provider charges. Revoke the
+temporary key after use.
+
+Run `node --test compose/v4/test/rfc-director-request-cli.test.mjs` for a focused check of the
+CLI's own transport against a local HTTP stub instead of a minted board key: it asserts the
+bearer token and loopback origin reach every board call, and that a missing `PAPERCLIP_API_KEY`
+fails closed before any board call is made. Run
+`node --test compose/v4/test/rfc-director-request.test.mjs` to check the library function
+directly (stubbed provider, mocked board, no containers). Run
+`python3 compose/v4/test/rfc-director-request-canary.py` with the same cached Paperclip image
+and Node.js on the host for the full real-board rehearsal: it stubs the provider worker (no
+model cost), drafts and reviews a real RFC, opens a real Director-only confirmation, accepts
+it, marks the issue done, and confirms a downstream issue blocked on it resumes through
+Paperclip's native Done blocker release.
 
 Run `python3 compose/v4/test/paperclip-routine-canary.py` to probe the manual PR audit
 flow. It uses the same cached image for Paperclip, the pinned upstream Paperclip image
