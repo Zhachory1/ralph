@@ -15,6 +15,46 @@ relay = MODULE["relay"]
 
 
 class RelayTest(unittest.TestCase):
+    def test_replacement_relay_uses_only_the_new_key_after_provider_rotation(self):
+        valid_key = "dummy-old-key"
+        seen = []
+
+        class Upstream:
+            def request(self, _method, _path, _body, headers):
+                seen.append(headers["Authorization"])
+
+            def getresponse(self):
+                response = io.BytesIO(b"{}")
+                response.status = 200 if seen[-1] == f"Bearer {valid_key}" else 401
+                return response
+
+            def close(self):
+                pass
+
+        def request_once(key):
+            with HTTPServer(("127.0.0.1", 0), relay(
+                key, "test/model", client_model="ralph-pilot", connect=Upstream,
+            )) as server:
+                server.timeout = 5
+                worker = threading.Thread(target=server.handle_request)
+                worker.start()
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                try:
+                    conn.request("POST", "/v1/chat/completions",
+                                 json.dumps({"model": "ralph-pilot", "messages": []}))
+                    response = conn.getresponse()
+                    self.assertNotIn(key.encode(), response.read())
+                    return response.status
+                finally:
+                    conn.close()
+                    worker.join()
+
+        self.assertEqual(request_once("dummy-old-key"), 200)
+        valid_key = "dummy-replacement-key"
+        self.assertEqual(request_once("dummy-old-key"), 502)
+        self.assertEqual(request_once("dummy-replacement-key"), 200)
+        self.assertEqual(seen, ["Bearer dummy-old-key", "Bearer dummy-old-key", "Bearer dummy-replacement-key"])
+
     def test_upstream_key_is_not_exposed_and_calls_are_limited(self):
         key = "dummy-upstream-key"
         model = "test/model"

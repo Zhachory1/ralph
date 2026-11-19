@@ -193,6 +193,15 @@ The relay allows up to 12 provider requests with bounded input, output, and per-
 size; this is not a dollar cap. It cannot distinguish between agents sharing the preview
 container. Do not run unrelated tasks while it is armed or treat it as production isolation.
 
+To rotate a dedicated pilot provider key, disarm the relay and pause the sandbox
+agents first. Provision a replacement with the same or tighter spend limit and
+update the private source of `OPENROUTER_API_KEY`; do not add the key to Paperclip.
+The next launcher process reads the replacement on stdin. Verify it only on an
+authorized trial, then revoke the old key at the provider. If the old key is suspected
+compromised, revoke it immediately instead of keeping it for rollback. Run
+`python3 compose/v4/test/test-pilot-model-relay.py` for the dummy-key rehearsal;
+it does not verify provider-side revocation or rotate a real credential.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.
