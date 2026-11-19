@@ -38,6 +38,10 @@ Run `python3 compose/v4/test/paperclip-routine-canary.py` to probe the manual PR
 flow. It uses the same cached image for Paperclip, the pinned upstream Paperclip image
 for the isolated audit checks, and Git and Node.js on the host. No GitHub login is needed.
 
+Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
+and Git to verify the approved Git search boundary. The probe uses lexical search only;
+it does not download embedding models or need a running qmd service.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.

@@ -20,6 +20,9 @@ The manual Routine canary uses that authenticated fixture and a temporary local 
 The host test driver runs the existing audit runner without GitHub credentials. Test and lint
 run in separate network-disabled containers with no bind mounts.
 
+The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
+pinned to the approved commit. It does not start an MCP server or connect Hindsight.
+
 The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
 in `compose/v4/council-judge.mjs`; neither is connected to board routing.
 Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or
