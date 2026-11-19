@@ -21,9 +21,10 @@ The separate RFC canary uses the same built image in authenticated mode with dis
 Director and operator accounts. It runs on container loopback only, with no live data,
 credentials, or published ports. The database and Git repository are removed with the container.
 
-The manual Routine canary uses that authenticated fixture and a temporary local Git repository.
-The host test driver runs the existing audit runner without GitHub credentials. Test and lint
-run in separate network-disabled containers with no bind mounts.
+The manual Routine worker runs on the host against a localhost Paperclip board and a dedicated
+Git clone. Its canary uses the authenticated fixture and a temporary local Git repository
+without GitHub credentials. The existing audit runner puts test and lint in separate
+network-disabled containers with no bind mounts.
 
 The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
 pinned to the approved commit. It does not start an MCP server or connect Hindsight.

@@ -38,6 +38,23 @@ Run `python3 compose/v4/test/paperclip-routine-canary.py` to probe the manual PR
 flow. It uses the same cached image for Paperclip, the pinned upstream Paperclip image
 for the isolated audit checks, and Git and Node.js on the host. No GitHub login is needed.
 
+To process one manual audit Routine run on a local sandbox board, trigger it with
+`source: "manual"` and a payload such as
+`{"repo":"OWNER/REPO","pr_number":7,"head_sha":"<full lowercase SHA>"}`. Reuse the same
+idempotency key for the same PR and head. Set `RALPH_AUDIT_REPOS` to the trusted clone path
+and its pinned image/test/lint configuration, and set a temporary company-scoped
+`PAPERCLIP_API_KEY` privately. Then run:
+
+```sh
+node compose/v4/routine-audit-worker.mjs http://127.0.0.1:PORT COMPANY_ID ROUTINE_ID RUN_ID OWNER/REPO LOCAL_CLONE
+```
+
+Use a dedicated clone with `https://github.com/OWNER/REPO.git` as its origin and only read
+access. Run one worker at a time. `published` means the linked Paperclip issue has an audit
+document, `already_published` means the existing document was left alone, and `stale`
+means no dossier was written for the outdated head. Revoke the temporary key after use.
+This command does not create triggers, publish GitHub reviews, or close the issue.
+
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
 and Git to verify the approved Git search boundary, including replacement of the old search
 result after a refresh to a second approved revision. The probe uses lexical search only;
