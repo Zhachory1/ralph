@@ -9,6 +9,12 @@ the same worktree. The base branch and checkout must stay unchanged. The pinned 
 adapter does not forward the run token, and Paperclip rejected project-backed delegation with
 the scoped task-bridge key tested there.
 
+For the private pilot, the operator arms the bounded relay and launches one prepared
+sandbox issue from Paperclip. The launcher does not assign or schedule issues. See
+[operations](operations.md#arm-a-prepared-paperclip-sandbox-task) for the manual checks.
+For the digest title-order task, the launcher's finish mode independently verifies
+the test before recording Done; a successful model run alone does not close the issue.
+
 The authenticated RFC canary verifies that Paperclip preserves exact document revisions, remaps
 anchored comments, rejects stale pending confirmations, and restricts a confirmation addressed
 to the Director. It also found a gap: after the Director approved revision B and the RFC changed

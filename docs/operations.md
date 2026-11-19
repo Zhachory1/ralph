@@ -56,6 +56,34 @@ version. It does not back up the current preview, test scheduled backups or exte
 PostgreSQL, or preserve changes written after switching to the restored instance. A real
 restore also needs the matching deployment configuration and signing secret, handled separately.
 
+### Arm a prepared Paperclip sandbox task
+
+This is for the localhost preview only. Task and agent setup is separate. In Paperclip,
+verify that the sandbox has only the intended task ready to launch, that its Hermes and
+OpenCode agents use the `ralph-pilot` relay and issue worktrees, and that periodic runs
+are off. The launcher checks Docker and the checkout, not the board's agent settings.
+
+1. Run `python3 compose/v4/pilot-launch.py --check` from the repo root. It prints the
+   issue selected by the preview's `/paperclip/pilot-next-task` file. Confirm that issue
+   in the dashboard. If the file is missing, the task is not prepared.
+2. With `OPENROUTER_API_KEY` already set privately in the local environment, run
+   `python3 compose/v4/pilot-launch.py`. Once it prints **Relay ready**, launch only the
+   named issue in Paperclip. Launching can incur provider charges.
+3. Wait for both assignment runs to succeed in Paperclip, then stop the launcher
+   with Ctrl-C and pause both sandbox agents. The relay also stops at four minutes.
+   A successful run is not the same as a Done issue. If a run fails or exceeds the
+   limit, check its state before retrying.
+4. For the digest title-order pilot, run
+   `python3 compose/v4/pilot-launch.py --finish-digest-pilot <sandbox-company-uuid>`.
+   Approve the temporary Paperclip prompt. The command checks the assignment and
+   verifies the expected test in a network-disabled container, then records Done and
+   prevents rearming the same task. It does not use the provider key or rerun the agent.
+   Other task types need a verifier specific to their expected result.
+
+The relay allows up to 12 provider requests with bounded input, output, and per-response
+size; this is not a dollar cap. It cannot distinguish between agents sharing the preview
+container. Do not run unrelated tasks while it is armed or treat it as production isolation.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.
