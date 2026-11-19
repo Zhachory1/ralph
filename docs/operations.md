@@ -42,6 +42,20 @@ Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd
 and Git to verify the approved Git search boundary. The probe uses lexical search only;
 it does not download embedding models or need a running qmd service.
 
+### Paperclip cold restore drill
+
+Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.
+The drill creates two authenticated, network-disabled containers without published ports.
+It shuts down the source cleanly, copies `/paperclip` with `docker cp -a`, restores into the
+stopped target, and signs in to verify the original issue and run. To rehearse rollback, it
+writes a target-only comment, stops the target, restarts the untouched source checkpoint,
+and verifies that the comment is absent. The fixture and archive are removed on exit.
+
+This exercises a cold copy of the embedded database and instance files at the same image
+version. It does not back up the current preview, test scheduled backups or external
+PostgreSQL, or preserve changes written after switching to the restored instance. A real
+restore also needs the matching deployment configuration and signing secret, handled separately.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.
