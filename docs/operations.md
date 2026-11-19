@@ -161,6 +161,28 @@ no provider relay, agent jobs, or companion services, and does not migrate or re
 the running pilot. `python3 compose/v4/test/paperclip-private-canary.py` rehearses this
 with a disposable account and volume and verifies sign-in after container recreation.
 
+### Prepare a private Paperclip target
+
+Build the pinned image as above. Use a new Compose project and a dedicated host. Set
+`PAPERCLIP_AGENT_JWT_SECRET` and a dedicated URL-safe `PAPERCLIP_POSTGRES_PASSWORD`
+(for example, a random hex value) from a private store. For remote access, set
+`PAPERCLIP_TAILNET_HOSTNAME` to the host's Tailscale DNS name and `PAPERCLIP_PUBLIC_URL`
+to its `https://` origin. On the Docker host, use `tailscale serve --bg http://127.0.0.1:4320`
+(not Funnel), and restrict access with tailnet policy. For localhost-only setup,
+set the public URL to `http://127.0.0.1:4320` instead.
+
+```sh
+docker compose --env-file /dev/null -p ralph-target \
+  -f compose/v4/paperclip-private.yml -f compose/v4/paperclip-postgres.yml up -d
+```
+
+Use the same temporary sign-up procedure as for the preview, and leave sign-up closed
+before admitting other users. This initializes a new database, not a migration. Keep
+both named volumes: Postgres holds board data; Paperclip state holds filesystem artifacts.
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` only for an approved collector. Rehearse bootstrap
+with `python3 compose/v4/test/paperclip-private-canary.py --postgres`; it does not
+configure Tailscale, agents, or live routing.
+
 ### Arm a prepared Paperclip sandbox task
 
 This is for the localhost preview only. Task and agent setup is separate. In Paperclip,
