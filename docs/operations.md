@@ -117,6 +117,12 @@ version. It does not back up the current preview, test scheduled backups or exte
 PostgreSQL, or preserve changes written after switching to the restored instance. A real
 restore also needs the matching deployment configuration and signing secret, handled separately.
 
+Add `--native` to exercise Paperclip's built-in manual database backup and upstream
+restore helper instead. The drill imports the compressed SQL archive into a new
+database on a separate disposable instance and checks the account, issue, and completed
+run rows. This proves logical data recovery, not application boot from the restored
+database, scheduled backups, or recovery of filesystem artifacts such as worktrees.
+
 ### Bootstrap a fresh private Paperclip preview
 
 This starts a separate Compose project and named state volume. Do not reuse the name or
