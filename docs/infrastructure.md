@@ -42,6 +42,13 @@ network-disabled containers with no bind mounts.
 The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
 pinned to the approved commit. It does not start an MCP server or connect Hindsight.
 
+The v4 qmd gateway canary (`compose/v4/bootstrap-qmd-gateway.sh`,
+`compose/v4/test/paperclip-qmd-gateway-canary.py`) grants a disposable `hermes_local`
+Paperclip seat that same approved-only index through Hermes' own native `hermes mcp add`
+connector, run with `docker exec` against the same disposable, network-disabled canary
+container `paperclip-canary.py` uses -- not the Ralph knowledge container, not a separate
+Hermes container or profile. No live Paperclip target, model-driven run, or Hindsight.
+
 The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
 in `compose/v4/council-judge.mjs`; neither is connected to board routing.
 Each invocation uses a disposable, non-root, read-only Docker container with no host mounts or
