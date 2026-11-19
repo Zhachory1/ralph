@@ -1,0 +1,28 @@
+name: Paperclip private preview
+
+on:
+  pull_request:
+    branches: [v4-architecture]
+    paths:
+      - ".github/workflows/paperclip-private.yml"
+      - "compose/v4/paperclip-private.yml"
+      - "compose/v4/paperclip-canary.Dockerfile"
+      - "compose/v4/test/paperclip-private-canary.py"
+
+permissions:
+  contents: read
+
+jobs:
+  clean-host-bootstrap:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build the pinned preview image
+        run: |
+          docker build --no-cache --network none \
+            -t ralph-paperclip-private:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+      - name: Verify local-only access and persistence
+        run: python3 compose/v4/test/paperclip-private-canary.py
