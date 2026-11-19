@@ -36,6 +36,8 @@ def check_roster(container):
         assert seat["adapterType"] == ("opencode_local" if coding else "hermes_local")
         if coding:
             assert seat["adapterConfig"]["model"] == config["model"]
+        else:
+            assert seat["adapterConfig"]["hermesCommand"] == "/opt/hermes/bin/hermes"
         assert seat["reportsTo"] == (None if name == "Orchestrator" else roster["Orchestrator"])
         assert seat["runtimeConfig"]["heartbeat"]["enabled"] is False
         assert seat["permissions"]["canCreateAgents"] is False, name
@@ -47,6 +49,65 @@ def check_roster(container):
         raise AssertionError("Provisioning accepted a company that already had agents")
     assert len(board(f"{root}/agents")) == 5
     print("PASS: five seats persisted with native budget policies; a second invocation did not modify them")
+
+    def readonly(path, body=None, method="GET"):
+        assert body is None, f"Unexpected reconciliation write: {method} {path}"
+        return board(path)
+
+    models = {"Council Architecture": "anthropic/fixture", "Council Security": "google/fixture",
+              "Council Scope": "openai/fixture"}
+    def reconcile(client, adapter=config):
+        return provision(client, company, manifest, adapter, 500, 100, reconcile=True, judge_models=models)
+
+    board(f"agents/{roster['Author']}", {"name": "RFC Author"}, "PATCH")
+    issue = board(f"{root}/issues", {"title": "Existing work", "status": "backlog"})
+    full = reconcile(board)
+    assert len(full) == 12 and all(full[k] == v for k, v in roster.items())
+    fixture["docker"]("restart", container)
+    fixture["fixture"]["wait_for_health"](container, fixture["ORIGIN"] + "/api/health", "Paperclip", paperclip=True)
+    assert reconcile(readonly) == full
+    assert board(f"issues/{issue['id']}")["status"] == "backlog"
+    manager = full["Feature Workflow Manager"]
+    def manager_grant(enabled):
+        board(f"agents/{manager}/permissions", {
+            "canCreateAgents": False, "canCreateSkills": False, "canAssignTasks": enabled,
+        }, "PATCH")
+    manager_grant(False)
+    try:
+        reconcile(readonly)
+    except ValueError as error:
+        assert "assignment grant" in str(error)
+    else:
+        raise AssertionError("Missing explicit manager assignment grant was silently accepted")
+    manager_grant(True)
+    try:
+        reconcile(readonly, {"model": "fixture/different"})
+    except ValueError as error:
+        assert "model" in str(error)
+    else:
+        raise AssertionError("Reconciliation accepted conflicting OpenCode model")
+    print("PASS: reconciliation preserves seat IDs and rejects drift without writes")
+
+    bearer = runpy.run_path(str(TESTS / "paperclip-board-key-canary.py"))["bearer"]
+    # A backlog assignment exercises native authorization without starting a model run.
+    recipient = board(f"{root}/agents", {"name": "Fixture assignee", "adapterType": "process",
+                                         "adapterConfig": {"command": "/bin/true"}})
+    key = board(f"agents/{manager}/keys", {"name": "Disposable manager"})["token"]
+    status, delegated = bearer(container, key, f"{root}/issues", body={
+        "title": "Delegate fixture task", "status": "backlog", "parentId": issue["id"], "assigneeAgentId": recipient["id"],
+    })
+    assert status == 201 and delegated["createdByAgentId"] == manager, (status, delegated.get("error"))
+    pending = board(f"issues/{issue['id']}/interactions", {
+        "kind": "request_confirmation", "resolverPolicy": "human_only",
+        "addresseeUserId": board("auth/get-session")["user"]["id"],
+        "payload": {"version": 1, "prompt": "Approve this fixture?"},
+    })
+    endpoint = f"issues/{issue['id']}/interactions/{pending['id']}/accept"
+    status, _ = bearer(container, key, endpoint, body={})
+    assert status in (403, 404, 422), status
+    assert board(f"issues/{issue['id']}/interactions")[0]["status"] == "pending"
+    assert board(endpoint, {})["status"] == "accepted"
+    print("PASS: manager delegated a backlog task but could not resolve Director confirmation")
 
     swe_id = roster["SWE"]
     for cents, expected in ((80, "warning"), (20, "hard_stop")):

@@ -1,5 +1,8 @@
 # Workflows
 
+The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
+Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
+
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
 The Paperclip canary checks whether a board assignment wakes `hermes_local`, which uses its
