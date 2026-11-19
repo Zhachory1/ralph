@@ -2,10 +2,12 @@
 
 Code: [`routine-maintenance-worker.mjs`](routine-maintenance-worker.mjs). Tests:
 [`test/routine-maintenance-worker.test.mjs`](test/routine-maintenance-worker.test.mjs) (offline,
-pure decision logic) and [`test/paperclip-maintenance-canary.py`](test/paperclip-maintenance-canary.py)
-(real board calls against a disposable, network-isolated Paperclip container; no production
-writes, no live scheduling). Implements #263's first bounded slice: detect, dedupe, wake, or
-escalate — never rebase or merge.
+pure decision logic), [`test/routine-maintenance-worker-cli.test.mjs`](test/routine-maintenance-worker-cli.test.mjs)
+(one CLI boundary test against a loopback HTTP fixture), and
+[`test/paperclip-maintenance-canary.py`](test/paperclip-maintenance-canary.py) (real board calls
+against a disposable, network-isolated Paperclip container; no production writes, no live
+scheduling). Implements #263's first bounded slice: detect, dedupe, wake, or escalate — never
+rebase or merge.
 
 ## Link an issue to its outbound PR
 
@@ -55,3 +57,20 @@ instead of waking a third time. `base_drift` and `merge_ready` always escalate; 
 `review_feedback` means feedback an upstream normalizer already classified as an ordinary,
 allowed fix — ambiguous or substantive feedback must be classified upstream (as `base_drift`,
 `merge_ready`, or a future distinct event type) before it ever reaches this worker.
+
+## Concurrency: two separate requirements, not one
+
+This worker needs **both** of the following; neither one alone is enough:
+
+1. **Create the Routine with `concurrencyPolicy: "coalesce_if_active"`.** This only controls
+   whether Paperclip starts a *new run* while one is already active on that Routine. It does not
+   serialize this host worker process.
+2. **Run `routine-maintenance-worker.mjs` serially** — one process at a time, never two
+   invocations in flight for the same issue. Paperclip's coalescing cannot prevent an operator
+   (or whatever eventually schedules this) from handing two already-created runs for the same
+   issue to two concurrent worker processes; that is an operational rule this code does not
+   enforce by itself.
+
+The `baseRevisionId` compare-and-swap on the `maintenance` document is a narrower, in-process
+guard against a write landing between one run's read and write if serial execution is ever
+violated — it is a backstop, not a substitute for either requirement above.

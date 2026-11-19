@@ -80,6 +80,16 @@ of the rest. This command never posts a GitHub review, writes to GitHub, or audi
 anything itself — run `routine-audit-worker.mjs` against the triggered run id separately
 to publish a dossier. It discovers; it does not schedule, review, or merge.
 
+Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
+`node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
+`python3 compose/v4/test/paperclip-maintenance-canary.py` with the same cached image, to check
+the first bounded slice of outbound PR maintenance through Routines (#263,
+[routine-maintenance-worker.md](../compose/v4/routine-maintenance-worker.md)): detect, dedupe,
+wake the existing OpenCode worktree, or escalate to the Director — never rebase, force-push, or
+merge. Linking an issue to the PR it tracks, the exact run command, and the two separate
+concurrency requirements (`coalesce_if_active` on the Routine *and* running this worker
+serially — one does not imply the other) are documented in that runbook, not repeated here.
+
 Run `node --test compose/v4/test/comms-intake-worker.test.mjs` to check the first
 offline slice of Gmail/Chat intake into Paperclip Routines (#266,
 [comms-intake.md](1-projects/v4-architecture/comms-intake.md)): a normalized Gmail or

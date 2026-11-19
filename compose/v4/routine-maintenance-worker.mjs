@@ -12,15 +12,23 @@
 // upstream (before it reaches this worker) as `base_drift` or `merge_ready`-style escalation, or
 // as a future distinct event type — never let ambiguous feedback enter as `review_feedback`.
 //
-// Concurrency: this worker assumes serial execution per issue. The Paperclip Routine's
-// `concurrencyPolicy: "coalesce_if_active"` is the primary defense against two runs racing on
-// the same issue; the `baseRevisionId` compare-and-swap on the `maintenance` document is a
-// second, narrower guard against a write landing between this run's read and write, not a
-// substitute for correct Routine concurrency configuration. The event's own effect (wake or
-// escalate) is only performed after that compare-and-swap claim succeeds, so a run that never
-// reaches the claim can be replayed safely and a replay that finds the claim already committed
-// is a no-op (the dedup check above). If the claim lands but the effect call then fails (network
-// error, timeout, 5xx), the event is already marked processed: it will never be retried
+// Concurrency: this worker requires serial execution per issue, and that is an *operational*
+// requirement this code does not enforce on its own -- run one `routine-maintenance-worker.mjs`
+// process at a time (per issue, or globally, until a real scheduler exists); never fan two
+// invocations out concurrently for the same issue. The Routine itself should also be created
+// with `concurrencyPolicy: "coalesce_if_active"`, but that setting only governs whether
+// Paperclip starts a *new run* while one is already active on the Routine -- it does not
+// serialize this host worker process, and two already-created runs for the same issue can
+// still be handed to two worker invocations at once if an operator or caller runs them that
+// way. Both are required together: `coalesce_if_active` on the Routine, and serial execution
+// of the host worker. The `baseRevisionId` compare-and-swap on the `maintenance` document is a
+// narrower, in-process guard against a write landing between this run's read and write if that
+// operational requirement is ever violated -- it is not a substitute for it. The event's own
+// effect (wake or escalate) is only performed after that compare-and-swap claim succeeds, so a
+// run that never reaches the claim can be replayed safely and a replay that finds the claim
+// already committed is a no-op (the dedup check above). If the claim lands but the effect call
+// then fails (network error, timeout, 5xx), the event is already marked processed: it will
+// never be retried
 // automatically, and we report `effect_ambiguous` rather than build a generalized recovery
 // engine (rollback, auto-retry, or reconciliation) that attempts to guess what the far end did
 // with a request it may or may not have received. An operator must look at the PR and the
