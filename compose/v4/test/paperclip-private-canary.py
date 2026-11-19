@@ -16,7 +16,7 @@ from uuid import uuid4
 COMPOSE = Path(__file__).resolve().parents[1] / "paperclip-private.yml"
 
 
-def check_private_bootstrap(*, postgres=False):
+def check_private_bootstrap(*, postgres=False, recovery=False):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -101,6 +101,26 @@ def check_private_bootstrap(*, postgres=False):
             db = json.loads(compose("ps", "--format", "json", "postgres"))
             assert all(port["PublishedPort"] == 0 for port in db.get("Publishers") or [])
         print("PASS: localhost-only bootstrap, auth and origin checks, sign-up closed, account and board persisted")
+        if recovery:
+            def select_database(name):
+                env["PAPERCLIP_DATABASE_NAME"] = name
+                compose("up", "-d", "--no-build", "--pull", "never", "--no-deps", "paperclip")
+                wait_for("ready")
+                session = client()
+                session("auth/sign-in/email", account)
+                assert session(f"companies/{company['id']}")["id"] == company["id"]
+                return session
+
+            compose("stop", "paperclip")
+            compose("exec", "-T", "postgres", "createdb", "-U", "paperclip", "paperclip_restore")
+            compose("exec", "-T", "postgres", "sh", "-ec",
+                    "pg_dump -U paperclip -Fc paperclip -f /tmp/paperclip.dump; "
+                    "pg_restore -U paperclip --exit-on-error -d paperclip_restore /tmp/paperclip.dump")
+            recovered = select_database("paperclip_restore")
+            marker = recovered("companies", {"name": "Only in restored database"})
+            rolled_back = select_database("paperclip")
+            assert marker["id"] not in {row["id"] for row in rolled_back("companies")}
+            print("PASS: Paperclip booted from PostgreSQL restore and rolled back to the untouched source")
     finally:
         compose("down", "--volumes")
 
@@ -108,4 +128,6 @@ def check_private_bootstrap(*, postgres=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--postgres", action="store_true", help="Use the external PostgreSQL overlay.")
-    check_private_bootstrap(postgres=parser.parse_args().postgres)
+    parser.add_argument("--recovery", action="store_true", help="Restore and boot a second PostgreSQL database.")
+    args = parser.parse_args()
+    check_private_bootstrap(postgres=args.postgres or args.recovery, recovery=args.recovery)

@@ -183,6 +183,15 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` only for an approved collector. Rehearse boots
 with `python3 compose/v4/test/paperclip-private-canary.py --postgres`; it does not
 configure Tailscale, agents, or live routing.
 
+For the external database recovery rehearsal, run
+`python3 compose/v4/test/paperclip-private-canary.py --recovery`. It stops a disposable
+board, takes a custom-format `pg_dump`, restores into a separate PostgreSQL database,
+and signs in after switching Paperclip to it with `PAPERCLIP_DATABASE_NAME`. It switches
+back to the original database and verifies a post-restore write did not affect the source.
+This is a database-only rehearsal. For the real switch, retain the matching state volume,
+configuration and signing secret, suspend ingress and scheduling, and decide how to
+handle any writes made after the switch before rolling back.
+
 ### Provision the Paperclip organization
 
 Create an empty company on the target and mint a temporary key from its administrator.
