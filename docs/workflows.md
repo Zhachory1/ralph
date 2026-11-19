@@ -54,6 +54,8 @@ head, keyed `pr-<repo>-<number>-<head>`. It relies on the Routine's own idempote
 state store, so a repeat discovery of the same head reuses the same run and linked issue instead
 of duplicating it. With `--audit`, the same tick runs the exact-head audit and publishes
 the dossier in Paperclip. The host scheduler must run ticks serially. Nothing writes to GitHub.
+With `--reconcile` and a named reviewer, a submitted review on the exact audited head
+closes the Paperclip issue without editing the dossier.
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay

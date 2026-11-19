@@ -125,8 +125,12 @@ node compose/v4/routine-discovery-worker.mjs http://127.0.0.1:PORT COMPANY_ID RO
 
 Configure the host scheduler to run at most one invocation at a time. Each invocation
 audits serially and reports `audit_status` for each run. Failed audits leave the tick
-nonzero; rerunning reuses existing runs and dossiers. No GitHub writes or automatic
-closure after human review.
+nonzero; rerunning reuses existing runs and dossiers. To close published dossiers after
+human review, append the reviewer's literal GitHub login and `--reconcile` to the command.
+This checks the most recent 100 Routine runs separately from current review requests,
+so a review can be found after GitHub removes the request. Only submitted reviews by the
+named human on the dossier's exact head count. The dossier contents are left intact.
+No GitHub writes are made.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus

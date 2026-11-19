@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import { auditPr } from "./coding-harness/audit-pr.js";
 import { runRoutineAudit } from "./compose/v4/routine-audit-worker.mjs";
 import { runInboundDiscovery } from "./compose/v4/routine-discovery-worker.mjs";
-const { container, origin, discoveryHead, ...input } = JSON.parse(process.argv[1]);
+const { container, origin, discoveryHead, reviewedHead, ...input } = JSON.parse(process.argv[1]);
 function call(command, args, options) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 15000, ...options });
   if (result.status !== 0) throw new Error(`${command} fixture command failed (${result.status})`);
@@ -39,7 +39,14 @@ try {
     },
     async audit(request) { return report = await auditPr(request); },
   });
-  if (discoveryHead) {
+  if (reviewedHead) {
+    await runInboundDiscovery({
+      ...input, board, listRequestedPrs: () => [], reviewer: "director",
+      prReviews: () => [{ user: { login: "director", type: "User" }, state: "COMMENTED",
+        commit_id: reviewedHead, submitted_at: "2026-11-19T00:00:00Z" }],
+    });
+    console.log("{}");
+  } else if (discoveryHead) {
     const [row] = await runInboundDiscovery({
       ...input, board, auditRun, listRequestedPrs: () => [1], prHead: () => discoveryHead,
     });
@@ -111,12 +118,13 @@ def check_routine(container, repo):
             "payload": {"repo": "fixture/canary", "pr_number": 1, "head_sha": head},
         })
 
-    def audit(run=None, *, discovery_head=None):
+    def audit(run=None, *, discovery_head=None, reviewed_head=None):
         result = subprocess.run(
             ["node", "--input-type=module", "-e", WORKER, json.dumps({
                 "container": container, "origin": FIXTURE["ORIGIN"], "companyId": company["id"],
                 "routineId": routine["id"], "runId": run["id"] if run else None,
-                "discoveryHead": discovery_head, "repoPath": str(repo), "repoName": "fixture/canary",
+                "discoveryHead": discovery_head, "reviewedHead": reviewed_head,
+                "repoPath": str(repo), "repoName": "fixture/canary",
             })], cwd=HERE.parents[2], env=env, text=True, capture_output=True, timeout=120,
         )
         assert result.returncode == 0, result.stderr
@@ -157,6 +165,14 @@ def check_routine(container, repo):
     assert board(status_path)["latestRevisionId"] == status["latestRevisionId"]
     assert board(f"issues/{second['linkedIssueId']}/documents/audit")["body"] == stored["body"]
     print("PASS: current head audited in isolation; stale dossier preserved and marked once in Paperclip")
+    issue_path = f"issues/{second['linkedIssueId']}"
+    assert board(issue_path)["status"] != "done"
+    audit(reviewed_head=third_head)
+    assert board(issue_path)["status"] != "done"
+    audit(reviewed_head=second_head)
+    assert board(issue_path)["status"] == "done"
+    assert board(f"{issue_path}/documents/audit")["body"] == stored["body"]
+    print("PASS: exact-head human review closes the dossier without changing its evidence")
 
 
 if __name__ == "__main__":
