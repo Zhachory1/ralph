@@ -2,6 +2,7 @@
 
 import runpy
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
@@ -46,6 +47,18 @@ def check_roster(container):
         raise AssertionError("Provisioning accepted a company that already had agents")
     assert len(board(f"{root}/agents")) == 5
     print("PASS: five seats persisted with native budget policies; a second invocation did not modify them")
+
+    swe_id = roster["SWE"]
+    for cents, expected in ((80, "warning"), (20, "hard_stop")):
+        board(f"{root}/cost-events", {
+            "agentId": swe_id, "provider": "fixture", "model": "small",
+            "billingType": "metered_api", "costCents": cents,
+            "occurredAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        })
+        policy, = [row for row in board(f"{root}/budgets/overview")["policies"]
+                   if row["scopeId"] == swe_id]
+        assert policy["status"] == expected, policy["status"]
+    print("PASS: synthetic ledger entries reached warning at 80% and hard stop at 100%")
 
 
 if __name__ == "__main__":
