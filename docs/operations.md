@@ -39,8 +39,9 @@ flow. It uses the same cached image for Paperclip, the pinned upstream Paperclip
 for the isolated audit checks, and Git and Node.js on the host. No GitHub login is needed.
 
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
-and Git to verify the approved Git search boundary. The probe uses lexical search only;
-it does not download embedding models or need a running qmd service.
+and Git to verify the approved Git search boundary, including replacement of the old search
+result after a refresh to a second approved revision. The probe uses lexical search only;
+it does not download embedding models, use the live index, or need a running qmd service.
 
 ### Paperclip cold restore drill
 

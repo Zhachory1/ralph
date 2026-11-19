@@ -35,9 +35,10 @@ and rechecks the fixture ref before storing the dossier on the linked issue. Thi
 the serial stale-head check, not atomic publication with an external PR update. It does not
 wire a production worker, schedule audits, or submit GitHub reviews.
 
-The v4 qmd canary finds an approved RFC using lexical search. The unapproved revision
-on another branch and an untracked run transcript stay out of the indexed worktree.
-This checks the search input boundary, not Hindsight retention or production refresh.
+The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
+when the approved worktree advances. The separate draft and untracked run transcript stay
+unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight
+retention or production refresh.
 
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
