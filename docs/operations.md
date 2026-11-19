@@ -59,6 +59,27 @@ returns `superseded` and adds an **Audit superseded** document without editing t
 original dossier. The marker is permanent even if the PR later returns to the same SHA.
 Audit the new head with its own run. Nothing checks this on a schedule.
 
+To discover PRs requesting this account's review in one allowlisted repo and queue each
+one's current head for the audit above, set `GH_TOKEN`/`gh auth login` for a read-only
+account (no write scope needed: this issues only `gh search prs` and `gh pr view`) and
+the same temporary scoped `PAPERCLIP_API_KEY`, then run:
+
+```sh
+node compose/v4/routine-discovery-worker.mjs http://127.0.0.1:PORT COMPANY_ID ROUTINE_ID OWNER/REPO [REVIEWER=@me]
+```
+
+This is a one-tick command, not a scheduled poller: run it by hand and inspect its JSON
+output before wiring it to any timer. For each open PR in `OWNER/REPO` requesting
+`REVIEWER`'s review (`@me` by default), it reads the current head SHA and triggers a
+manual Routine run with idempotency key `pr-<repo>-<number>-<head>` and the same payload shape
+`routine-audit-worker.mjs` expects. Paperclip's own idempotency key dedups a repeat
+discovery of the same (repo, PR, head): a second trigger returns the same run and linked
+issue instead of creating another one, so this command is safe to run repeatedly by hand.
+A PR whose head cannot be read is skipped and logged to stderr; it does not stop discovery
+of the rest. This command never posts a GitHub review, writes to GitHub, or audits
+anything itself — run `routine-audit-worker.mjs` against the triggered run id separately
+to publish a dossier. It discovers; it does not schedule, review, or merge.
+
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
 and Git to verify the approved Git search boundary, including replacement of the old search
 result after a refresh to a second approved revision. The probe uses lexical search only;
