@@ -18,18 +18,22 @@ EMAIL = "restore@fixture.invalid"
 
 
 def create(stack, name, env):
+    volume = DOCKER("volume", "create", f"{name}-state")
+    stack.callback(DOCKER, "volume", "rm", volume)
     container = DOCKER(
         "create", "--pull", "never", "--network", "none", "--name", name,
         "-e", "HOST=127.0.0.1", "-e", "PAPERCLIP_DEPLOYMENT_MODE=authenticated",
         "-e", "PAPERCLIP_DEPLOYMENT_EXPOSURE=private", "-e", "PAPERCLIP_TELEMETRY_DISABLED=1",
         "-e", "PAPERCLIP_AUTH_BASE_URL_MODE=explicit", "-e", f"PAPERCLIP_AUTH_PUBLIC_BASE_URL={ORIGIN}",
         "-e", "PAPERCLIP_AUTH_DISABLE_SIGN_UP=false", "-e", "PAPERCLIP_AGENT_JWT_SECRET",
-        FIXTURE["IMAGE"], env=env,
+        "--mount", f"type=volume,src={volume},dst=/paperclip", FIXTURE["IMAGE"], env=env,
     )
     stack.callback(DOCKER, "rm", "-fv", container)
     state = json.loads(DOCKER("inspect", container))[0]
     assert state["HostConfig"]["NetworkMode"] == "none"
-    assert not state["HostConfig"]["PortBindings"] and not state["Mounts"]
+    assert not state["HostConfig"]["PortBindings"]
+    mount, = state["Mounts"]
+    assert (mount["Type"], mount["Name"], mount["Destination"]) == ("volume", volume, "/paperclip")
     return container
 
 

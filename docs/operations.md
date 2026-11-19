@@ -63,11 +63,12 @@ it does not download embedding models, use the live index, or need a running qmd
 ### Paperclip cold restore drill
 
 Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.
-The drill creates two authenticated, network-disabled containers without published ports.
-It shuts down the source cleanly, copies `/paperclip` with `docker cp -a`, restores into the
-stopped target, and signs in to verify the original issue and run. To rehearse rollback, it
+The drill creates two authenticated, network-disabled containers without published ports,
+each with its own disposable named volume at `/paperclip`. It shuts down the source
+cleanly, copies `/paperclip` with `docker cp -a`, restores into the stopped target, and
+signs in to verify the original issue and run. To rehearse rollback, it
 writes a target-only comment, stops the target, restarts the untouched source checkpoint,
-and verifies that the comment is absent. The fixture and archive are removed on exit.
+and verifies that the comment is absent. The containers, volumes, and archive are removed on exit.
 
 This exercises a cold copy of the embedded database and instance files at the same image
 version. It does not back up the current preview, test scheduled backups or external
