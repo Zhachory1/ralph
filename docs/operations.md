@@ -80,6 +80,15 @@ of the rest. This command never posts a GitHub review, writes to GitHub, or audi
 anything itself — run `routine-audit-worker.mjs` against the triggered run id separately
 to publish a dossier. It discovers; it does not schedule, review, or merge.
 
+Run `node --test compose/v4/test/comms-intake-worker.test.mjs` to check the first
+offline slice of Gmail/Chat intake into Paperclip Routines (#266,
+[comms-intake.md](1-projects/v4-architecture/comms-intake.md)): a normalized Gmail or
+Chat event, read on stdin by a local CLI that trusts its caller already authenticated
+it with Google, an allowlist, and one idempotent `POST routines/{id}/run`. Synthetic
+throughout, including one test that spawns the real
+`compose/v4/comms-intake-worker.mjs` CLI against a loopback-only in-process stand-in —
+no Docker, no live Google credentials, and no webhook registered anywhere by this.
+
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
 and Git to verify the approved Git search boundary, including replacement of the old search
 result after a refresh to a second approved revision. The probe uses lexical search only;
