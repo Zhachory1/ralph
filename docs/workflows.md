@@ -3,6 +3,12 @@
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
 
+For a code PR the Developer resubmits the corrected head by moving the issue to
+`in_review`. Paperclip selects the independent Reviewer. Its `done` transition with
+the SHA and review comment records technical acceptance; `todo` with a comment
+returns changes to the Developer. Findings alone do not resolve a stage. A new PR
+head needs another review. GitHub approval and merge remain separate human decisions.
+
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
 The Paperclip canary checks whether a board assignment wakes `hermes_local`, which uses its

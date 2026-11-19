@@ -12,8 +12,11 @@ from uuid import UUID
 SEATS = (
     ("Orchestrator", "ceo", "hermes_local", "Route requests and assign approved work."),
     ("Author", "general", "hermes_local", "Draft and revise initiative RFCs."),
-    ("Reviewer", "general", "hermes_local", "Review exact-head evidence and report to the Director."),
-    ("SWE", "engineer", "opencode_local", "Implement assigned work in its issue worktree."),
+    ("Reviewer", "general", "hermes_local", "Follow the independent Reviewer policy below.\n\n"
+     + (Path(__file__).resolve().parents[2] / "profiles/reviewer/SOUL.md").read_text()),
+    ("SWE", "engineer", "opencode_local", "Implement assigned work in its issue worktree. "
+     "After addressing changes_requested, resubmit the tested commit with an in_review transition "
+     "and a comment naming the PR and full SHA. Do not decide your own review."),
     ("SRE", "engineer", "opencode_local", "Triage CI and maintain assigned repositories."),
 )
 
