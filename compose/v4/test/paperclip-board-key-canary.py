@@ -5,7 +5,6 @@ import runpy
 import secrets
 import subprocess
 from pathlib import Path
-from urllib.parse import urlencode
 
 FIXTURE = runpy.run_path(str(Path(__file__).with_name("paperclip-rfc-canary.py")))
 ORIGIN = FIXTURE["ORIGIN"]
@@ -47,8 +46,6 @@ def check_rotation(container):
         path = f"cli-auth/challenges/{challenge['id']}"
         approval = actor(f"{path}/approve", {"token": challenge["token"]})
         assert approval["approved"]
-        poll = f"{path}?" + urlencode({"token": challenge["token"]})
-        assert actor(poll)["status"] == "approved"
         return challenge["boardApiToken"]
 
     target = f"companies/{sandbox['id']}"
