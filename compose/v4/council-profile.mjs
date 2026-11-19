@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,7 +111,12 @@ export async function runCouncilProfile({ artifact, revisions, model, port }) {
     }
     if (!response.ok) throw new Error(`Council job ${id}: result unavailable (${response.status})`);
     const state = await response.json();
-    if (state.status === "completed") return { jobId: id, result: state.result };
+    if (state.status === "completed") {
+      if (state.artifactSha256 !== createHash("sha256").update(artifact).digest("hex")) {
+        throw new Error(`Council job ${id}: artifact digest mismatch`);
+      }
+      return { jobId: id, status: state.status, artifactSha256: state.artifactSha256, result: state.result };
+    }
     if (state.status !== "running") {
       throw new Error(`Council job ${id}: ${state.status}${launchError ? ` (${launchError.message})` : ""}`);
     }

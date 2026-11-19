@@ -18,6 +18,11 @@ The storage check re-reads the Director's accepted confirmation and fetches the 
 revision it names. It commits B byte-for-byte to a disposable Git repository, refuses
 unapproved C, and verifies a retry leaves the same commit in place. It is not a live publisher.
 
+The offline routing canary uses scripted Hermes proposals and Council verdicts with real
+Paperclip confirmations and assignment records. Initiative approval is requested only after
+Council PASS and read back for the exact revision before assignment. Denials, stale evidence,
+and unresolved gates create no assignment. This does not wire Hermes or Council into live routing.
+
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.
