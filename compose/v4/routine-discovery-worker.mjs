@@ -12,9 +12,29 @@ const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const repoSlug = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const login = /^[\w.@-]+$/;
+const submitted = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
+
+async function reconcileReviews({ board, companyId, routineId, repoName, prReviews, reviewer }) {
+  const runs = await board(`routines/${routineId}/runs?limit=100`);
+  for (const { id, source, linkedIssueId, triggerPayload: payload } of runs) {
+    if (source !== "manual" || typeof linkedIssueId !== "string" || !uuid.test(linkedIssueId)
+        || payload?.repo !== repoName || !Number.isSafeInteger(payload.pr_number) || payload.pr_number < 1
+        || typeof payload.head_sha !== "string" || !sha.test(payload.head_sha)) continue;
+    const path = `issues/${linkedIssueId}`;
+    const issue = await board(path);
+    if (issue.id !== linkedIssueId || issue.companyId !== companyId || issue.originKind !== "routine_execution"
+        || issue.originId !== routineId || issue.originRunId !== id || ["done", "cancelled"].includes(issue.status)) continue;
+    if (!(await board(`${path}/documents`)).some((doc) => doc.key === "audit")) continue;
+    const reviews = await prReviews(payload.pr_number);
+    if (!reviews.some((review) => review.user?.type === "User"
+        && review.user.login?.toLowerCase() === reviewer.toLowerCase()
+        && review.commit_id === payload.head_sha && review.submitted_at && submitted.has(review.state))) continue;
+    await board(path, "PATCH", { status: "done" });
+  }
+}
 
 export async function runInboundDiscovery({
-  board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun,
+  board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun, prReviews, reviewer,
 }) {
   const routine = await board(`routines/${routineId}`);
   if (routine.id !== routineId || routine.companyId !== companyId) throw new Error("Unexpected Routine company");
@@ -52,11 +72,15 @@ export async function runInboundDiscovery({
     }
     triggered.push(row);
   }
+  if (prReviews) await reconcileReviews({ board, companyId, routineId, repoName, prReviews, reviewer });
   return triggered;
 }
 
 async function main() {
-  const [origin, companyId, routineId, repoName, ...options] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const reconcile = argv.at(-1) === "--reconcile";
+  if (reconcile) argv.pop();
+  const [origin, companyId, routineId, repoName, ...options] = argv;
   let repoPath;
   if (options[0] === "--audit") {
     options.shift();
@@ -66,8 +90,9 @@ async function main() {
   const [reviewer, ...extra] = options;
   const reviewLogin = reviewer || "@me";
   if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(origin) || ![companyId, routineId].every((id) => uuid.test(id))
-      || !repoSlug.test(repoName) || !login.test(reviewLogin) || extra.length) {
-    throw new Error("Usage: routine-discovery-worker.mjs ORIGIN COMPANY_ID ROUTINE_ID OWNER/REPO [--audit LOCAL_CLONE] [REVIEWER]");
+      || !repoSlug.test(repoName) || !login.test(reviewLogin) || extra.length
+      || (reconcile && (!reviewer || !/^[a-z0-9-]+$/i.test(reviewer)))) {
+    throw new Error("Usage: routine-discovery-worker.mjs ORIGIN COMPANY_ID ROUTINE_ID OWNER/REPO [--audit LOCAL_CLONE] [REVIEWER] [--reconcile]");
   }
   const token = process.env.PAPERCLIP_API_KEY;
   delete process.env.PAPERCLIP_API_KEY;
@@ -98,7 +123,11 @@ async function main() {
   const auditRun = currentHead && ((runId, expected) => runRoutineAudit({
     board, companyId, routineId, runId, repoName, repoPath, expected, audit: auditPr, currentHead,
   }));
-  const rows = await runInboundDiscovery({ board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun });
+  const prReviews = reconcile && (async (pr) => JSON.parse(await gh("api", "--paginate", "--slurp",
+    `repos/${repoName}/pulls/${pr}/reviews?per_page=100`)).flat());
+  const rows = await runInboundDiscovery({
+    board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun, prReviews, reviewer,
+  });
   console.log(JSON.stringify(rows));
   if (rows.some((row) => row.audit_status === "failed")) process.exitCode = 1;
 }

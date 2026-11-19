@@ -100,3 +100,40 @@ test("rejects a Routine from another company", async () => {
   await assert.rejects(runInboundDiscovery(options), /Unexpected Routine company/);
   assert.equal(calls.length, 0);
 });
+
+test("reconciles a published exact-head dossier even after the review request disappears", async () => {
+  const { options, calls } = fixture();
+  const originalBoard = options.board;
+  const issueId = "38a76334-96d1-4746-97b1-7cfadfc068a7";
+  const path = `issues/${issueId}`;
+  const run = { id: "old-run", source: "manual", linkedIssueId: issueId,
+    triggerPayload: { repo: settings.repoName, pr_number: 7, head_sha: head1 } };
+  const issue = { id: issueId, companyId: "company", originKind: "routine_execution",
+    originId: "routine", originRunId: run.id, status: "todo" };
+  options.board = async (route, method, body) => {
+    if (route === "routines/routine/runs?limit=100") return [run];
+    if (route === `${path}/documents`) return [{ key: "audit" }];
+    if (route !== path) return originalBoard(route, method, body);
+    if (method === "PATCH") {
+      calls.push(["close", body.status]);
+      issue.status = body.status;
+    }
+    return issue;
+  };
+  options.listRequestedPrs = async () => [];
+  const review = { id: 42, user: { login: "director", type: "User" }, state: "APPROVED",
+    commit_id: head1, submitted_at: "2026-11-19T00:00:00Z" };
+  options.reviewer = "Director";
+  options.prReviews = async () => [
+    { ...review, state: "PENDING" },
+    { ...review, commit_id: head2 },
+    { ...review, user: { login: "other", type: "User" } },
+    { ...review, user: { login: "director", type: "Bot" } },
+  ];
+  await runInboundDiscovery(options);
+  assert.deepEqual(calls, []);
+  options.prReviews = async () => [review];
+  await runInboundDiscovery(options);
+  await runInboundDiscovery(options);
+  assert.deepEqual(calls, [["close", "done"]]);
+});
