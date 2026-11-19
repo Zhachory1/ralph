@@ -12,6 +12,12 @@ published ports or host bind mounts, and no repository or provider credentials. 
 execute inside the fixture. This setup does not isolate agents from the Paperclip server and is
 not an authenticated deployment.
 
+The standalone private preview (`compose/v4/paperclip-private.yml`) runs only the combined
+Paperclip/Hermes image with authenticated access, a loopback-only published port, a dedicated
+Compose bridge, and a named state volume. The bridge permits outbound traffic. It starts
+no Ralph-owned MCP server and does not start or replace any legacy stack. See the
+[bootstrap runbook](operations.md#bootstrap-a-fresh-private-paperclip-preview).
+
 The localhost pilot launcher runs an OpenRouter relay on the preview's dedicated Docker
 bridge with no published ports or mounts. It passes the provider key on stdin to the
 non-root relay, not to Paperclip or the agents. The relay limits requests and lifetime,

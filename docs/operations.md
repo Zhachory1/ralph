@@ -74,6 +74,38 @@ version. It does not back up the current preview, test scheduled backups or exte
 PostgreSQL, or preserve changes written after switching to the restored instance. A real
 restore also needs the matching deployment configuration and signing secret, handled separately.
 
+### Bootstrap a fresh private Paperclip preview
+
+This starts a separate Compose project and named state volume. Do not reuse the name or
+state of an existing installation. Cache both images pinned in
+`compose/v4/paperclip-canary.Dockerfile`; then, from the repository root, build locally:
+
+```sh
+docker build --network none -t ralph-paperclip-private:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+```
+
+Set a new random `PAPERCLIP_AGENT_JWT_SECRET` in your environment from a private store;
+keep that same secret when recreating the instance. Start with sign-up open only long
+enough to create and claim the first admin:
+
+```sh
+PAPERCLIP_AUTH_DISABLE_SIGN_UP=false docker compose --env-file /dev/null -p ralph-private -f compose/v4/paperclip-private.yml up -d
+```
+
+Open `http://127.0.0.1:4320/`, create the admin, and confirm `/api/health` reports
+`bootstrapStatus: ready`. Close sign-up immediately by recreating the container with
+the same state volume and secret:
+
+```sh
+PAPERCLIP_AUTH_DISABLE_SIGN_UP=true docker compose --env-file /dev/null -p ralph-private -f compose/v4/paperclip-private.yml up -d
+```
+
+`PAPERCLIP_PORT` overrides both sides of the loopback binding and the auth origin.
+Keep it the same in both commands. The bridge allows outbound traffic. This file starts
+no provider relay, agent jobs, or companion services, and does not migrate or replace
+the running pilot. `python3 compose/v4/test/paperclip-private-canary.py` rehearses this
+with a disposable account and volume and verifies sign-in after container recreation.
+
 ### Arm a prepared Paperclip sandbox task
 
 This is for the localhost preview only. Task and agent setup is separate. In Paperclip,
