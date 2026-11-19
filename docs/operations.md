@@ -186,6 +186,53 @@ revision with `qmd search '<term>' -c approved` before resuming readers. If refr
 fails, leave readers stopped until the last verified snapshot is re-indexed. This
 manual setup is lexical only and does not enable Hindsight retention or a new service.
 
+### Connect the approved qmd index to a Paperclip agent
+
+Paperclip's `hermes_local` adapter runs the Hermes CLI (`/opt/hermes/bin/hermes`) inside
+the same combined Paperclip/Hermes container a seat's run uses -- there is no separate
+Hermes container or named profile (`-p`) to target; `HERMES_HOME` (default `/paperclip/.hermes`,
+whatever the seat's `adapterConfig.env.HERMES_HOME` names) is what selects its config.
+Paperclip itself has no agent-level MCP registration of its own (its "Gateways"/"remote MCP"
+UI exposes Paperclip's *own* data to external MCP clients, the opposite direction); the
+native connector remains Hermes' own `hermes mcp add`.
+
+With `APPROVED_TREE` and `QMD_STATE` already built by the runbook above and reachable inside
+that same container (there are no host bind mounts; keep them under the container's own
+`/paperclip` volume and run the runbook's commands with `docker exec`), grant the seat's
+exact `HERMES_HOME` the index through the discovery-first native connector:
+
+```sh
+PAPERCLIP_CONTAINER=my-paperclip-container \
+HERMES_HOME=/paperclip/.hermes \
+QMD_STATE_DIR="$QMD_STATE" \
+  compose/v4/bootstrap-qmd-gateway.sh
+```
+
+It installs qmd 2.8.3 into `/paperclip/npm-global` inside that container (network access
+depends on the deployment; the offline canary below copies a pre-built binary in instead),
+then runs `hermes mcp add` with `--command` pointed at that binary and `--env` pointed at
+`$QMD_STATE_DIR`'s `config`/`cache`. Discovery connects immediately and lists exactly the
+four read tools qmd's own MCP server exposes (`query`, `get`, `multi_get`, `status`) --
+there is no write or admin tool to exclude. It prompts to confirm enabling them and, on a
+rerun, to overwrite the existing registration; the script pipes "y" to both. Run
+`hermes mcp test qmd` (with the same `HERMES_HOME`) afterward to re-verify on demand, and
+`hermes tools list` to confirm "MCP servers: qmd all tools enabled".
+
+Run `python3 compose/v4/test/paperclip-qmd-gateway-canary.py` to rehearse this against the
+actual Paperclip Compose target offline: it starts the same disposable, network-disabled
+canary container as `paperclip-canary.py`, copies in a qmd 2.8.3 binary built from the
+existing `compose/Dockerfile.knowledge` image (no network inside the canary container),
+builds its own approved/draft/transient Git fixture entirely inside that one container
+(nothing shared or bind-mounted), runs the bootstrap script above against it, confirms
+Paperclip's own `adapters/hermes_local/test-environment` check passes for an agent whose
+`adapterConfig.env.HERMES_HOME` is that exact directory, creates that `hermes_local` agent,
+and then speaks MCP directly to the exact command/env Hermes stores to confirm the result
+is the approved text and excludes the draft revision and transient log, before and after a
+refresh to a second approved revision. It does not enable Hindsight, dispatch a model-driven
+run, or touch a live target, and it removes its container and volumes on exit. Simulating
+the model's own tool discovery through Hermes' deferred tool_search/describe/call catalog is
+a separate, not-yet-covered gap (see the canary's module docstring).
+
 ### Paperclip cold restore drill
 
 Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.
