@@ -1,0 +1,21 @@
+# Standalone authenticated preview. Use a new Compose project, not the running preview.
+services:
+  paperclip:
+    image: ralph-paperclip-private:2026.1117.0
+    pull_policy: never
+    environment:
+      HOST: 0.0.0.0
+      PORT: "${PAPERCLIP_PORT:-4320}"
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: private
+      PAPERCLIP_AUTH_BASE_URL_MODE: explicit
+      PAPERCLIP_AUTH_PUBLIC_BASE_URL: "http://127.0.0.1:${PAPERCLIP_PORT:-4320}"
+      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "${PAPERCLIP_AUTH_DISABLE_SIGN_UP:-true}"
+      PAPERCLIP_TELEMETRY_DISABLED: "1"
+      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:?Set a dedicated random Paperclip agent JWT secret}"
+    ports:
+      - "127.0.0.1:${PAPERCLIP_PORT:-4320}:${PAPERCLIP_PORT:-4320}"
+    volumes:
+      - state:/paperclip
+volumes:
+  state:
