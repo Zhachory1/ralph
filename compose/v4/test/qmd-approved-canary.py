@@ -1,4 +1,4 @@
-"""Verify pinned qmd lexical search indexes only the approved Git snapshot."""
+"""Verify pinned qmd lexical search stays on the approved Git snapshot across refreshes."""
 
 import argparse
 import json
@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 QMD_VERSION = "2.8.3"  # Matches compose/Dockerfile.knowledge.
 RFC = "docs/1-projects/fixture/rfc.md"
 APPROVED = "coppermeadow"
+APPROVED_NEXT = "silverfen"
 DRAFT = "violetdraft"
 LOG = "embertranscript"
 
@@ -63,6 +64,23 @@ def check_search(executable, root):
     assert not results(DRAFT), "Unapproved draft was searchable"
     assert not results(LOG), "Transient log was searchable"
     print("PASS: approved RFC is searchable; draft revision and transient log are absent")
+
+    # Only move the indexed worktree after the exact next approval is known.
+    git("switch", "main")
+    rfc.write_text(f"# Approved RFC, revision two\n\n{APPROVED_NEXT}\n", encoding="utf-8")
+    git("commit", "-am", "Approve second RFC revision")
+    approved_next = git("rev-parse", "HEAD")
+    git("switch", "draft")
+    git("switch", "--detach", approved_next, cwd=snapshot)
+    assert git("rev-parse", "HEAD", cwd=snapshot) == approved_next
+    assert not git("status", "--porcelain", cwd=snapshot)
+    qmd("update")
+    hits = results(APPROVED_NEXT)
+    assert len(hits) == 1 and hits[0]["file"] == "qmd://approved/1-projects/fixture/rfc.md", hits
+    assert not results(APPROVED), "Superseded approved text was still searchable"
+    assert not results(DRAFT), "Unapproved draft was searchable after refresh"
+    assert not results(LOG), "Transient log was searchable after refresh"
+    print("PASS: qmd refresh replaced the old revision without indexing draft or transient text")
 
 
 if __name__ == "__main__":
