@@ -8,7 +8,9 @@ const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const repoSlug = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-export async function runRoutineAudit({ board, companyId, routineId, runId, repoPath, repoName, audit, currentHead }) {
+export async function runRoutineAudit({
+  board, companyId, routineId, runId, repoPath, repoName, audit, currentHead, expected,
+}) {
   const routine = await board(`routines/${routineId}`);
   if (routine.id !== routineId || routine.companyId !== companyId) throw new Error("Unexpected Routine company");
   const runs = await board(`routines/${routineId}/runs`);
@@ -17,6 +19,9 @@ export async function runRoutineAudit({ board, companyId, routineId, runId, repo
   if (!run?.linkedIssueId || run.source !== "manual" || payload?.repo !== repoName || !Number.isSafeInteger(payload.pr_number)
       || payload.pr_number < 1 || typeof payload.head_sha !== "string" || !sha.test(payload.head_sha)) {
     throw new Error("Expected linked Routine run with the configured repository, PR number and exact head");
+  }
+  if (expected && (payload.pr_number !== expected.pr_number || payload.head_sha !== expected.head_sha)) {
+    throw new Error("Routine run does not match the discovered PR head");
   }
   const path = `issues/${run.linkedIssueId}`;
   const issue = await board(path);
@@ -71,18 +76,22 @@ async function main() {
     if (!response.ok) throw new Error(`Paperclip ${method} failed (${response.status})`);
     return response.json();
   };
+  const currentHead = await auditCloneHead(repoName, repoPath);
+  console.log(await runRoutineAudit({ board, companyId, routineId, runId, repoPath, repoName, audit: auditPr, currentHead }));
+}
+
+export async function auditCloneHead(repoName, repoPath) {
   const exec = promisify(execFile);
+  process.env.GIT_TERMINAL_PROMPT = "0";
   const git = async (...args) => (await exec("git", args, { cwd: repoPath, timeout: 15_000 })).stdout.trim();
   const remote = await git("remote", "get-url", "--all", "origin");
   if (remote !== `https://github.com/${repoName}.git`) throw new Error("Clone origin does not match the configured repository");
-  const currentHead = async (pr) => {
+  return async (pr) => {
     const ref = `refs/pull/${pr}/head`;
     const [head, actualRef] = (await git("ls-remote", "--exit-code", "origin", ref)).split(/\s+/);
     if (actualRef !== ref || !sha.test(head)) throw new Error("Could not verify current PR head");
     return head;
   };
-  process.env.GIT_TERMINAL_PROMPT = "0";
-  console.log(await runRoutineAudit({ board, companyId, routineId, runId, repoPath, repoName, audit: auditPr, currentHead }));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

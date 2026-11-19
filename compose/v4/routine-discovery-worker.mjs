@@ -1,19 +1,26 @@
 // Discover PRs requesting this account's review in one allowlisted repo and
 // trigger a read-only, idempotent Paperclip Routine run per (repo, pr, head).
 // Reuses the Routine's own idempotencyKey dedup (compose/v4/test/paperclip-routine-canary.py)
-// instead of a new state store; runRoutineAudit (routine-audit-worker.mjs) does the audit later.
+// instead of a new state store. With --audit, process each returned run serially.
 import { execFile } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { auditPr } from "../../coding-harness/audit-pr.js";
+import { auditCloneHead, runRoutineAudit } from "./routine-audit-worker.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const repoSlug = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const login = /^[\w.@-]+$/;
 
-export async function runInboundDiscovery({ board, companyId, routineId, repoName, listRequestedPrs, prHead }) {
+export async function runInboundDiscovery({
+  board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun,
+}) {
   const routine = await board(`routines/${routineId}`);
   if (routine.id !== routineId || routine.companyId !== companyId) throw new Error("Unexpected Routine company");
+  if (auditRun && routine.concurrencyPolicy !== "always_enqueue") {
+    throw new Error("An audit tick requires an always_enqueue Routine to keep PR heads separate");
+  }
   const numbers = await listRequestedPrs();
   const triggered = [];
   for (const pr_number of numbers) {
@@ -34,17 +41,33 @@ export async function runInboundDiscovery({ board, companyId, routineId, repoNam
       idempotencyKey: `pr-${repoName.toLowerCase()}-${pr_number}-${head_sha}`,
       payload: { repo: repoName, pr_number, head_sha },
     });
-    triggered.push({ pr_number, head_sha, run_id: run.id, linked_issue_id: run.linkedIssueId });
+    const row = { pr_number, head_sha, run_id: run.id, linked_issue_id: run.linkedIssueId };
+    if (auditRun) {
+      try {
+        row.audit_status = await auditRun(run.id, { pr_number, head_sha });
+      } catch (error) {
+        console.error(`  audit ${repoName}#${pr_number}: ${error.message}`);
+        row.audit_status = "failed";
+      }
+    }
+    triggered.push(row);
   }
   return triggered;
 }
 
 async function main() {
-  const [origin, companyId, routineId, repoName, reviewer, ...extra] = process.argv.slice(2);
+  const [origin, companyId, routineId, repoName, ...options] = process.argv.slice(2);
+  let repoPath;
+  if (options[0] === "--audit") {
+    options.shift();
+    repoPath = options.shift();
+    if (!repoPath || repoPath.startsWith("-")) throw new Error("--audit requires a local clone path");
+  }
+  const [reviewer, ...extra] = options;
   const reviewLogin = reviewer || "@me";
   if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(origin) || ![companyId, routineId].every((id) => uuid.test(id))
       || !repoSlug.test(repoName) || !login.test(reviewLogin) || extra.length) {
-    throw new Error("Usage: routine-discovery-worker.mjs BOARD_ORIGIN COMPANY_ID ROUTINE_ID OWNER/REPO [REVIEWER=@me]");
+    throw new Error("Usage: routine-discovery-worker.mjs ORIGIN COMPANY_ID ROUTINE_ID OWNER/REPO [--audit LOCAL_CLONE] [REVIEWER]");
   }
   const token = process.env.PAPERCLIP_API_KEY;
   delete process.env.PAPERCLIP_API_KEY;
@@ -71,8 +94,13 @@ async function main() {
     const out = await gh("pr", "view", String(pr_number), "-R", repoName, "--json", "headRefOid");
     return JSON.parse(out).headRefOid;
   };
-  console.log(JSON.stringify(
-    await runInboundDiscovery({ board, companyId, routineId, repoName, listRequestedPrs, prHead })));
+  const currentHead = repoPath && await auditCloneHead(repoName, repoPath);
+  const auditRun = currentHead && ((runId, expected) => runRoutineAudit({
+    board, companyId, routineId, runId, repoName, repoPath, expected, audit: auditPr, currentHead,
+  }));
+  const rows = await runInboundDiscovery({ board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun });
+  console.log(JSON.stringify(rows));
+  if (rows.some((row) => row.audit_status === "failed")) process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

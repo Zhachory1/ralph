@@ -115,10 +115,18 @@ manual Routine run with idempotency key `pr-<repo>-<number>-<head>` and the same
 `routine-audit-worker.mjs` expects. Paperclip's own idempotency key dedups a repeat
 discovery of the same (repo, PR, head): a second trigger returns the same run and linked
 issue instead of creating another one, so this command is safe to run repeatedly by hand.
-A PR whose head cannot be read is skipped and logged to stderr; it does not stop discovery
-of the rest. This command never posts a GitHub review, writes to GitHub, or audits
-anything itself — run `routine-audit-worker.mjs` against the triggered run id separately
-to publish a dossier. It discovers; it does not schedule, review, or merge.
+A PR whose head cannot be read is skipped and logged to stderr. To audit and publish
+dossiers in the same invocation, configure `RALPH_AUDIT_REPOS` as above and use a
+dedicated `always_enqueue` Routine so distinct heads do not coalesce:
+
+```sh
+node compose/v4/routine-discovery-worker.mjs http://127.0.0.1:PORT COMPANY_ID ROUTINE_ID OWNER/REPO --audit LOCAL_CLONE
+```
+
+Configure the host scheduler to run at most one invocation at a time. Each invocation
+audits serially and reports `audit_status` for each run. Failed audits leave the tick
+nonzero; rerunning reuses existing runs and dossiers. No GitHub writes or automatic
+closure after human review.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
