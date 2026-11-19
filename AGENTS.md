@@ -24,7 +24,7 @@ Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this rep
 - **Nothing private, internal, or employer-specific in this repository.** No internal hostnames, service names, document-standard names, MCP endpoints, ticket IDs, or incident-process detail. This repository is public. Layer 3 exists precisely so that material has somewhere else to live.
 - **No secrets, tokens, or credentials**, including in examples, tests, and fixtures. Examples use obvious placeholders.
 - **Invariants are enforced in permissions, not prose.** A safety property that exists only as text in a `SKILL.md` is not enforced, because Hermes can rewrite skill text. If you add a safety rule, add the token scope, blocked command, or branch protection that backs it, and say in the same change which mechanism enforces it.
-- **No self-review.** A distinct Reviewer may accept or request changes to the exact code commit it reviewed in its assigned Paperclip technical review stage. This is not a GitHub approval, RFC sign-off, merge, or deployment authorization. Human-only gates remain human-only.
+- **No self-review.** The owner creating a build issue must configure a native review stage with a Reviewer distinct from the Developer. Without that stage Paperclip can mark work done without independent review; do not treat that as technical acceptance. A distinct Reviewer may accept or request changes to the exact commit in its assigned stage. This is not GitHub approval, RFC sign-off, merge, or deployment authorization.
 - **Pin image versions.** Never `latest`, anywhere.
 
 ## Conventions

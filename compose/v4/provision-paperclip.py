@@ -22,7 +22,9 @@ SEATS = (
 
 
 WORKFLOW_SEATS = (
-    ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists."),
+    ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists. "
+     "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
+     "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch."),
     ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge."),
     ("Comms", "general", "hermes_local", "Triage communications; external sends require Director approval."),

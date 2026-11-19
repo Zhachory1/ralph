@@ -3,7 +3,12 @@
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
 
-For a code PR the Developer resubmits the corrected head by moving the issue to
+When the Feature Workflow Manager creates a build issue, it must set
+`executionPolicy.stages` to `[{"type":"review","participants":[{"type":"agent","agentId":"<reviewer-id>"}]}]`
+and verify that the returned participant is the intended Reviewer, not the Developer.
+This is a per-issue policy: without it Paperclip does not require independent review.
+An unconfigured issue marked Done is not proof of technical acceptance.
+For a configured code PR the Developer resubmits the corrected head by moving the issue to
 `in_review`. Paperclip selects the independent Reviewer. Its `done` transition with
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
