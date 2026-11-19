@@ -17,17 +17,29 @@ the test before recording Done; a successful model run alone does not close the 
 
 The authenticated RFC canary verifies that Paperclip preserves exact document revisions, remaps
 anchored comments, rejects stale pending confirmations, and restricts a confirmation addressed
-to the Director. It also found a gap: after the Director approved revision B and the RFC changed
-to C, a company operator could mark the RFC issue done without approval of C. The dependent
-issue could then resume. Do not use RFC issue status alone to authorize work or publication.
-The storage check re-reads the Director's accepted confirmation and fetches the immutable
-revision it names. It commits B byte-for-byte to a disposable Git repository, refuses
-unapproved C, and verifies a retry leaves the same commit in place. It is not a live publisher.
+to the Director. Paperclip's native Done transition resumes a blocked downstream issue by
+default even if the RFC changed from the Director-approved revision B to an unapproved C --
+that native release is not itself a revision or publication check, and most deployments do not
+need it to be. A deployment that wants Done to require the exact approved revision can opt into
+that stricter behavior with the canary's `--require-downstream-gate` flag. Publication safety
+is the separate, already-covered storage check: it re-reads the Director's accepted
+confirmation, fetches the immutable revision it names, commits B byte-for-byte to a disposable
+Git repository, refuses unapproved C, and verifies a retry leaves the same commit in place. It
+is not a live publisher.
 
 The offline routing canary uses scripted Hermes proposals and Council verdicts with real
 Paperclip confirmations and assignment records. Initiative approval is requested only after
 Council PASS and read back for the exact revision before assignment. Denials, stale evidence,
 and unresolved gates create no assignment. This does not wire Hermes or Council into live routing.
+
+The first integrated slice connects `draftRfc`, the Council panel and `decideRequestRoute`
+end to end, as a library function and as a host CLI that reuses the Routine audit worker's
+loopback-origin, board-API-bearer-token convention. It drafts an RFC, runs the real
+three-judge panel, and only on an initiative advance stores the draft as a Paperclip
+`issue_document` and opens a Director-only `request_confirmation` naming that exact revision.
+It does not poll for the Director's decision, verify the revision again before publication
+(the Git-storage check above is that assurance), or release a downstream blocker itself --
+Paperclip's native Done transition already does that once the issue is marked done.
 
 The manual Routine canary checks that replaying the same PR-head key reuses the Routine
 run and linked issue. The opt-in host worker reads that run, verifies the linked issue,
