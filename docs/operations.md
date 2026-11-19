@@ -34,6 +34,10 @@ Run `python3 compose/v4/test/paperclip-routing-canary.py` with the same image an
 on the host. It uses scripted proposals and Council verdicts against an authenticated,
 disposable Paperclip board. It creates fixture assignments only on `advance`.
 
+Run `python3 compose/v4/test/paperclip-routine-canary.py` to probe the manual PR audit
+flow. It uses the same cached image for Paperclip, the pinned upstream Paperclip image
+for the isolated audit checks, and Git and Node.js on the host. No GitHub login is needed.
+
 For the standalone v4 Council panel, `python3 compose/v4/test/council-judge-docker.py`
 checks the cached pinned Hermes image and launcher/panel wiring with three synthetic model routes,
 no external network, and a non-functional provider key. It also checks disposable-container cleanup.
