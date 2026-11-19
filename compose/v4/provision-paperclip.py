@@ -81,6 +81,10 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents,
             raise ValueError(f"Conflicting model for {name}; existing configuration preserved")
         if seat["permissions"].get("canCreateAgents") or seat["runtimeConfig"].get("heartbeat", {}).get("enabled"):
             raise ValueError(f"Conflicting hiring or heartbeat policy for {name}")
+        if name in MANAGERS:
+            access = board(f"agents/{seat['id']}")["access"]
+            if access.get("taskAssignSource") != "explicit_grant" or not access.get("canAssignTasks"):
+                raise ValueError(f"Missing explicit assignment grant for {name}; restore it on the board")
         roster[name] = seat["id"]
         budget("agent", seat["id"], agent_cents, apply=False)
 

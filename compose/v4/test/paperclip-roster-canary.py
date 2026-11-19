@@ -36,6 +36,8 @@ def check_roster(container):
         assert seat["adapterType"] == ("opencode_local" if coding else "hermes_local")
         if coding:
             assert seat["adapterConfig"]["model"] == config["model"]
+        else:
+            assert seat["adapterConfig"]["hermesCommand"] == "/opt/hermes/bin/hermes"
         assert seat["reportsTo"] == (None if name == "Orchestrator" else roster["Orchestrator"])
         assert seat["runtimeConfig"]["heartbeat"]["enabled"] is False
         assert seat["permissions"]["canCreateAgents"] is False, name
@@ -65,6 +67,19 @@ def check_roster(container):
     fixture["fixture"]["wait_for_health"](container, fixture["ORIGIN"] + "/api/health", "Paperclip", paperclip=True)
     assert reconcile(readonly) == full
     assert board(f"issues/{issue['id']}")["status"] == "backlog"
+    manager = full["Feature Workflow Manager"]
+    def manager_grant(enabled):
+        board(f"agents/{manager}/permissions", {
+            "canCreateAgents": False, "canCreateSkills": False, "canAssignTasks": enabled,
+        }, "PATCH")
+    manager_grant(False)
+    try:
+        reconcile(readonly)
+    except ValueError as error:
+        assert "assignment grant" in str(error)
+    else:
+        raise AssertionError("Missing explicit manager assignment grant was silently accepted")
+    manager_grant(True)
     try:
         reconcile(readonly, {"model": "fixture/different"})
     except ValueError as error:
@@ -74,7 +89,6 @@ def check_roster(container):
     print("PASS: reconciliation preserves seat IDs and rejects drift without writes")
 
     bearer = runpy.run_path(str(TESTS / "paperclip-board-key-canary.py"))["bearer"]
-    manager = full["Feature Workflow Manager"]
     # A backlog assignment exercises native authorization without starting a model run.
     recipient = board(f"{root}/agents", {"name": "Fixture assignee", "adapterType": "process",
                                          "adapterConfig": {"command": "/bin/true"}})

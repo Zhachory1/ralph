@@ -360,7 +360,8 @@ Comms reports to the human Director. The managers receive native task-assignment
 It recognizes the pilot's `Ralph Orchestrator`, `RFC Author`, `OpenCode Developer` and
 `SRE Ops` names. Other seats, instructions, paused states and credentials are preserved.
 Resolve reported identity, model, budget, hiring, heartbeat or reporting conflicts on
-the board before retrying. Existing instructions and grants are not rewritten. This
+the board before retrying. A matched manager must have an explicit `tasks:assign`
+grant; an implicit membership default is not sufficient. Existing instructions and grants are not rewritten. This
 provisions seat definitions; the adapter credentials and dispatch checks are separate.
 
 ### Arm a prepared Paperclip sandbox task
