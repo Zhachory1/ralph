@@ -14,6 +14,16 @@ the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
 head needs another review. GitHub approval and merge remain separate human decisions.
 
+The Feature Workflow Manager applies the same review-stage primitive to the Author's RFC
+issue, naming itself -- not a human -- the review participant, and verifies the returned
+stage before dispatch; a missing stage is a configuration defect to repair, not a signal
+that in_review is a Director decision. The Author saves the document and moves the issue
+to in_review itself; it does not also address a confirmation to a human for that stage.
+Paperclip's native engine then reassigns the issue to the Manager and wakes the Manager's
+own run (`executionContinuation.trigger.reason: "execution_review_requested"`, no
+interaction attached) to coordinate the independent Council -- the same native mechanism
+as the build-issue stage above, not a Director confirmation.
+
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
 The Paperclip canary checks whether a board assignment wakes `hermes_local`, which uses its

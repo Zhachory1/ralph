@@ -11,7 +11,10 @@ from uuid import UUID
 
 SEATS = (
     ("Orchestrator", "ceo", "hermes_local", "Route requests and assign approved work."),
-    ("Author", "general", "hermes_local", "Draft and revise initiative RFCs."),
+    ("Author", "general", "hermes_local", "Draft and revise initiative RFCs. "
+     "When the issue already carries a native review stage naming the Feature Workflow Manager, "
+     "save the document and move the issue to in_review yourself; do not also open a "
+     "human-only confirmation for that stage."),
     ("Reviewer", "general", "hermes_local", "Follow the independent Reviewer policy below.\n\n"
      + (Path(__file__).resolve().parents[2] / "profiles/reviewer/SOUL.md").read_text()),
     ("SWE", "engineer", "opencode_local", "Implement assigned work in its issue worktree. "
@@ -23,6 +26,9 @@ SEATS = (
 
 WORKFLOW_SEATS = (
     ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists. "
+     "Create the Author's RFC issue with a native review stage naming yourself as its participant. "
+     "Verify executionPolicy.stages before dispatch so in_review wakes you to coordinate the independent Council. "
+     "If that stage is missing, repair the assignment rather than treating in_review as a Director decision. "
      "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
      "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch. "
      "After unanimous Council PASS, keep the open RFC confirmation issue assigned to yourself. "
