@@ -89,7 +89,16 @@
      async hasExplicitBlockerPath({ companyId, issueId }) {
 --- a/server/src/modules/wake-queue/application/use-cases.ts
 +++ b/server/src/modules/wake-queue/application/use-cases.ts
-@@ -580,6 +580,13 @@
+@@ -573,12 +573,19 @@
+       : false;
+-
++
+   const hasExplicitBlockerPath =
+-    immediateApplies && !reviewParticipantApplies
++    reviewParticipantApplies || immediateApplies
+       ? await transaction.hasExplicitBlockerPath({
+           companyId: issue.companyId,
+           issueId: issue.id,
          })
        : false;
 -
@@ -103,12 +112,12 @@
 +
    const expectedRetryReason:
      "assignment_recovery" | "issue_continuation_needed" =
-     issue.status === "todo"
-@@ -611,6 +618,7 @@
+@@ -611,6 +618,8 @@
        applies: reviewParticipantApplies,
        isExecutionReviewParticipantRecoveryRun:
          isExecutionReviewParticipantRecoveryRun(run),
 +      hasPendingWakeInteraction,
++      hasExplicitBlockerPath,
      },
      immediate: {
        applies: immediateApplies,
@@ -504,7 +513,7 @@
 +}
 --- /dev/null
 +++ b/server/src/__tests__/heartbeat-handoff-execution-wait.test.ts
-@@ -0,0 +1,477 @@
+@@ -0,0 +1,479 @@
 +import { randomUUID } from "node:crypto";
 +import { and, eq, sql } from "drizzle-orm";
 +import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -968,12 +977,14 @@
 +    if (savedBeforeStartup) await f.wake();
 +    const errors: unknown[] = [];
 +    coordinator = createDeliveryWorkCoordinator({ owner: db, canRun: () => true, canReconcile: () => true, onError: error => errors.push(error) });
-+    await heartbeatService(db).registerExecutionHandoffWork(coordinator, () => true).ready;
++    const worker = heartbeatService(db).registerExecutionHandoffWork(coordinator, () => true);
++    await worker.ready;
 +    if (!savedBeforeStartup) await f.wake();
 +    expect(await f.successors()).toHaveLength(0);
 +    await f.release();
 +    await vi.waitFor(async () => expect(await f.successors()).toHaveLength(1), { timeout: 10_000 });
 +    await vi.waitFor(() => expect(coordinator!.nextWakeAt()).toBeNull(), { timeout: 10_000 });
++    await vi.waitFor(() => expect(worker.reconciliationSnapshot().reconciled).toBe(true), { timeout: 10_000 });
 +    const reads = vi.spyOn(db, "select");
 +    try {
 +      await new Promise(resolve => setTimeout(resolve, 1100));
@@ -1003,23 +1014,25 @@
  import { randomBytes, randomUUID } from "node:crypto";
  import { and, eq } from "drizzle-orm";
  import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-@@ -16,6 +18,7 @@
+@@ -16,6 +18,8 @@
    heartbeatRuns,
    issueComments,
    issueRecoveryActions,
++  issueRelations,
 +  issueThreadInteractions,
    issues,
    nativeRunFinalizations,
    subscribeDatabaseWork,
-@@ -75,6 +78,7 @@
+@@ -75,6 +79,8 @@
      await db.delete(heartbeatRuns);
      await db.delete(agentWakeupRequests);
      await db.delete(issueRecoveryActions);
++    await db.delete(issueRelations);
 +    await db.delete(issueThreadInteractions);
      await db.delete(issues);
      await db.delete(agents);
      await db.delete(companies);
-@@ -211,6 +215,63 @@
+@@ -211,6 +217,86 @@
      }});
      return { recorded, rows };
    }
@@ -1080,6 +1093,29 @@
 +    expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId)))
 +      .toHaveLength(1);
 +  });
++
++  it.each([
++    ["in_progress", false, true],
++    ["done", false, false],
++    ["in_progress", true, false],
++  ] as const)("rechecks blocker status %s and hidden %s under escalation lock", async (status, hidden, waiting) => {
++    const companyId = await seedCompany();
++    const agentId = await seedAgent({ companyId });
++    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "in_review" });
++    const runId = await seedRun({ companyId, agentId, status: "succeeded", contextSnapshot: { issueId } });
++    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
++    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
++    const blockerId = await seedIssue({ companyId, status });
++    if (hidden) await db.update(issues).set({ hiddenAt: new Date() }).where(eq(issues.id, blockerId));
++    await db.insert(issueRelations).values({ companyId, issueId: blockerId, relatedIssueId: issueId, type: "blocks" });
++
++    const result = await recoveryService(db, { enqueueWakeup: vi.fn() }).escalateStrandedAssignedIssue({
++      issue, previousStatus: "in_review", latestRun: run, recoveryCause: "execution_review_participant_recovery",
++    });
++    expect(result?.status ?? null).toBe(waiting ? null : "blocked");
++    expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId)))
++      .toHaveLength(waiting ? 0 : 1);
++  });
 -
 +
    it.each(["legacy", "native"])("keeps %s in-flight work and every recovery receipt while omitting output from release reads", async runtimeMode => {
@@ -1104,49 +1140,57 @@
      hasExplicitBlockerPath: vi.fn(async () => false),
      isAutomaticRecoverySuppressedByPauseHold: vi.fn(async () => false),
      isImmediateRecoverySourceBlocked: vi.fn(async () => false),
-@@ -785,6 +786,30 @@
+@@ -785,6 +786,37 @@
      expect(result.outcome.kind === "blocked" && result.outcome.noticeKind).toBe("immediate_execution_path");
      expect(recovery.escalateStrandedAssignedIssue).toHaveBeenCalledTimes(1);
    });
 +
-+  it.each([true, false])("checks a pending wake before recovering a review participant: %s", async (pending) => {
-+    const transaction = createFakeTransaction({ hasPendingWakeInteraction: vi.fn(async () => pending) });
-+    const issue: IssueSnapshot = {
-+      ...ISSUE,
-+      status: "in_review",
-+      executionState: { status: "pending", currentParticipant: { type: "agent", agentId: RUN.agentId } },
-+    };
-+    const run: RunSnapshot = {
-+      ...RUN,
-+      status: "succeeded",
-+      contextSnapshot: { retryReason: "execution_review_participant_recovery" },
-+    };
-+    const recovery = createFakeRecovery();
-+    const release = createReleaseIssueExecution({
-+      issueLock: createFakeIssueLock(createFakeHost(), transaction, issue, run),
-+      recovery,
-+    });
++  it.each([[true, false], [false, true], [false, false]])(
++    "checks pending interaction %s and blocker %s before recovering a review participant",
++    async (pending, blocked) => {
++      const transaction = createFakeTransaction({
++        hasPendingWakeInteraction: vi.fn(async () => pending),
++        hasExplicitBlockerPath: vi.fn(async () => blocked),
++      });
++      const issue: IssueSnapshot = {
++        ...ISSUE,
++        status: "in_review",
++        executionState: { status: "pending", currentParticipant: { type: "agent", agentId: RUN.agentId } },
++      };
++      const run: RunSnapshot = {
++        ...RUN,
++        status: "succeeded",
++        contextSnapshot: { retryReason: "execution_review_participant_recovery" },
++      };
++      const recovery = createFakeRecovery();
++      const release = createReleaseIssueExecution({
++        issueLock: createFakeIssueLock(createFakeHost(), transaction, issue, run),
++        recovery,
++      });
 +
-+    const result = await release({ companyId: RUN.companyId, runId: RUN.id, now: new Date() });
-+    expect(transaction.hasPendingWakeInteraction).toHaveBeenCalledWith({ companyId: ISSUE.companyId, issueId: ISSUE.id });
-+    expect(result.outcome.kind).toBe(pending ? "released" : "blocked");
-+    expect(recovery.escalateStrandedAssignedIssue).toHaveBeenCalledTimes(pending ? 0 : 1);
-+  });
++      const result = await release({ companyId: RUN.companyId, runId: RUN.id, now: new Date() });
++      expect(transaction.hasPendingWakeInteraction).toHaveBeenCalledWith({ companyId: ISSUE.companyId, issueId: ISSUE.id });
++      expect(transaction.hasExplicitBlockerPath).toHaveBeenCalledWith({ companyId: ISSUE.companyId, issueId: ISSUE.id });
++      expect(result.outcome.kind).toBe(pending || blocked ? "released" : "blocked");
++      expect(recovery.escalateStrandedAssignedIssue).toHaveBeenCalledTimes(pending || blocked ? 0 : 1);
++    },
++  );
  });
 -
 +
  const ACTIVE_EXECUTION_RUN: WakeAdmissionActiveExecutionRun = {
 --- a/server/src/modules/wake-queue/domain/policy.test.ts
 +++ b/server/src/modules/wake-queue/domain/policy.test.ts
-@@ -303,6 +303,7 @@
+@@ -303,6 +303,8 @@
    reviewParticipant: {
      applies: false,
      isExecutionReviewParticipantRecoveryRun: false,
 +    hasPendingWakeInteraction: false,
++    hasExplicitBlockerPath: false,
    },
    immediate: {
      applies: false,
-@@ -435,6 +436,18 @@
+@@ -435,6 +437,32 @@
        expected: { kind: "released" },
      },
      {
@@ -1157,6 +1201,20 @@
 +          applies: true,
 +          isExecutionReviewParticipantRecoveryRun: true,
 +          hasPendingWakeInteraction: true,
++          hasExplicitBlockerPath: false,
++        },
++      },
++      expected: { kind: "released" },
++    },
++    {
++      name: "released: an unfinished blocker owns the next review action even after a recovery run",
++      facts: {
++        ...baseReleaseRecoveryFacts,
++        reviewParticipant: {
++          ...baseReleaseRecoveryFacts.reviewParticipant,
++          applies: true,
++          isExecutionReviewParticipantRecoveryRun: true,
++          hasExplicitBlockerPath: true,
 +        },
 +      },
 +      expected: { kind: "released" },
@@ -1167,19 +1225,21 @@
          ...baseReleaseRecoveryFacts,
 --- a/server/src/modules/wake-queue/domain/policy.ts
 +++ b/server/src/modules/wake-queue/domain/policy.ts
-@@ -213,6 +213,7 @@
+@@ -213,6 +213,8 @@
    applies: boolean;
    /** True when the finishing run was itself a review-participant-recovery retry. */
    isExecutionReviewParticipantRecoveryRun: boolean;
 +  hasPendingWakeInteraction: boolean;
++  hasExplicitBlockerPath: boolean;
  };
 -
 +
  export type ReleaseRecoveryImmediateFacts = {
-@@ -384,6 +385,7 @@
+@@ -384,6 +386,8 @@
        facts.suppressImmediateRecovery ||
        shared.hasExistingExecutionPath ||
        shared.hasPersistedMonitor ||
++      reviewParticipant.hasExplicitBlockerPath ||
 +      reviewParticipant.hasPendingWakeInteraction ||
        shared.suppressedByPauseHold
      ) {
@@ -1239,20 +1299,27 @@
    /**
     * Pausing an agent does not turn an already committed passive response into
     * stranded work. This only preserves the exact current wait; it grants no
-@@ -4063,6 +4045,11 @@
+@@ -4063,6 +4045,18 @@
        )).limit(1).then((rows) => rows[0] ?? null);
        if (pendingHandoff) return null;
 -
 +
-+      if (
-+        input.recoveryCause === EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON &&
-+        await hasPendingWakeInteraction(tx as unknown as Db, current.companyId, current.id)
-+      ) return null;
++      if (input.recoveryCause === EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON) {
++        if (await hasPendingWakeInteraction(tx as unknown as Db, current.companyId, current.id)) return null;
++        const blockerIds = await existingUnresolvedBlockerIssueIds(current.companyId, current.id, tx);
++        if (blockerIds.length) {
++          const [blocker] = await tx.select({ id: issues.id }).from(issues).where(and(
++            eq(issues.companyId, current.companyId), inArray(issues.id, blockerIds),
++            notInArray(issues.status, ["done", "cancelled"]), isNull(issues.hiddenAt),
++          )).limit(1);
++          if (blocker) return null;
++        }
++      }
 +
        return applyStrandedAssignedIssueEscalation(input, tx, publications, postCommitActions);
      });
      if (updated) {
-@@ -4768,7 +4755,7 @@
+@@ -4768,7 +4762,7 @@
          continue;
        }
 -
@@ -1262,7 +1329,7 @@
          result.skipped += 1;
          continue;
        }
-@@ -5992,7 +5979,7 @@
+@@ -5992,7 +5986,7 @@
            continue;
          }
 -

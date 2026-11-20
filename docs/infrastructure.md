@@ -22,9 +22,9 @@ once and discards it on a stale review stage, assignment, or cancellation instea
 handoff that no longer matches the current assignment. It does not change any approval gate or
 add a new scheduler; the existing heartbeat scheduler still owns dispatch. Retry deduplication
 also matches the original agent, so a different agent's handoff is not mistaken for its retry.
-The local patch also treats a pending, wake-enabled interaction on the same issue as a durable
-review wait and rechecks it before escalation. Resolved interactions and cards without a wake
-do not suppress recovery.
+The local patch also treats pending, wake-enabled interactions and unfinished visible blockers as
+durable review waits, and rechecks both before escalation. Resolved interactions, cards without
+a wake, and completed or hidden blockers do not suppress recovery.
 
 The standalone private preview (`compose/v4/paperclip-private.yml`) runs only the combined
 Paperclip/Hermes image with authenticated access, a loopback-only published port, a dedicated

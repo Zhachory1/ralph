@@ -65,6 +65,8 @@ if [ ! -f "$marker" ]; then
   payload=$(jq -nc --argjson blockers "$blockers" '{blockedByIssueIds:$blockers}')
   updated=$(pc --json "$payload" -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue")
   printf '%s' "$updated" | jq -e '.status == "in_review" and (.blockedByIssueIds|length)==3' >/dev/null
+  pc --json '{"body":"Council reviews are requested; I am waiting for the linked tasks."}' \
+    "$PAPERCLIP_API_URL/api/issues/$issue/comments" >/dev/null
   while IFS= read -r judge_issue; do
     pc --json '{"status":"todo"}' -X PATCH "$PAPERCLIP_API_URL/api/issues/$judge_issue" >/dev/null
   done < "$marker"
@@ -92,6 +94,8 @@ else
     payload=$(jq -nc --argjson blockers "$blockers" '{blockedByIssueIds:$blockers}')
     pc --json "$payload" -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" |
       jq -e '.status == "in_review" and (.blockedByIssueIds|length)==4' >/dev/null
+    pc --json '{"body":"I requested clarification and will wait for the judge."}' \
+      "$PAPERCLIP_API_URL/api/issues/$issue/comments" >/dev/null
     pc --json '{"status":"todo"}' -X PATCH "$PAPERCLIP_API_URL/api/issues/$clarification" >/dev/null
   elif [ DECISION_LITERAL = "revise" ]; then
     pc --json '{"status":"todo","comment":"Please address the security concern from Council."}' \
@@ -268,7 +272,9 @@ def check_council_comments(container, *, dissent=False, unclear=False):
         for run in board(f"{path}/runs") if run["agentId"] == manager["id"]
     ]
     reasons = [(run.get("contextSnapshot") or {}).get("wakeReason") for run in manager_runs]
-    assert reasons.count("issue_blockers_resolved") == (2 if unclear else 1), reasons
+    details = [(run["id"], run["status"], run.get("errorCode"), (run.get("stderrExcerpt") or "")[-300:])
+               for run in manager_runs]
+    assert reasons.count("issue_blockers_resolved") == (2 if unclear else 1), (reasons, details)
     print("PASS: attributed natural-language comments release the manager's native review dependency;",
           "dissent returns to the Author." if dissent else
           "clarification reaches the same judge before confirmation." if unclear else
