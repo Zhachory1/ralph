@@ -1,4 +1,4 @@
-# First offline slice: Gmail/Chat intake into Paperclip Routines (#266)
+# Gmail/Chat intake into Paperclip Routines (#266)
 
 `compose/v4/comms-intake-worker.mjs` turns one normalized Gmail Pub/Sub
 notification or Google Chat `MESSAGE` event into a native Paperclip Routine
@@ -11,8 +11,8 @@ wired to act) follows #261.
 
 **Trust contract.** A local CLI, invoked synchronously by a bridge that has
 already authenticated the event with Google (a verified Pub/Sub push
-subscription, or a verified Chat webhook bearer token) — neither exists in
-this repo yet, and this is not a network listener; it claims no live
+subscription, or a verified Chat webhook bearer token). This worker is not a
+network listener; it claims no live
 ingress. It adds no ingress auth of its own: a shared secret inside the
 event payload would be neither Google's auth nor a real boundary for a call
 that is, by construction, already local and trusted, and would only persist
@@ -31,9 +31,44 @@ linked issue — verified against a disposable, authenticated local Paperclip
 instance, which is also what showed `source` is restricted to
 `"manual"|"api"`.
 
-Not proven here: the Gmail-side normalization step, a registered Chat
-webhook, or any Routine actually assigned to act on a comms issue.
+## Authenticated Chat bridge
+
+`compose/v4/chat-ingress.py` is an opt-in, loopback-only HTTP bridge for a
+non-add-on Google Chat app configured with an **HTTP endpoint URL** audience.
+It uses the existing `google-auth` host dependency to verify Google's OIDC
+signature and the configured audience, then requires the verified service
+account `chat@system.gserviceaccount.com`. It forwards human `MESSAGE` events
+to the existing intake worker, which enforces the space allowlist and Routine
+idempotency. Bot events and the app's own replies are ignored. Invalid tokens
+are rejected; verification or board outages return a retryable failure.
+
+Set `PAPERCLIP_API_KEY` through the host's secret manager, not a command-line
+argument. The key inherits its issuing account's authority: use an account
+restricted to the intended company. With `google-auth` and `requests` installed:
+
+```sh
+python3 compose/v4/chat-ingress.py \
+  --origin http://127.0.0.1:3100 --company-id COMPANY_UUID --routine-id ROUTINE_UUID \
+  --spaces spaces/example --audience https://example.invalid/chat --port 18765
+```
+
+The bridge listens only on `127.0.0.1`; a separately authorized, rate-limited
+HTTPS ingress must forward `/chat` without changing the configured audience or
+logging tokens and message bodies. It must supply one `Content-Length` and no
+chunked body; the bridge accepts at most 256 KiB. It never sends Chat messages. Offline tests
+exercise Google's verifier with synthetic keys and the board path with a mocked
+verifier; they do not prove a real Google connection or activate routing.
+
+Not yet implemented: Gmail history resolution, Chat sender attribution
+([#304](https://github.com/Zhachory1/ralph/issues/304)), Chat thread-to-issue
+continuity, a registered Chat webhook, or approved external sends. Do not
+activate live Chat routing until sender attribution and thread continuity exist.
 
 Verify: `node --test compose/v4/test/comms-intake-worker.test.mjs` — offline,
 synthetic, no Docker, no live credentials, including one CLI boundary test
 spawning the real worker over stdin against a loopback-only stand-in.
+Run `python3 compose/v4/test/test-chat-ingress.py` for the Chat authentication
+boundary and `python3 compose/v4/test/paperclip-chat-ingress-canary.py` with the
+cached Paperclip image for the native Routine dispatch and replay check.
+Run `python3 compose/v4/test/paperclip-chat-oidc-canary.py` with the same image
+to check Google's library against synthetic signed tokens without network access.

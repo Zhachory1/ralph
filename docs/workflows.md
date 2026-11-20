@@ -65,6 +65,10 @@ Paperclip confirmations and assignment records. Initiative approval is requested
 Council PASS and read back for the exact revision before assignment. Denials, stale evidence,
 and unresolved gates create no assignment. This does not wire Hermes or Council into live routing.
 
+The opt-in Chat bridge verifies Google's token before forwarding human messages to the
+existing allowlisted, idempotent Routine intake. Offline checks use synthetic signed tokens
+and a disposable Paperclip board; they do not activate a live webhook or send.
+
 The first integrated slice connects `draftRfc`, the Council panel and `decideRequestRoute`
 end to end, as a library function and as a host CLI that reuses the Routine audit worker's
 loopback-origin, board-API-bearer-token convention. It drafts an RFC, runs the real

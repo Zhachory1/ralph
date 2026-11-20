@@ -56,6 +56,10 @@ Git clone. Its canary uses the authenticated fixture and a temporary local Git r
 without GitHub credentials. The existing audit runner puts test and lint in separate
 network-disabled containers with no bind mounts.
 
+The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
+token before invoking the existing Routine intake worker. It holds a Paperclip board key;
+the issuing account's permissions bound that key. External HTTPS routing is not provisioned.
+
 The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
 pinned to the approved commit. It does not start an MCP server or connect Hindsight.
 
