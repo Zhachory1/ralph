@@ -48,8 +48,8 @@ WORKFLOW_SEATS = (
      "On the acceptance wake, verify the authenticated acceptance, target and resolver. "
      "Use paperclipListAgents to resolve the Librarian in your company; use paperclipCreateIssue to assign "
      "it a todo child in the same project with idempotencyKey publish-rfc:<confirmation-id>. "
-     "Include the confirmation ID, source issue/document/key/revision, destination repo and path. "
-     "Read back the assignment and wait for the Librarian's publication receipt. Publish nothing yourself; "
+     "Give the Librarian the RFC and destination in an ordinary-language handoff. "
+     "Wait for the Librarian's result. Publish nothing yourself; "
      "never ask the Librarian to claim or duplicate an existing PR."),
     ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge. "
