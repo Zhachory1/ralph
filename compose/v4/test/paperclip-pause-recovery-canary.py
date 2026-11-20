@@ -21,7 +21,7 @@ issue=$(printf '%s' "$run" | jq -r '.issueId')
 reason=$(printf '%s' "$run" | jq -r '.contextSnapshot.wakeReason // empty')
 if [ "$reason" = issue_disposition_repair ]; then
   marker="/tmp/paused-repair-$FIXTURE_ADAPTER"
-  if [ ! -f "$marker" ]; then touch "$marker"; sleep 90; fi
+  if [ ! -f "$marker" ]; then printf '%s\n' "$PAPERCLIP_RUN_ID" > "$marker"; sleep 90; fi
   pc --json '{"status":"done","comment":"The resumed owner completed its task."}' -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" >/dev/null
 else
   pc --json '{"comment":"The original owner needs to verify the receipt."}' -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" >/dev/null
@@ -40,7 +40,7 @@ def wait_for(description, read, timeout=45):
     raise AssertionError(f"Timed out waiting for {description}")
 
 
-def check_adapter(board, root, secret, adapter):
+def check_adapter(container, board, root, secret, adapter):
     env = {"FIXTURE_ADAPTER": adapter}
     if adapter == "hermes":
         env.update({
@@ -95,6 +95,15 @@ def check_adapter(board, root, secret, adapter):
         episode, action["attemptCount"], action["maxAttempts"]
     )
 
+    def repair_started():
+        marker = subprocess.run(
+            ["docker", "exec", container, "cat", f"/tmp/paused-repair-{adapter}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return marker.returncode == 0 and marker.stdout.strip() == repair["id"]
+
+    wait_for(f"{adapter} repair process", repair_started)
+    assert board(f"heartbeat-runs/{repair['id']}")["status"] == "running"
     before = {row["runId"] for row in board(f"{path}/runs")}
     board(f"{agent_path}/pause", {})
 
@@ -106,7 +115,20 @@ def check_adapter(board, root, secret, adapter):
             return current_run
         return None
 
-    cancelled = wait_for("pause and cancellation", paused, 30)
+    try:
+        cancelled = wait_for("pause and cancellation", paused, 30)
+    except AssertionError as error:
+        if str(error) != "Timed out waiting for pause and cancellation":
+            raise
+        current_agent = board(agent_path)
+        current_run = board(f"heartbeat-runs/{repair['id']}")
+        cancellation = (current_run.get("resultJson") or {}).get("executionCancellation") or {}
+        raise AssertionError(
+            f"{adapter} pause did not settle: agent={current_agent['status']}, "
+            f"lifecycle={current_agent.get('lifecycleState')}, "
+            f"run={current_run['status']}, error={current_run.get('errorCode')}, "
+            f"cancellation={cancellation.get('state')}"
+        ) from None
     assert cancelled["errorCode"] == "agent_paused"
     result = cancelled.get("resultJson") or {}
     assert (result.get("executionCancellation") or {}).get("state") == "acknowledged"
@@ -191,8 +213,8 @@ def main(container):
     subprocess.run(["docker", "exec", "-i", "-u", "node", container, "sh", "-ec",
                     "cat > /tmp/pause-recovery-fixture; chmod 700 /tmp/pause-recovery-fixture"],
                    input=SCRIPT, text=True, check=True, timeout=10)
-    check_adapter(board, root, secret, "process")
-    check_adapter(board, root, secret, "hermes")
+    check_adapter(container, board, root, secret, "process")
+    check_adapter(container, board, root, secret, "hermes")
 
 
 if __name__ == "__main__":
