@@ -10,6 +10,7 @@ COPY paperclip-handoff.patch /tmp/paperclip-handoff.patch
 RUN git apply --verbose -p1 /tmp/paperclip-handoff.patch && \
     cd server && \
     PAPERCLIP_TSC_EMIT_ONLY=1 PAPERCLIP_TYPECHECK_LOW_MEMORY=1 node ../scripts/run-tsc.mjs && \
+    cp -Rf ../packages/paperclip-runner/dist/. dist/vendor/paperclip-runner/ && \
     node scripts/bundle-runtime.mjs
 
 FROM paperclip-base
