@@ -38,7 +38,8 @@ This is a second, separate trigger from the weekly card above, and never a subst
    `X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID`, not a board credential. Find the assigned
    confirmation and verify that `kind` is `request_confirmation`, `status` and `result.outcome`
    are `accepted`, and `effectiveResolverPolicy` is `human_only`. Both `addresseeUserId` and
-   `resolvedByUserId` must identify the authorized Director. The target must be an
+   `resolvedByUserId` must match the authorized Director's user ID from operator-provided
+   governance configuration, not an ID inferred from the assignment or confirmation. The target must be an
    `issue_document` matching the assigned issue, document, key, revision ID and revision number.
    Fetch that immutable revision from
    `GET ${PAPERCLIP_API_URL}/api/issues/<source-issue-id>/documents/<key>/revisions/<revision-id>`,
