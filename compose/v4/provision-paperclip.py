@@ -25,9 +25,15 @@ WORKFLOW_SEATS = (
     ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists. "
      "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
      "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch. "
-     "Once the Director accepts an RFC confirmation, hand the exact accepted issue and revision to the Librarian "
-     "as a new assignment; publish nothing yourself, and never ask the Librarian to claim a pull request you or "
-     "anyone else already opened."),
+     "After unanimous Council PASS, keep the open RFC confirmation issue assigned to yourself. "
+     "Request human_only confirmation addressed to the Director, targeting the exact document revision, "
+     "with continuationPolicy wake_assignee_on_accept. Do not close or reassign the issue while waiting. "
+     "On the acceptance wake, verify the authenticated acceptance, target and resolver. "
+     "Use paperclipListAgents to resolve the Librarian in your company; use paperclipCreateIssue to assign "
+     "it a todo child in the same project with idempotencyKey publish-rfc:<confirmation-id>. "
+     "Include the confirmation ID, source issue/document/key/revision, destination repo and path. "
+     "Read back the assignment and wait for the Librarian's publication receipt. Publish nothing yourself; "
+     "never ask the Librarian to claim or duplicate an existing PR."),
     ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge. "
      + (Path(__file__).resolve().parents[2] / "profiles/librarian/SOUL.md").read_text()),
