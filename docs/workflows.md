@@ -94,6 +94,8 @@ The v4 qmd canary finds an approved RFC using lexical search and replaces its se
 when the approved worktree advances. The separate draft and untracked run transcript stay
 unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight
 retention or production refresh.
+The gateway canary also dispatches a synthetic-model Hermes seat that retrieves the approved
+content through its configured qmd MCP tool. It does not prove isolation between seats.
 
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve

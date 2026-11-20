@@ -235,21 +235,23 @@ there is no write or admin tool to exclude. It prompts to confirm enabling them 
 rerun, to overwrite the existing registration; the script pipes "y" to both. Run
 `hermes mcp test qmd` (with the same `HERMES_HOME`) afterward to re-verify on demand, and
 `hermes tools list` to confirm "MCP servers: qmd all tools enabled".
+If the seat explicitly sets `adapterConfig.toolsets`, include the MCP server name `qmd`
+alongside its existing toolsets (for example, `terminal,qmd`); `terminal` alone excludes it.
 
 Run `python3 compose/v4/test/paperclip-qmd-gateway-canary.py` to rehearse this against the
 actual Paperclip Compose target offline: it starts the same disposable, network-disabled
-canary container as `paperclip-canary.py`, copies in a qmd 2.8.3 binary built from the
-existing `compose/Dockerfile.knowledge` image (no network inside the canary container),
+canary container as `paperclip-canary.py`, copies in qmd 2.8.3 from the already-cached
+`ralph-knowledge-qmd:2.8.3` image built from `compose/Dockerfile.knowledge` (no network
+or image pull),
 builds its own approved/draft/transient Git fixture entirely inside that one container
 (nothing shared or bind-mounted), runs the bootstrap script above against it, confirms
 Paperclip's own `adapters/hermes_local/test-environment` check passes for an agent whose
-`adapterConfig.env.HERMES_HOME` is that exact directory, creates that `hermes_local` agent,
-and then speaks MCP directly to the exact command/env Hermes stores to confirm the result
-is the approved text and excludes the draft revision and transient log, before and after a
-refresh to a second approved revision. It does not enable Hindsight, dispatch a model-driven
-run, or touch a live target, and it removes its container and volumes on exit. Simulating
-the model's own tool discovery through Hermes' deferred tool_search/describe/call catalog is
-a separate, not-yet-covered gap (see the canary's module docstring).
+`adapterConfig.env.HERMES_HOME` is that exact directory, and dispatches two `hermes_local`
+seats using a synthetic model. The configured seat retrieves approved content through
+Hermes' MCP tools; a terminal-only seat's qmd tool search finds no match. Direct MCP checks
+exclude the draft and transient log and verify refresh to a second approved revision. This
+does not prove filesystem isolation between seats, enable Hindsight, or touch a live target.
+The container and volume are removed on exit.
 
 ### Paperclip cold restore drill
 
