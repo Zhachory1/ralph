@@ -1,0 +1,28 @@
+--- a/ui/src/pages/IssueDetail.tsx
++++ b/ui/src/pages/IssueDetail.tsx
+@@ -8190,6 +8190,25 @@
+               onRecoveryControlChange={setRetainedRecoveryOwnsRetry}
+               action={issue.activeRecoveryAction ?? null} />
+           )}
++          {issue.status === "in_review" && issue.executionState?.status === "pending"
++            && issue.executionState.currentStageType === "review" && currentUserId
++            && issue.executionState.currentParticipant?.type === "user"
++            && issue.executionState.currentParticipant.userId === currentUserId && (
++            <form key={`${issue.id}:${issue.executionState.currentStageId}`} aria-label="Assigned review decision"
++              className={cn("space-y-2 rounded-lg border border-border p-3", shellSectionClass)}
++              onSubmit={async (event) => {
++                event.preventDefault();
++                const comment = String(new FormData(event.currentTarget).get("reviewNote") ?? "").trim();
++                if (!comment || updateIssueMutation.isPending) return;
++                try { await updateIssue.mutateAsync({ status: "todo", comment }); }
++                catch (error) { pushToast({ title: "Could not request changes", body: error instanceof Error ? error.message : String(error), tone: "error" }); }
++              }}>
++              <label className="block text-sm font-medium">Your review: what should change?
++                <textarea name="reviewNote" required className="mt-1 block w-full rounded border p-2" />
++              </label>
++              <button type="submit" disabled={updateIssueMutation.isPending} className="rounded border px-3 py-1 text-sm">Request changes</button>
++            </form>
++          )}
+           {resolvedDetailTab === "chat" && (
+             <ExecutionBlockerNotice className={shellSectionClass} presentation={issue.interruption} blockers={issue.blockedBy}
+               issueId={issue.id} agentName={agentMap.get(issue.assigneeAgentId ?? "")?.name} projectName={issue.project?.name}
