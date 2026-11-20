@@ -59,7 +59,7 @@ The Orchestrator can assign an existing tech lead directly. If a project needs a
 |---|---|---|
 | “Build a boolean flag service.” | Orchestrator → Feature Manager → Author → Council → approved build tasks → SWE → Reviewer | RFC decision, then merge decision. |
 | “Why did flag reads get slower? Don't change code.” | Orchestrator → SRE or project lead → sourced diagnosis | Only if investigation needs new access or consequential action. No automatic RFC or PR. |
-| Novel in-policy request with no matching workflow | Orchestrator proposes a concrete plan, Council reviews it, then an owner executes | Unanimous PASS permits the **plan** to proceed. Subsequent human-only actions remain gated. |
+| Novel in-policy request with no matching workflow | Orchestrator proposes a concrete plan, Council reviews it, then an owner executes | Unanimous support permits the **plan** to proceed. Subsequent human-only actions remain gated. |
 | “Review this coworker's PR.” | Review Manager → exact-head sandbox checks and Reviewer → dossier | Human submits any GitHub review. |
 
 ## 4. Initiative lifecycle and Council contract
@@ -70,9 +70,9 @@ flowchart LR
   O --> M[Feature Manager owns outcome]
   M --> A[Author saves RFC]
   A --> C[Three independent judges]
-  C -->|REVISE: at most twice| A
-  C -->|BLOCK or exhausted| E[Director inbox: findings and dissent]
-  C -->|unanimous PASS| D[Director RFC decision in Paperclip]
+  C -->|requested changes: at most twice| A
+  C -->|blocking dissent or exhausted| E[Director inbox: findings and dissent]
+  C -->|unanimous support| D[Director RFC decision in Paperclip]
   D -->|accepted| B[Manager releases dependent SWE tasks]
   B --> P[Draft PR and tests]
   P --> R[Reviewer findings]
@@ -83,19 +83,13 @@ flowchart LR
 
 The Feature Manager owns this graph. The diagram preserves the v4.0 initiative gates while moving internal delegation from the Chief of Staff to the manager. For multi-repo initiatives, create a child per deliverable and block only real dependencies (for example, a consumer waiting on a schema); independent changes can proceed in parallel.
 
-**Council input:** same identified RFC, plan or diff revision and same rubric for all three judges. Use three independent model families. Architecture assesses boundaries, consistency and failure recovery; Security assesses authority, data exposure and external effects; Scope assesses fit, alternatives and unnecessary complexity. Each judge submits its own structured verdict:
+**Council input:** same identified RFC, plan or diff revision and same rubric for all three judges. Use three independent model families. Architecture assesses boundaries, consistency and failure recovery; Security assesses authority, data exposure and external effects; Scope assesses fit, alternatives and unnecessary complexity. Each judge explains their support, requested changes, or dissent in an ordinary comment on their own task. A template may help, but no particular format or JSON document is required.
 
-```text
-judge_role; verdict = PASS | REVISE | BLOCK; confidence = 0..1;
-blocking_issues[] = {severity: major|critical, location, issue, recommendation};
-non_blocking_notes[].
-```
+The manager reads the three attributed comments for the same revision. All three must clearly support the proposal before it advances; a missing or unclear conclusion is not approval, so ask that judge. Requested changes go to the Author, with at most two completed revision cycles. A blocking objection or unresolved changes go to the Director with the author's position and the dissent. Present a concise brief covering the proposal, reasons, and remaining risks. Keep independent runs and comments visible in Paperclip.
 
-PASS has no blocking issues; REVISE or BLOCK names at least one. All three valid PASSes are required to advance. Missing, malformed or unavailable judges do not count as PASS. REVISE sends actionable feedback to the Author, with at most two completed revision cycles. Any BLOCK or unresolved REVISE goes to the Director with the author's position and named dissent. Present a three-bullet decision brief: **what is proposed; why this choice; risks or decisions remaining**. Keep independent runs and review artifacts visible in Paperclip.
+**Three different signals:** Council support qualifies an initiative for Director review. Director acceptance is the sign-off for publishing the named RFC bytes into Git-backed PARA; neither a Docs PR nor a Done status substitutes for it. **Native Paperclip Done** releases assigned dependent work when its blockers resolve. An additional exact-revision *execution* gate is optional, not a launch requirement. If the Director declines or asks for changes, the manager keeps the RFC open. None of these actions merges code.
 
-**Three different signals:** Council PASS qualifies an initiative for Director review. Director acceptance is the sign-off for publishing the named RFC bytes into Git-backed PARA; neither a Docs PR nor a Done status substitutes for it. **Native Paperclip Done** releases assigned dependent work when its blockers resolve. An additional exact-revision *execution* gate is optional, not a launch requirement. If the Director declines or asks for changes, the manager keeps the RFC open. None of these actions merges code.
-
-A novel plan in §3 uses the **same judges, rubric, verdict schema and revision limit** as an initiative RFC. What differs is the next action: unanimous PASS releases an in-policy plan to its owner; unanimous PASS on an initiative RFC requests a Director decision. Ordinary investigations through an existing role or workflow do not become novel plans merely because the answer is unknown.
+A novel plan in §3 uses the **same judges, rubric and revision limit** as an initiative RFC. What differs is the next action: unanimous support releases an in-policy plan to its owner; unanimous support on an initiative RFC requests a Director decision. Ordinary investigations through an existing role or workflow do not become novel plans merely because the answer is unknown.
 
 On the build issue, the Feature Manager links the accepted Paperclip revision or its approved Git commit. The Reviewer compares the implementation with that reference. This makes drift visible without adding a second sign-off or a custom execution lock.
 

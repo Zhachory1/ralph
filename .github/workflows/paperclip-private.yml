@@ -9,11 +9,17 @@ on:
       - "compose/v4/paperclip-canary.Dockerfile"
       - "compose/v4/paperclip-canary.Dockerfile.dockerignore"
       - "compose/v4/paperclip-handoff.patch"
+      - "compose/v4/provision-paperclip.py"
+      - "compose/v4/council-judge-worker.py"
       - "compose/v4/test/paperclip-private-canary.py"
+      - "compose/v4/test/paperclip-council-comments-canary.py"
+      - "compose/v4/test/paperclip-roster-canary.py"
       - "compose/v4/test/paperclip-rfc-canary.py"
       - "compose/v4/test/paperclip-rfc-review-stage-canary.py"
       - "compose/v4/test/paperclip-wakeup-canary.py"
       - "compose/v4/test/paperclip-board-key-canary.py"
+      - "profiles/PRINCIPLES.md"
+      - "profiles/council/rubric-v1.md"
 
 permissions:
   contents: read
@@ -40,6 +46,13 @@ jobs:
           python3 compose/v4/test/paperclip-rfc-review-stage-canary.py
           python3 compose/v4/test/paperclip-rfc-canary.py
           python3 compose/v4/test/paperclip-wakeup-canary.py
+          python3 compose/v4/test/paperclip-council-comments-canary.py
+          python3 compose/v4/test/paperclip-roster-canary.py
+      - name: Verify standalone host boundary
+        run: |
+          node --test --test-concurrency=1 compose/v4/test/council-judge.test.mjs \
+            compose/v4/test/council-verdict.test.mjs compose/v4/test/council-panel.test.mjs \
+            compose/v4/test/council-v1.test.mjs compose/v4/test/request-routing.test.mjs
       - name: Test native handoff recovery
         run: |
           docker run --rm --network none --user node --entrypoint sh -w /app/server \

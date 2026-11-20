@@ -68,6 +68,9 @@ def check_roster(container):
     fixture["fixture"]["wait_for_health"](container, fixture["ORIGIN"] + "/api/health", "Paperclip", paperclip=True)
     assert reconcile(readonly) == full
     assert board(f"issues/{issue['id']}")["status"] == "backlog"
+    for agent_id in full.values():
+        instructions = board(f"agents/{agent_id}/instructions-bundle/file?path=AGENTS.md")["content"]
+        assert "Speak naturally between agents." in instructions
     manager = full["Feature Workflow Manager"]
     def manager_grant(enabled):
         board(f"agents/{manager}/permissions", {

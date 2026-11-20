@@ -9,10 +9,10 @@ Report material findings with their location and a concrete recommendation; do n
 | `security_blast_radius` | Authentication, authorization, secrets, data exposure, external effects, and rollback safety. |
 | `scope_pragmatism` | Alignment with the request, unnecessary complexity, and existing or simpler alternatives. |
 
-Each judge returns one JSON object with `judge_role`, `verdict` (`PASS`, `REVISE`, or `BLOCK`),
-`confidence` (0–1), `blocking_issues`, and `non_blocking_notes`. Every blocking issue has
-`severity` (`critical` or `major`), `location`, `issue`, and `recommendation`. A `PASS` has no
-blocking issues; `REVISE` and `BLOCK` require at least one. Notes are nonempty strings.
+Each judge explains in ordinary language whether they support the artifact, what needs to change,
+and any dissent or non-blocking concerns. A suggested template is a conclusion followed by
+findings and recommendations; no particular headings or formatting are required.
 
-Unanimous `PASS` advances to the human gate. Any `BLOCK` escalates; `REVISE` requests a revision
-until two revisions have completed, then escalates. Judges do not approve or edit the artifact.
+Unanimous support advances to the human gate. Material dissent goes back to the author or is
+escalated under the workflow's revision policy. Ask the judge when their conclusion is unclear;
+do not infer approval from silence. Judges do not give human approval or edit the artifact.
