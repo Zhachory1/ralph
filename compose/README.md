@@ -217,7 +217,7 @@ stack.
 | # | Bound | Where | Stops | Does not stop |
 | --- | --- | --- | --- | --- |
 | 1 | Admission | each producer's own config | the backlog flood | a single card costing 10x |
-| 2 | Concurrency | `kanban.max_in_progress` / `max_in_progress_per_profile`, set in `bootstrap/install` | pile-up, host pressure, one profile saturating the host | total spend |
+| 2 | Concurrency | `kanban.max_in_progress` / `max_spawn` / `max_in_progress_per_profile`, set in `bootstrap/install` | pile-up, host pressure, one board or profile saturating the host | total spend |
 | 3 | Per card | `--max-runtime` / `--max-retries` at `kanban create`, and `run_budget_seconds` in the profile | a runaway card, and the default's silent second attempt | the number of cards |
 | 4 | Provider | a monthly hard cap on the credential a producer bills to, set with that provider | everything, when 1-3 are wrong | nothing -- it is the floor |
 
@@ -232,7 +232,8 @@ librarian card on `intake` (`RALPH_INTAKE_BOARD`). `ralph` holds human-facing fe
 `queues` is legacy history: older intake, review and maintenance cards stay there and are
 still read (an in-flight Chat thread, an open librarian run), but no new card goes there. The notifier enumerates active boards, so a blocked machine-created card can page
 you. `kanban.max_in_progress` remains an instance-wide cap across all boards; adding boards
-does not increase concurrency.
+does not increase concurrency. Boards spend it in name order, so `kanban.max_spawn` caps each
+board two below it: a lens flood leaves the maintainer its two cards instead of one.
 
 See [`docs`](https://github.com/Zhachory1/docs) project `fleet-into-ralph` for the design this
 implements, including the cost arithmetic behind these defaults.

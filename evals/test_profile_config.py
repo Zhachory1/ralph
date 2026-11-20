@@ -585,5 +585,41 @@ class EphemeralSandboxTests(unittest.TestCase):
                 self.assertEqual(1, rendered.count("docker_volumes:"))
 
 
+class DispatcherCapTests(unittest.TestCase):
+    """Every board's tick spends one host cap, in board-name order, so
+    `lenses` refilled each freed slot before `maintain` ticked and held the
+    maintainer to one card through a review flood with 8 slots configured.
+    max_spawn caps a single board; what it leaves must fit a whole profile."""
+
+    def caps(self, max_in_progress=None) -> dict:
+        import os
+        import subprocess
+        install = (ROOT / "bootstrap" / "install").read_text()
+        start = install.index("dispatcher_caps() {")
+        func = install[start:install.index("\n}", start) + 2]
+        env = {k: v for k, v in os.environ.items() if k != "RALPH_MAX_IN_PROGRESS"}
+        if max_in_progress is not None:
+            env["RALPH_MAX_IN_PROGRESS"] = str(max_in_progress)
+        with tempfile.NamedTemporaryFile("r") as log:
+            script = f'hermes() {{ echo "$*" >> {log.name}; }}\nset -euo pipefail\n{func}\ndispatcher_caps\n'
+            subprocess.run(["bash", "-c", script], env=env, check=True)
+            calls = [line.split() for line in log.read().splitlines()]
+        return {c[2]: int(c[3]) for c in calls if c[:2] == ["config", "set"]}
+
+    def test_each_board_leaves_one_profile_share_for_the_boards_after_it(self):
+        for host, per_board in ((None, 4), (8, 6), (4, 2), (3, 2), (1, 2)):
+            with self.subTest(RALPH_MAX_IN_PROGRESS=host):
+                caps = self.caps(host)
+                self.assertEqual(host or 6, caps["kanban.max_in_progress"])
+                self.assertEqual(2, caps["kanban.max_in_progress_per_profile"])
+                self.assertEqual(per_board, caps["kanban.max_spawn"])
+
+    def test_a_board_can_always_run_one_whole_profile(self):
+        """The gateway reads max_spawn 0 as a cap of zero: nothing would run."""
+        for host in range(1, 13):
+            caps = self.caps(host)
+            self.assertGreaterEqual(caps["kanban.max_spawn"], caps["kanban.max_in_progress_per_profile"], host)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
