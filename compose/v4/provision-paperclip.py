@@ -9,6 +9,11 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+HANDOFF_GUIDANCE = next(
+    line for line in (Path(__file__).resolve().parents[2] / "profiles/PRINCIPLES.md").read_text().splitlines()
+    if line.startswith("- **Speak naturally between agents.**")
+)
+
 SEATS = (
     ("Orchestrator", "ceo", "hermes_local", "Route requests and assign approved work."),
     ("Author", "general", "hermes_local", "Draft and revise initiative RFCs. "
@@ -29,9 +34,15 @@ WORKFLOW_SEATS = (
      "Create the Author's RFC issue with a native review stage naming yourself as its participant. "
      "Verify executionPolicy.stages before dispatch so in_review wakes you to coordinate the independent Council. "
      "If that stage is missing, repair the assignment rather than treating in_review as a Director decision. "
+     "For Council, create each judge task in backlog, link all three as blockers on the RFC while preserving "
+     "other blockers and the review stage, then start the tasks. Use paperclipListComments to read each judge's "
+     "own comment for the current RFC revision; do not require a particular format. If a conclusion is unclear, "
+     "create a backlog clarification task for that same judge, link it as a blocker, then start it. "
+     "If all judges already finished, read them before yielding. "
      "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
      "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch. "
-     "After unanimous Council PASS, keep the open RFC confirmation issue assigned to yourself. "
+     "Before requesting confirmation, re-read the RFC and ensure it is the exact revision all three judges "
+     "supported; if it changed, obtain a new review. Keep the open RFC confirmation issue assigned to yourself. "
      "Request human_only confirmation addressed to the Director, targeting the exact document revision, "
      "with continuationPolicy wake_assignee_on_accept. Do not close or reassign the issue while waiting. "
      "On the acceptance wake, verify the authenticated acceptance, target and resolver. "
@@ -44,9 +55,12 @@ WORKFLOW_SEATS = (
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge. "
      + (Path(__file__).resolve().parents[2] / "profiles/librarian/SOUL.md").read_text()),
     ("Comms", "general", "hermes_local", "Triage communications; external sends require Director approval."),
-    ("Council Architecture", "general", "hermes_local", "Return an independent architecture_scale verdict."),
-    ("Council Security", "general", "hermes_local", "Return an independent security_blast_radius verdict."),
-    ("Council Scope", "general", "hermes_local", "Return an independent scope_pragmatism verdict."),
+    ("Council Architecture", "general", "hermes_local",
+     "Review architecture independently; explain support or dissent in a task comment."),
+    ("Council Security", "general", "hermes_local",
+     "Review security independently; explain support or dissent in a task comment."),
+    ("Council Scope", "general", "hermes_local",
+     "Review scope independently; explain support or dissent in a task comment."),
 )
 ALIASES = {"Orchestrator": "Ralph Orchestrator", "Author": "RFC Author", "SWE": "OpenCode Developer", "SRE": "SRE Ops"}
 MANAGERS = {"Feature Workflow Manager", "Review Workflow Manager"}
@@ -124,7 +138,7 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents,
             "runtimeConfig": {"heartbeat": {"enabled": False}},
             "permissions": {"canCreateAgents": False, "canCreateSkills": False},
             "instructionsBundle": {"entryFile": "AGENTS.md", "files": {
-                "AGENTS.md": f"# {name}\n\n{duty}\n\n{manifest}",
+                "AGENTS.md": f"# {name}\n\n{HANDOFF_GUIDANCE}\n\n{duty}\n\n{manifest}",
             }},
         })
         roster[name] = seat["id"]

@@ -1,4 +1,4 @@
-// Validate a complete panel against profiles/council/rubric-v1.md before deciding.
+// Validate the standalone host adapter's structured response; agent handoffs use comments.
 export const COUNCIL_ROLES = Object.freeze(["architecture_scale", "security_blast_radius", "scope_pragmatism"]);
 export const MAX_COUNCIL_REVISIONS = 2;
 const VERDICT_KEYS = ["judge_role", "verdict", "confidence", "blocking_issues", "non_blocking_notes"];

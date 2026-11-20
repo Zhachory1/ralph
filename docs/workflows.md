@@ -24,6 +24,17 @@ own run (`executionContinuation.trigger.reason: "execution_review_requested"`, n
 interaction attached) to coordinate the independent Council -- the same native mechanism
 as the build-issue stage above, not a Director confirmation.
 
+The Manager creates the three judge tasks in backlog, links them as native blockers on the RFC
+without removing other blockers, then starts them. Paperclip wakes the Manager when the blockers
+are Done, including when task nesting is flattened. Judges put their conclusions and reasoning
+in their own task comments, in ordinary language. The Manager reads each attributed comment for
+the current revision. If a conclusion is unclear or missing, it creates a backlog clarification
+task for that judge, links it as a blocker, and then starts it; no format checker is involved.
+Only unanimous support leads to a Director-only confirmation of the exact reviewed RFC revision.
+The Manager rechecks the current revision before requesting it and reviews again if it changed.
+Paperclip records the authors and enforces the human gate; interpreting the comments is the
+Manager's responsibility.
+
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
 The Paperclip canary checks whether a board assignment wakes `hermes_local`, which uses its

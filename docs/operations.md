@@ -370,6 +370,8 @@ Resolve reported identity, model, budget, hiring, heartbeat or reporting conflic
 the board before retrying. A matched manager must have an explicit `tasks:assign`
 grant; an implicit membership default is not sufficient. Existing instructions and grants are not rewritten. This
 provisions seat definitions; the adapter credentials and dispatch checks are separate.
+When the Feature Manager's Paperclip MCP tools are explicitly allowlisted, include the native
+`paperclipListComments` tool so it can read judges' task comments under its own run identity.
 
 ### Arm a prepared Paperclip sandbox task
 
