@@ -63,8 +63,8 @@ The v4 qmd gateway canary (`compose/v4/bootstrap-qmd-gateway.sh`,
 `compose/v4/test/paperclip-qmd-gateway-canary.py`) grants a disposable `hermes_local`
 Paperclip seat that same approved-only index through Hermes' own native `hermes mcp add`
 connector, run with `docker exec` against the same disposable, network-disabled canary
-container `paperclip-canary.py` uses -- not the Ralph knowledge container, not a separate
-Hermes container or profile. No live Paperclip target, model-driven run, or Hindsight.
+container `paperclip-canary.py` uses. A dispatched seat queries it using a synthetic model.
+Toolset selection is not filesystem isolation between seats. No live target or Hindsight.
 
 The v4 Council pilot has a standalone panel in `compose/v4/council-v1.mjs` and a judge launcher
 in `compose/v4/council-judge.mjs`; neither is connected to board routing.

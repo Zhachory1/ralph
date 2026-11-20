@@ -73,3 +73,4 @@ echo "== hermes: verify the connector =="
 run_with_home /opt/hermes/bin/hermes mcp test qmd
 
 echo "done. Point this seat's adapterConfig.env.HERMES_HOME at $HERMES_HOME, and keep QMD_STATE_DIR ($QMD_STATE_DIR) refreshed inside this same container."
+echo "If adapterConfig.toolsets is set, include the server name qmd (for example, terminal,qmd)."

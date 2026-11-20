@@ -1,30 +1,18 @@
-"""Verify a real Paperclip hermes_local seat's own Hermes environment reaches
-the pinned, approved-only qmd index through Hermes' own native MCP connector
-(#265 first slice), against the actual Paperclip Compose target.
+"""Verify a dispatched Paperclip hermes_local seat can query an approved qmd index.
 
 Starts the same disposable, network-disabled canary container
-`paperclip-canary.py` uses. Copies in a qmd 2.8.3 binary built from the
-existing `compose/Dockerfile.knowledge` image (that container has no
-network, so qmd cannot be installed from the registry inside it) and builds
+`paperclip-canary.py` uses. Copies in qmd 2.8.3 from a cached image built
+from `compose/Dockerfile.knowledge` and builds
 its own approved/draft/transient Git fixture and qmd index entirely inside
 that one container -- nothing bind-mounted or shared with another
 container. Runs `compose/v4/bootstrap-qmd-gateway.sh` against it exactly as
 an operator would, confirms Paperclip's own
 `adapters/hermes_local/test-environment` check passes for an agent whose
-`adapterConfig.env.HERMES_HOME` is that exact directory, creates that
-`hermes_local` agent, then speaks MCP directly to the exact command/env
-Hermes stores to confirm the result is the approved text and excludes a
-draft revision and a transient log, before and after a refresh to a second
-approved revision.
-
-Known gap: this does not dispatch a model-driven Paperclip run. Hermes
-defers MCP tools behind a tool_search/tool_describe/tool_call catalog that,
-in this offline probe, never surfaced qmd as an available source for any
-query tried -- plausibly because that catalog's own matching needs a local
-embedding index this canary deliberately does not install (no embedding
-downloads). This canary instead proves the seat's exact configured
-environment and its MCP connector directly; simulating the model's tool
-discovery is unverified and left for a follow-up.
+`adapterConfig.env.HERMES_HOME` is that exact directory, then dispatches a
+seat with a synthetic model through Hermes' native MCP tools. Direct MCP checks
+also verify that a draft and a transient log are absent before and after an
+approved-snapshot refresh. A terminal-only seat's qmd tool search finds no
+match; shared container filesystem access is not tested as an isolation boundary.
 
 No live Paperclip target, Hindsight, or push.
 
@@ -38,11 +26,11 @@ import os
 import secrets
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KNOWLEDGE_DOCKERFILE = ROOT.parent / "Dockerfile.knowledge"
 QMD_IMAGE = "ralph-knowledge-qmd:2.8.3"  # Pinned; matches compose/Dockerfile.knowledge's default.
 BOOTSTRAP_SCRIPT = ROOT / "bootstrap-qmd-gateway.sh"
 HERMES_HOME = "/paperclip/.hermes"
@@ -75,13 +63,9 @@ def run_checked(*args, input_text=None, timeout=120, label=""):
     return result.stdout
 
 
-def build_qmd_binary(scratch):
-    """Builds the existing, already-pinned compose/Dockerfile.knowledge image
-    (reuses the project's own qmd setup) and extracts its installed binary
-    to a host directory for copying into the network-disabled canary."""
-    run_checked("docker", "build", "-q", "-t", QMD_IMAGE, "-f", str(KNOWLEDGE_DOCKERFILE), str(ROOT.parent.parent),
-                label="build knowledge image")
-    builder = run_checked("docker", "create", QMD_IMAGE, label="create qmd builder").strip()
+def copy_qmd_binary(scratch):
+    """Extract the pinned qmd installation from the already-cached knowledge image."""
+    builder = run_checked("docker", "create", "--pull", "never", QMD_IMAGE, label="create qmd builder").strip()
     try:
         run_checked("docker", "cp", f"{builder}:/usr/local/lib/node_modules", str(scratch / "node_modules"),
                     label="copy qmd node_modules")
@@ -168,6 +152,7 @@ def assert_connector_discovered(output):
     for tool in ("query", "get", "multi_get", "status"):
         assert tool in output, f"missing tool {tool} in discovery output"
     assert "Tools discovered: 4" in output, "hermes mcp test did not confirm the connector"
+    assert "include the server name qmd" in output
 
 
 def query_through_configured_entrypoint(container, term):
@@ -202,6 +187,13 @@ def query_through_configured_entrypoint(container, term):
         proc.wait(timeout=10)
 
 
+def wait_for_ready(container, agent_id):
+    deadline = time.monotonic() + 20
+    while pc.api(container, f"agents/{agent_id}").get("lifecycleState") != "ready":
+        assert time.monotonic() < deadline, "Qmd fixture seat never became ready"
+        time.sleep(0.5)
+
+
 def run_canary():
     project = f"ralph-qmd-gateway-canary-{uuid.uuid4().hex[:10]}"
     jwt_secret = secrets.token_hex(32)
@@ -209,7 +201,7 @@ def run_canary():
     compose = ("compose", "--env-file", "/dev/null", "-f", str(pc.COMPOSE), "-p", project)
     with tempfile.TemporaryDirectory(prefix="ralph-qmd-gateway-qmd-") as scratch_dir:
         scratch = Path(scratch_dir)
-        build_qmd_binary(scratch)
+        copy_qmd_binary(scratch)
         try:
             pc.docker(*compose, "up", "-d", "--no-build", "--pull", "never", env=env)
             container = pc.docker(*compose, "ps", "-q", pc.SERVICE, env=env)
@@ -253,7 +245,7 @@ def run_canary():
                 hermes_adapter_config = {
                     "hermesCommand": "/opt/hermes/bin/hermes",
                     "model": "fixture-hermes", "provider": "custom",
-                    "toolsets": "terminal", "cwd": "/paperclip", "timeoutSec": 20,
+                    "toolsets": "terminal,qmd", "cwd": "/paperclip", "timeoutSec": 90,
                     "env": {"HERMES_HOME": HERMES_HOME, "PAPERCLIP_AGENT_JWT_SECRET": "",
                             "OPENAI_API_KEY": pc.MODEL_PLACEHOLDER},
                 }
@@ -261,14 +253,44 @@ def run_canary():
                     "adapterConfig": hermes_adapter_config,
                 })
                 assert check["status"] == "pass", check
+                terminal_only = pc.api(container, f"companies/{company['id']}/agents", {
+                    "name": "Terminal-only Canary Seat", "adapterType": "hermes_local",
+                    "runtimeConfig": {"heartbeat": {"enabled": False}},
+                    "adapterConfig": {**hermes_adapter_config, "toolsets": "terminal"},
+                })
+                wait_for_ready(container, terminal_only["id"])
+                issue = pc.api(container, f"companies/{company['id']}/issues", {
+                    "title": "QMD_CANARY terminal-only", "description": "Find coppermeadow in approved knowledge.",
+                    "status": "todo", "assigneeAgentId": terminal_only["id"],
+                })
+                assert issue["assigneeAgentId"] == terminal_only["id"]
+                terminal_issue_id = issue["id"]
+                pc.RUN_SECONDS = 120
+                run = pc.wait_for_run(container, issue["id"], terminal_only["id"])
+                assert "QMD_SEARCH_NO_MATCH" in (run.get("stdoutExcerpt") or "")
                 agent = pc.api(container, f"companies/{company['id']}/agents", {
                     "name": "Qmd Gateway Canary Seat",
                     "adapterType": "hermes_local",
+                    "runtimeConfig": {"heartbeat": {"enabled": False}},
                     "adapterConfig": hermes_adapter_config,
                 })
                 assert agent["adapterType"] == "hermes_local"
+                wait_for_ready(container, agent["id"])
                 print("PASS: a real hermes_local seat's test-environment check passes with the qmd connector wired"
                       " into its exact HERMES_HOME, and the seat was created")
+                issue = pc.api(container, f"companies/{company['id']}/issues", {
+                    "title": "QMD_CANARY configured", "description": "Find coppermeadow in approved knowledge.",
+                    "status": "todo", "assigneeAgentId": agent["id"],
+                })
+                assert issue["id"] != terminal_issue_id and issue["assigneeAgentId"] == agent["id"]
+                run = pc.wait_for_run(container, issue["id"], agent["id"])
+                output = run.get("stdoutExcerpt") or ""
+                assert "QMD_RESULT:" in output, f"Agent did not call qmd: {output[-2000:]}"
+                reply = output.split("QMD_RESULT:", 1)[1]
+                assert APPROVED in reply and "1-projects/fixture/rfc.md" in reply, \
+                    f"Agent did not retrieve the approved document: {reply[-2000:]}"
+                assert DRAFT not in reply and LOG not in reply
+                print("PASS: configured seat retrieved qmd content; terminal-only qmd search found no match")
             finally:
                 model.terminate()
                 model.wait(timeout=10)
@@ -278,6 +300,8 @@ def run_canary():
             old_hits = query_through_configured_entrypoint(container, APPROVED)
             assert len(next_hits) == 1 and next_hits[0]["file"] == "approved/1-projects/fixture/rfc.md", next_hits
             assert not old_hits, "superseded approved text was still searchable after refresh"
+            assert not query_through_configured_entrypoint(container, DRAFT), "draft was searchable after refresh"
+            assert not query_through_configured_entrypoint(container, LOG), "transient log was searchable after refresh"
             print("PASS: a refresh to the next approved revision reaches the seat without reconfiguring the connector")
         finally:
             pc.docker(*compose, "down", "--volumes", "--timeout", "5", env=env)
