@@ -17,6 +17,7 @@ on:
       - "compose/v4/test/paperclip-rfc-canary.py"
       - "compose/v4/test/paperclip-rfc-review-stage-canary.py"
       - "compose/v4/test/paperclip-wakeup-canary.py"
+      - "compose/v4/test/paperclip-pause-recovery-canary.py"
       - "compose/v4/test/paperclip-board-key-canary.py"
       - "profiles/PRINCIPLES.md"
       - "profiles/council/rubric-v1.md"
@@ -47,6 +48,7 @@ jobs:
           python3 compose/v4/test/paperclip-rfc-review-stage-canary.py
           python3 compose/v4/test/paperclip-rfc-canary.py
           python3 compose/v4/test/paperclip-wakeup-canary.py
+          python3 compose/v4/test/paperclip-pause-recovery-canary.py
           python3 compose/v4/test/paperclip-council-comments-canary.py
           python3 compose/v4/test/paperclip-roster-canary.py
       - name: Verify standalone host boundary
@@ -62,6 +64,12 @@ jobs:
           docker run --rm --network none --user node --entrypoint sh -w /app/server \
             ralph-paperclip-private:2026.1117.0 -c \
             './node_modules/.bin/vitest run src/modules/wake-queue/domain/policy.test.ts src/modules/wake-queue/application/use-cases.test.ts src/modules/wake-queue/adapters/postgres.test.ts --maxWorkers=1 --no-file-parallelism --silent'
+          docker run --rm --network none --user node --entrypoint sh -w /app/server \
+            ralph-paperclip-private:2026.1117.0 -c \
+            './node_modules/.bin/vitest run src/__tests__/heartbeat-process-recovery.test.ts --maxWorkers=1 --no-file-parallelism --silent -t "paused (conversation repair|repair)"'
+          docker run --rm --network none --user node --entrypoint sh -w /app/server \
+            ralph-paperclip-private:2026.1117.0 -c \
+            './node_modules/.bin/vitest run src/__tests__/legacy-continuation-authority.test.ts src/modules/run-dispatch/domain/policy.test.ts src/modules/run-dispatch/adapters/postgres.test.ts --maxWorkers=1 --no-file-parallelism --silent'
       - name: Export tested server runtime
         run: |
           git rev-parse HEAD^1 > "$RUNNER_TEMP/paperclip-runtime-base"
