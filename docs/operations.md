@@ -370,6 +370,9 @@ Resolve reported identity, model, budget, hiring, heartbeat or reporting conflic
 the board before retrying. A matched manager must have an explicit `tasks:assign`
 grant; an implicit membership default is not sufficient. Existing instructions and grants are not rewritten. This
 provisions seat definitions; the adapter credentials and dispatch checks are separate.
+If an OpenCode seat already has `GH_TOKEN`, it can use that credential through its terminal
+without requesting a separate GitHub connection. Configure the credential separately; the
+provisioner does not create it or rewrite existing seat instructions.
 When the Feature Manager's Paperclip MCP tools are explicitly allowlisted, include the native
 `paperclipListComments` tool so it can read judges' task comments under its own run identity.
 
