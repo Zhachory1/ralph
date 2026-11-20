@@ -14,10 +14,16 @@ How to stand Ralph up, change it safely, and recover it. Components are describe
 The separate v4 pilot uses a [dedicated adapter login](1-projects/v4-architecture/hermes-harness-integration.md#adapter-authentication) rather than a copy of a personal OAuth session.
 
 After caching the two pinned images in `compose/v4/paperclip-canary.Dockerfile`, run from the
-repository root:
+repository root. The build context is `compose/v4` (not stdin), so the Dockerfile can apply
+`compose/v4/paperclip-handoff.patch` -- vendored from upstream Paperclip PR #18510, see
+[infrastructure.md](infrastructure.md) -- and rebuild the patched server before the image is
+tagged; `paperclip-canary.Dockerfile.dockerignore` keeps everything else in `compose/v4` out of
+that context. The server rebuild needs more than 2.6 GiB of available Docker memory; use a
+separate build host if a running board leaves insufficient headroom:
 
 ```sh
-docker build --network none -t ralph-paperclip-canary:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+docker build --network none -t ralph-paperclip-canary:2026.1117.0 \
+  -f compose/v4/paperclip-canary.Dockerfile compose/v4
 python3 compose/v4/test/paperclip-canary.py
 ```
 
@@ -275,7 +281,8 @@ state of an existing installation. Cache both images pinned in
 `compose/v4/paperclip-canary.Dockerfile`; then, from the repository root, build locally:
 
 ```sh
-docker build --network none -t ralph-paperclip-private:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+docker build --network none -t ralph-paperclip-private:2026.1117.0 \
+  -f compose/v4/paperclip-canary.Dockerfile compose/v4
 ```
 
 Set a new random `PAPERCLIP_AGENT_JWT_SECRET` in your environment from a private store;

@@ -7,7 +7,13 @@ on:
       - ".github/workflows/paperclip-private.yml"
       - "compose/v4/paperclip-private.yml"
       - "compose/v4/paperclip-canary.Dockerfile"
+      - "compose/v4/paperclip-canary.Dockerfile.dockerignore"
+      - "compose/v4/paperclip-handoff.patch"
       - "compose/v4/test/paperclip-private-canary.py"
+      - "compose/v4/test/paperclip-rfc-canary.py"
+      - "compose/v4/test/paperclip-rfc-review-stage-canary.py"
+      - "compose/v4/test/paperclip-wakeup-canary.py"
+      - "compose/v4/test/paperclip-board-key-canary.py"
 
 permissions:
   contents: read
@@ -20,9 +26,43 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Build the pinned preview image
         run: |
           docker build --no-cache --network none \
-            -t ralph-paperclip-private:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+            -t ralph-paperclip-private:2026.1117.0 \
+            -f compose/v4/paperclip-canary.Dockerfile compose/v4
       - name: Verify local-only access and persistence
         run: python3 compose/v4/test/paperclip-private-canary.py
+      - name: Verify native review and confirmation
+        run: |
+          docker tag ralph-paperclip-private:2026.1117.0 ralph-paperclip-canary:2026.1117.0
+          python3 compose/v4/test/paperclip-rfc-review-stage-canary.py
+          python3 compose/v4/test/paperclip-rfc-canary.py
+          python3 compose/v4/test/paperclip-wakeup-canary.py
+      - name: Test native handoff recovery
+        run: |
+          docker run --rm --network none --user node --entrypoint sh -w /app/server \
+            ralph-paperclip-private:2026.1117.0 -c \
+            './node_modules/.bin/vitest run src/__tests__/heartbeat-handoff-execution-wait.test.ts --maxWorkers=1 --no-file-parallelism --silent'
+      - name: Export tested server runtime
+        run: |
+          git rev-parse HEAD^1 > "$RUNNER_TEMP/paperclip-runtime-base"
+          git rev-parse HEAD^2 > "$RUNNER_TEMP/paperclip-runtime-head"
+          test "$(cat "$RUNNER_TEMP/paperclip-runtime-base")" = "${{ github.event.pull_request.base.sha }}"
+          test "$(cat "$RUNNER_TEMP/paperclip-runtime-head")" = "${{ github.event.pull_request.head.sha }}"
+          id=$(docker create --entrypoint /bin/true ralph-paperclip-private:2026.1117.0)
+          trap 'docker rm "$id" >/dev/null' EXIT
+          docker cp "$id:/app/server/dist-runtime" "$RUNNER_TEMP/dist-runtime"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/paperclip-runtime.tar.gz" dist-runtime
+          (cd "$RUNNER_TEMP" && sha256sum paperclip-runtime.tar.gz > paperclip-runtime.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: paperclip-runtime-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/paperclip-runtime.tar.gz
+            ${{ runner.temp }}/paperclip-runtime.sha256
+            ${{ runner.temp }}/paperclip-runtime-base
+            ${{ runner.temp }}/paperclip-runtime-head
+          retention-days: 1
+          if-no-files-found: error
