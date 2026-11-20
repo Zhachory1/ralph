@@ -28,7 +28,8 @@ The Manager creates the three judge tasks in backlog, links them as native block
 without removing other blockers, then starts them. Paperclip wakes the Manager when the blockers
 are Done, including when task nesting is flattened. Judges put their conclusions and reasoning
 in their own task comments, in ordinary language. The Manager reads each attributed comment for
-the current revision; unclear or missing conclusions go back to the judge, not to a format checker.
+the current revision. If a conclusion is unclear or missing, it creates a backlog clarification
+task for that judge, links it as a blocker, and then starts it; no format checker is involved.
 Only unanimous support leads to a Director-only confirmation of the exact reviewed RFC revision.
 The Manager rechecks the current revision before requesting it and reviews again if it changed.
 Paperclip records the authors and enforces the human gate; interpreting the comments is the

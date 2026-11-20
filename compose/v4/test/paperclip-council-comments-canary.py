@@ -1,8 +1,8 @@
 """Exercise native Council dependencies and natural-language handoffs on a disposable board.
 
 The seats are scripted process fixtures with a preselected reaction: this verifies Paperclip
-routing and attribution, not an LLM's interpretation of the comments. The dissent case chooses
-the fixture reaction explicitly rather than parsing the comment.
+routing and attribution, not an LLM's interpretation of the comments. The dissent and
+clarification cases choose the fixture reaction explicitly rather than parsing the comment.
 """
 import json
 import runpy
@@ -26,6 +26,10 @@ pc() {
 issue=$(pc "$PAPERCLIP_API_URL/api/heartbeat-runs/$PAPERCLIP_RUN_ID" | jq -r '.issueId')
 sleep 3
 comment=COMMENT_LITERAL
+title=$(pc "$PAPERCLIP_API_URL/api/issues/$issue" | jq -r '.title')
+case "$title" in
+  "Clarification fixture "*) comment="I can support the current revision after clarification." ;;
+esac
 payload=$(jq -nc --arg comment "$comment" '{status:"done",comment:$comment}')
 pc --json "$payload" -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" >/dev/null
 """
@@ -64,10 +68,35 @@ else
     pc "$PAPERCLIP_API_URL/api/issues/$judge_issue/comments" | jq -e --arg author "$author" \
       'any(.[]; .authorAgentId==$author and (.body|length)>0)' >/dev/null
   done < "$marker"
-  if [ DECISION_LITERAL = "revise" ]; then
+  if [ DECISION_LITERAL = "clarify" ] && [ ! -f "$marker-clarification" ]; then
+    pc "$PAPERCLIP_API_URL/api/issues/$issue/interactions" | jq -e 'length == 0' >/dev/null
+    judge_issue=$(sed -n '2p' "$marker")
+    judge=$(pc "$PAPERCLIP_API_URL/api/issues/$judge_issue" | jq -r '.assigneeAgentId')
+    revision=$(pc "$PAPERCLIP_API_URL/api/issues/$issue/documents/rfc" | jq -r '.latestRevisionId')
+    payload=$(jq -nc --arg issue "$issue" --arg judge "$judge" --arg revision "$revision" \
+      '{title:("Clarification fixture "+$judge),
+        description:("Please clarify your conclusion on RFC revision "+$revision+"."),
+        status:"backlog",parentId:$issue,assigneeAgentId:$judge,
+        idempotencyKey:("clarify:"+$issue+":"+$judge)}')
+    clarification=$(pc --json "$payload" "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues" | jq -r '.id')
+    printf '%s\n' "$clarification" > "$marker-clarification"
+    blockers=$(cat "$marker" "$marker-clarification" | jq -R . | jq -s .)
+    payload=$(jq -nc --argjson blockers "$blockers" '{blockedByIssueIds:$blockers}')
+    pc --json "$payload" -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" |
+      jq -e '.status == "in_review" and (.blockedByIssueIds|length)==4' >/dev/null
+    pc --json '{"status":"todo"}' -X PATCH "$PAPERCLIP_API_URL/api/issues/$clarification" >/dev/null
+  elif [ DECISION_LITERAL = "revise" ]; then
     pc --json '{"status":"todo","comment":"Please address the security concern from Council."}' \
       -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" >/dev/null
   else
+    if [ -f "$marker-clarification" ]; then
+      clarification=$(cat "$marker-clarification")
+      task=$(pc "$PAPERCLIP_API_URL/api/issues/$clarification")
+      printf '%s' "$task" | jq -e '.status=="done"' >/dev/null
+      author=$(printf '%s' "$task" | jq -r '.assigneeAgentId')
+      pc "$PAPERCLIP_API_URL/api/issues/$clarification/comments" | jq -e --arg author "$author" \
+        'any(.[]; .authorAgentId==$author and (.body|length)>0)' >/dev/null
+    fi
     doc=$(pc "$PAPERCLIP_API_URL/api/issues/$issue/documents/rfc")
     payload=$(printf '%s' "$doc" | jq -c --arg issue "$issue" --arg human DIRECTOR \
       '{kind:"request_confirmation",resolverPolicy:"human_only",addresseeUserId:$human,
@@ -81,7 +110,8 @@ fi
 """
 
 
-def check_council_comments(container, *, dissent=False):
+def check_council_comments(container, *, dissent=False, unclear=False):
+    assert not (dissent and unclear)
     actual = subprocess.check_output(
         ["docker", "inspect", container, "--format", "{{.Config.Image}}"], text=True
     ).strip()
@@ -99,7 +129,8 @@ def check_council_comments(container, *, dissent=False):
     root = f"companies/{company['id']}"
     opinions = (
         "The scope fits; I'm happy to proceed.",
-        "Architecture looks sound. I approve the current revision.",
+        ("I see tradeoffs, but I cannot yet tell whether this is ready." if unclear
+         else "Architecture looks sound. I approve the current revision."),
         ("I cannot support this yet: the authorization gap needs a fix." if dissent
          else "I found no security objection; proceed to the Director."),
     )
@@ -114,7 +145,7 @@ def check_council_comments(container, *, dissent=False):
     ]
     script = MANAGER.replace("JUDGES", " ".join(judge["id"] for judge in judges)).replace(
         "DIRECTOR", json.dumps(director)
-    ).replace("DECISION_LITERAL", json.dumps("revise" if dissent else "approve"))
+    ).replace("DECISION_LITERAL", json.dumps("revise" if dissent else "clarify" if unclear else "approve"))
     manager = board(f"{root}/agents", {
         "name": "Manager", "adapterType": "process",
         "adapterConfig": {"command": "/bin/sh", "args": ["-ec", script]},
@@ -152,11 +183,13 @@ def check_council_comments(container, *, dissent=False):
         raise AssertionError(f"No native confirmation; source status {issue['status']}")
 
     panel = [item for item in board(f"{root}/issues") if item["title"].startswith("Council fixture ")]
+    clarifications = [item for item in board(f"{root}/issues") if item["title"].startswith("Clarification fixture ")]
     assert len(panel) == 3 and all(
         item["status"] == "done" and item["createdByAgentId"] == manager["id"] for item in panel
     )
     assert all(item["parentId"] == parent["id"] and item["privacyParentIssueId"] == issue["id"] for item in panel)
-    assert {item["id"] for item in issue["blockedBy"]} == {item["id"] for item in panel}
+    assert len(clarifications) == (1 if unclear else 0), "An unclear conclusion needs its judge's clarification"
+    assert {item["id"] for item in issue["blockedBy"]} == {item["id"] for item in [*panel, *clarifications]}
     document = board(f"{path}/documents/rfc")
     for task in panel:
         assert document["latestRevisionId"] in task["description"]
@@ -173,17 +206,29 @@ def check_council_comments(container, *, dissent=False):
         assert len(cards) == 1 and cards[0]["createdByAgentId"] == manager["id"] and cards[0]["status"] == "pending"
         assert cards[0]["resolverPolicy"] == "human_only" and cards[0]["addresseeUserId"] == director
         assert cards[0]["payload"]["target"]["revisionId"] == document["latestRevisionId"]
+        if unclear:
+            clarification = clarifications[0]
+            assert clarification["status"] == "done" and clarification["assigneeAgentId"] == judges[1]["id"]
+            assert clarification["createdByAgentId"] == manager["id"]
+            assert document["latestRevisionId"] in clarification["description"]
+            comments = board(f"issues/{clarification['id']}/comments")
+            assert any(comment.get("authorAgentId") == judges[1]["id"]
+                       and comment["body"] == "I can support the current revision after clarification."
+                       for comment in comments)
+            assert cards[0]["createdAt"] >= comments[0]["createdAt"]
     manager_runs = [
         board(f"heartbeat-runs/{run['runId']}")
         for run in board(f"{path}/runs") if run["agentId"] == manager["id"]
     ]
     reasons = [(run.get("contextSnapshot") or {}).get("wakeReason") for run in manager_runs]
-    assert "issue_blockers_resolved" in reasons, reasons
+    assert reasons.count("issue_blockers_resolved") == (2 if unclear else 1), reasons
     print("PASS: attributed natural-language comments release the manager's native review dependency;",
-          "dissent returns to the Author." if dissent else "support reaches a Director confirmation.")
+          "dissent returns to the Author." if dissent else
+          "clarification reaches the same judge before confirmation." if unclear else
+          "support reaches a Director confirmation.")
 
 
 if __name__ == "__main__":
-    for dissent in (False, True):
+    for dissent, unclear in ((False, False), (True, False), (False, True)):
         with fixture("council-comments") as container:
-            check_council_comments(container, dissent=dissent)
+            check_council_comments(container, dissent=dissent, unclear=unclear)
