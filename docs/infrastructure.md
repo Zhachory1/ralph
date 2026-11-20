@@ -12,6 +12,16 @@ published ports or host bind mounts, and no repository or provider credentials. 
 execute inside the fixture. This setup does not isolate agents from the Paperclip server and is
 not an authenticated deployment.
 
+`compose/v4/paperclip-canary.Dockerfile` applies `compose/v4/paperclip-handoff.patch` to the
+pinned 2026.1117.0 source before rebuilding the server, then ships the patched source, `dist`,
+and `dist-runtime` in the same image used by both the canary and the private preview. The patch
+is adapted from upstream Paperclip PR #18510
+(https://github.com/paperclipai/paperclip/pull/18510, commit
+4fe6a94b958c3a685608e9ce3a0aa5422b658f80): it makes the reviewer/execution handoff wake exactly
+once and discards it on a stale review stage, assignment, or cancellation instead of resuming a
+handoff that no longer matches the current assignment. It does not change any approval gate or
+add a new scheduler; the existing heartbeat scheduler still owns dispatch.
+
 The standalone private preview (`compose/v4/paperclip-private.yml`) runs only the combined
 Paperclip/Hermes image with authenticated access, a loopback-only published port, a dedicated
 Compose bridge, and a named state volume. The bridge permits outbound traffic. It starts

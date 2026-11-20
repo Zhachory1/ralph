@@ -1,0 +1,5 @@
+# Build context for paperclip-canary.Dockerfile is compose/v4, which also holds unrelated
+# scripts, tests, and env examples. Only the Dockerfile's own inputs may be sent to the daemon.
+*
+!paperclip-canary.Dockerfile
+!paperclip-handoff.patch

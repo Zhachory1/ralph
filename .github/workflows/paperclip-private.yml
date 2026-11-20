@@ -7,6 +7,8 @@ on:
       - ".github/workflows/paperclip-private.yml"
       - "compose/v4/paperclip-private.yml"
       - "compose/v4/paperclip-canary.Dockerfile"
+      - "compose/v4/paperclip-canary.Dockerfile.dockerignore"
+      - "compose/v4/paperclip-handoff.patch"
       - "compose/v4/test/paperclip-private-canary.py"
 
 permissions:
@@ -23,6 +25,12 @@ jobs:
       - name: Build the pinned preview image
         run: |
           docker build --no-cache --network none \
-            -t ralph-paperclip-private:2026.1117.0 - < compose/v4/paperclip-canary.Dockerfile
+            -t ralph-paperclip-private:2026.1117.0 \
+            -f compose/v4/paperclip-canary.Dockerfile compose/v4
       - name: Verify local-only access and persistence
         run: python3 compose/v4/test/paperclip-private-canary.py
+      - name: Test native handoff recovery
+        run: |
+          docker run --rm --network none --user node --entrypoint sh -w /app/server \
+            ralph-paperclip-private:2026.1117.0 -c \
+            './node_modules/.bin/vitest run src/__tests__/heartbeat-handoff-execution-wait.test.ts --maxWorkers=1 --no-file-parallelism --silent'
