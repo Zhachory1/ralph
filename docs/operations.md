@@ -39,6 +39,10 @@ unmatched revision to fail the run instead. Publication safety is unaffected eit
 probe's separate Git-storage check (see [workflows](workflows.md)) never stores or overwrites
 bytes the Director did not approve. The probe does not push to a remote or change live routing.
 
+Run `python3 compose/v4/test/paperclip-pause-recovery-canary.py` with the same cached image to
+check native Hermes pause/resume recovery and the process-adapter reconciliation hold. The test
+uses scripted local adapters and a disposable authenticated board, not provider credentials.
+
 Run `python3 compose/v4/test/paperclip-routing-canary.py` with the same image and Node.js
 on the host. It uses scripted proposals and Council verdicts against an authenticated,
 disposable Paperclip board. It creates fixture assignments only on `advance`.

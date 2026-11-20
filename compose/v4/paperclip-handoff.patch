@@ -1339,3 +1339,565 @@
            result.interactionSkipped += 1;
            continue;
          }
+diff --git a/server/src/modules/run-dispatch/adapters/postgres.ts b/server/src/modules/run-dispatch/adapters/postgres.ts
+index 3a4806d..b14fae2 100644
+--- a/server/src/modules/run-dispatch/adapters/postgres.ts
++++ b/server/src/modules/run-dispatch/adapters/postgres.ts
+@@ -13,3 +13,3 @@ import { notifyScheduledRetryCancellation } from "../../../services/scheduled-re
+ import { readClaimedNativeStopRecovery } from "../../../services/native-runtime/native-cancellation-request.js";
+-import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
++import { hasConversationContinuationPolicy, historicalAdapterType } from "../../../services/conversation-continuation.js";
+ import { recordedUserStop, userStopBoundaryAt } from "../../../services/run-cancellation.js";
+@@ -304,1 +304,46 @@ export function createPostgresRunDispatchAdapter(
++  async function pausedRepairActionIsCurrent(
++    dbOrTx: Db,
++    input: Pick<LoadGateFactsInput, "runId" | "companyId" | "agentId" | "contextSnapshot">,
++    issueId: string,
++    lock: boolean,
++  ) {
++    const context = input.contextSnapshot;
++    const predecessorId = readNonEmptyString(context.pausedDispositionRepairRunId);
++    if (!predecessorId) return true;
++    const actionId = readNonEmptyString(context.recoveryActionId);
++    if (!actionId) return false;
++    const actionQuery = dbOrTx.select().from(issueRecoveryActions).where(and(
++      eq(issueRecoveryActions.id, actionId), eq(issueRecoveryActions.companyId, input.companyId),
++      eq(issueRecoveryActions.sourceIssueId, issueId),
++    )).limit(1);
++    const [action] = await (lock ? actionQuery.for("update") : actionQuery);
++    const episode = legacyDispositionEpisode({ id: input.runId, contextSnapshot: context });
++    const policy = parseObject(action?.wakePolicy);
++    if (!action || action.status !== "active" || action.ownerType !== "agent" ||
++        action.ownerAgentId !== input.agentId || action.returnOwnerAgentId !== input.agentId ||
++        action.fingerprint !== context.dispositionRepairFingerprint ||
++        action.fingerprint !== legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id) ||
++        action.attemptCount !== episode.attempt || action.maxAttempts !== episode.maxAttempts ||
++        policy.scheduledRunId !== input.runId || policy.retryAgentId !== input.agentId ||
++        policy.attempt !== episode.attempt || policy.maxAttempts !== episode.maxAttempts) return false;
++    const [predecessor] = await dbOrTx.select().from(heartbeatRuns).where(and(
++      eq(heartbeatRuns.id, predecessorId), eq(heartbeatRuns.companyId, input.companyId),
++    )).limit(1);
++    if (!predecessor) return false;
++    const previous = parseObject(predecessor.contextSnapshot);
++    const previousResult = parseObject(predecessor.resultJson);
++    const previousEpisode = legacyDispositionEpisode(predecessor);
++    return predecessor.status === "cancelled" && predecessor.errorCode === "agent_paused" &&
++      predecessor.runtimeMode === "legacy" && predecessor.agentId === input.agentId &&
++      previous.issueId === issueId && previous.recoveryActionId === action.id &&
++      previous.dispositionRepairSourceRunId === context.dispositionRepairSourceRunId &&
++      previous.dispositionRepairFingerprint === action.fingerprint &&
++      previousEpisode.id === episode.id && previousEpisode.attempt + 1 === episode.attempt &&
++      previousEpisode.maxAttempts === episode.maxAttempts &&
++      previousResult.cancelledByActorType !== "user" && previousResult.cancelledByActorType !== "board" &&
++      parseObject(previousResult.executionCancellation).state === "acknowledged" &&
++      hasConversationContinuationPolicy(previousResult) &&
++      await historicalAdapterType(dbOrTx, predecessor) === "hermes_local";
++  }
++
+   async function loadGateFacts(
+@@ -459,3 +504,4 @@ export function createPostgresRunDispatchAdapter(
+           && legacyDispositionEpisode(source).id === episode.id
+-          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts);
++          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts)
++          && await pausedRepairActionIsCurrent(dbOrTx, input, issueId, Boolean(tx));
+         currentFingerprint = legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id);
+@@ -1242,2 +1288,16 @@ export function createPostgresRunDispatchAdapter(
+     if (!issueId) return { issueId: null, facts: null, executionBlocker: null, decision: { stale: false as const } };
++    if (readNonEmptyString(contextSnapshot.pausedDispositionRepairRunId)) {
++      const current = await loadGateFacts({
++        runId: run.id, companyId: run.companyId, agentId: run.agentId, contextSnapshot,
++        responsibleUserId: run.responsibleUserId, conversationContinuation: false,
++        scheduledRetryReason: run.scheduledRetryReason, wakeupRequestId: run.wakeupRequestId,
++      }, now, tx, publications);
++      if (!current.agentFound || !decideScheduledRetryGate(current.facts, now).allowed) {
++        return { issueId, facts: null, executionBlocker: null, decision: { stale: true as const,
++          errorCode: "issue_disposition_repair_superseded" as const,
++          reason: "The paused disposition repair is no longer eligible.",
++          details: { issueId, recoveryActionId: contextSnapshot.recoveryActionId },
++        } };
++      }
++    }
+     if (typeof contextSnapshot.workspaceReconstructionActionId === "string") {
+diff --git a/server/src/modules/run-dispatch/domain/policy.ts b/server/src/modules/run-dispatch/domain/policy.ts
+index 59d9552..8e9460d 100644
+--- a/server/src/modules/run-dispatch/domain/policy.ts
++++ b/server/src/modules/run-dispatch/domain/policy.ts
+@@ -111,2 +111,3 @@ export type QueuedRunStalenessErrorCode =
+   | "issue_waiting_for_response"
++  | "issue_disposition_repair_superseded"
+   | "execution_reconciliation_required"
+diff --git a/server/src/services/agent-lifecycle.ts b/server/src/services/agent-lifecycle.ts
+index f24dc30..3dacf00 100644
+--- a/server/src/services/agent-lifecycle.ts
++++ b/server/src/services/agent-lifecycle.ts
+@@ -68,2 +68,5 @@ export function createAgentLifecycleEffects(_hooks: BudgetServiceHooks = {}): li
+       if (!isAgentStatusInvokable(before) && isAgentStatusInvokable(after)) {
++        if (before === "paused") {
++          await notifyDeliveryWork(tx, DELIVERY_QUEUES.activeRecoveryActions, JSON.stringify({ companyId }));
++        }
+         await notifyNativeResponsePresentation(tx, { companyId, agentId });
+diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
+index 5fe898c..474d154 100644
+--- a/server/src/services/heartbeat.ts
++++ b/server/src/services/heartbeat.ts
+@@ -2929,2 +2929,3 @@ export function heartbeatService(
+           typeof context.workspaceReconstructionActionId === "string" ||
++          typeof context.pausedDispositionRepairRunId === "string" ||
+           ["native_safe_replacement", "native_provider_overloaded"].includes(run.scheduledRetryReason ?? "")));
+diff --git a/server/src/services/recovery/service.ts b/server/src/services/recovery/service.ts
+index a31c52b..2b43635 100644
+--- a/server/src/services/recovery/service.ts
++++ b/server/src/services/recovery/service.ts
+@@ -22,2 +22,4 @@ import { readLegacyDispositionSource } from "./legacy-disposition-read.js";
+ import { hasPendingWakeInteraction } from "./pending-wake-interaction.js";
++import { getExecutionBlocker } from "../execution-blocker.js";
++import { hasConversationContinuationPolicy, historicalAdapterType } from "../conversation-continuation.js";
+ import { isAgentAwaitingSetup } from "../../modules/agent-lifecycle/index.js";
+@@ -3187,2 +3189,4 @@ export function recoveryService(
+     legacyEpisode?: LegacyDispositionEpisode;
++    pausedDispositionRepairRunId?: string;
++    pausedWakePolicy?: Record<string, unknown>;
+   }) {
+@@ -3216,2 +3219,5 @@ export function recoveryService(
+         } : {}),
++        ...(input.pausedDispositionRepairRunId ? {
++          pausedDispositionRepairRunId: input.pausedDispositionRepairRunId,
++        } : {}),
+         bypassContinuationSummaryPark: true,
+@@ -3341,2 +3347,6 @@ export function recoveryService(
+         attemptCount: input.attempt,
++        ...(input.pausedDispositionRepairRunId && input.legacyEpisode ? {
++          maxAttempts: sql`case when ${issueRecoveryActions.maxAttempts} is null then null
++            else least(${issueRecoveryActions.maxAttempts}, ${input.legacyEpisode.maxAttempts}) end`,
++        } : {}),
+         wakePolicy: {
+@@ -3364,2 +3375,9 @@ export function recoveryService(
+           eq(issueRecoveryActions.fingerprint, input.fingerprint),
++          input.pausedDispositionRepairRunId ? and(
++            eq(issueRecoveryActions.ownerAgentId, agentId),
++            eq(issueRecoveryActions.returnOwnerAgentId, agentId),
++            eq(issueRecoveryActions.attemptCount, input.attempt - 1),
++            gte(issueRecoveryActions.maxAttempts, input.attempt),
++            sql`${issueRecoveryActions.wakePolicy} = ${JSON.stringify(input.pausedWakePolicy ?? {})}::jsonb`,
++          ) : undefined,
+           sql`${issueRecoveryActions.attemptCount} <= ${input.attempt}`,
+@@ -3601,4 +3619,70 @@ export function recoveryService(
+         );
+-        const outcome = await reconcileDispositionRepair(issue, latestRun, {
++        let sourceRun: LatestIssueRun = latestRun;
++        let pausedEpisode: LegacyDispositionEpisode | undefined;
++        let expectedLatestRunId: string | undefined;
++        if (latestRun?.status === "cancelled" && latestRun.errorCode === "agent_paused") {
++          const context = parseObject(latestRun.contextSnapshot);
++          const resultJson = parseObject(latestRun.resultJson);
++          const episode = legacyDispositionEpisode(latestRun);
++          const sourceId = readNonEmptyString(context.dispositionRepairSourceRunId);
++          const retryAt = Date.parse(readNonEmptyString(wakePolicy.retryAt) ?? "");
++          const adapterType = await historicalAdapterType(db, latestRun);
++          if (
++            action.status !== "active" || action.ownerType !== "agent" ||
++            !action.ownerAgentId || action.ownerAgentId !== issue.assigneeAgentId ||
++            action.returnOwnerAgentId !== action.ownerAgentId || latestRun.agentId !== action.ownerAgentId ||
++            latestRun.runtimeMode !== "legacy" ||
++            (latestRun.issueId && latestRun.issueId !== issue.id) ||
++            (latestRun.nativeIssueId && latestRun.nativeIssueId !== issue.id) ||
++            readNonEmptyString(context.issueId) !== issue.id ||
++            (readNonEmptyString(context.taskId) && readNonEmptyString(context.taskId) !== issue.id) ||
++            readNonEmptyString(context.recoveryActionId) !== action.id ||
++            readNonEmptyString(context.wakeReason) !== ISSUE_DISPOSITION_REPAIR_RETRY_REASON ||
++            readNonEmptyString(context.retryReason) !== ISSUE_DISPOSITION_REPAIR_RETRY_REASON ||
++            readNonEmptyString(context.dispositionRepairFingerprint) !== action.fingerprint ||
++            asNumber(context.dispositionRepairAttempt, -1) !== episode.attempt ||
++            asNumber(context.dispositionRepairMaxAttempts, -1) !== episode.maxAttempts ||
++            readNonEmptyString(wakePolicy.scheduledRunId) !== latestRun.id ||
++            readNonEmptyString(wakePolicy.retryAgentId) !== action.ownerAgentId ||
++            action.attemptCount !== episode.attempt ||
++            action.maxAttempts === null || action.maxAttempts < episode.maxAttempts ||
++            episode.attempt < 1 || episode.attempt >= episode.maxAttempts ||
++            asNumber(wakePolicy.attempt, -1) !== episode.attempt ||
++            asNumber(wakePolicy.maxAttempts, -1) !== episode.maxAttempts ||
++            action.fingerprint !== legacyDispositionFingerprint(issue.companyId, issue.id, action.ownerAgentId, episode.id) ||
++            !sourceId || !Number.isFinite(retryAt) || retryAt > Date.now() ||
++            adapterType !== "hermes_local" ||
++            !hasConversationContinuationPolicy(resultJson) ||
++            parseObject(resultJson.executionCancellation).state !== "acknowledged" ||
++            isOperatorCancelledRun(latestRun, action.ownerAgentId) ||
++            await legacyExecutionNeedsReconciliationWithEvidence(db, latestRun) ||
++            await getExecutionBlocker(db, issue.companyId, issue.id)
++          ) {
++            result.skipped += 1;
++            continue;
++          }
++          const [source] = await db.select().from(heartbeatRuns).where(and(
++            eq(heartbeatRuns.companyId, issue.companyId), eq(heartbeatRuns.id, sourceId),
++          )).limit(1);
++          const sourceContext = parseObject(source?.contextSnapshot);
++          if (
++            !source || source.status !== "succeeded" || source.agentId !== action.ownerAgentId ||
++            readNonEmptyString(sourceContext.issueId) !== issue.id ||
++            (source.issueId && source.issueId !== issue.id) ||
++            (source.nativeIssueId && source.nativeIssueId !== issue.id) ||
++            legacyDispositionEpisode(source).id !== episode.id
++          ) {
++            result.skipped += 1;
++            continue;
++          }
++          sourceRun = source;
++          pausedEpisode = episode;
++          expectedLatestRunId = latestRun.id;
++        }
++        const outcome = await reconcileDispositionRepair(issue, sourceRun, {
+           historicalAttemptCount: persistedAttempt,
++          legacyEpisode: pausedEpisode,
++          expectedLatestRunId,
++          expectedActionId: pausedEpisode ? action.id : undefined,
++          expectedWakePolicy: pausedEpisode ? wakePolicy : undefined,
+         });
+@@ -3835,2 +3915,13 @@ export function recoveryService(
+     if (!issue) return "missing_issue";
++    if (readNonEmptyString(context.pausedDispositionRepairRunId)) {
++      const action = await recoveryActionsSvc.getActiveForIssue(run.companyId, issue.id);
++      const policy = parseObject(action?.wakePolicy);
++      if (!action || action.id !== readNonEmptyString(context.recoveryActionId) ||
++          action.status !== "active" || action.ownerType !== "agent" || action.ownerAgentId !== run.agentId ||
++          action.returnOwnerAgentId !== run.agentId || action.fingerprint !== context.dispositionRepairFingerprint ||
++          action.attemptCount !== episode.attempt || action.maxAttempts !== episode.maxAttempts ||
++          policy.scheduledRunId !== run.id || policy.retryAgentId !== run.agentId) {
++        return "paused_repair_action_changed";
++      }
++    }
+     const state = await collectDispositionRepairSourceState(db, { issue, excludeRunId: run.id, excludeWakeupRequestId: run.wakeupRequestId ?? undefined });
+@@ -3858,3 +3949,4 @@ export function recoveryService(
+     latestRun: LatestIssueRun,
+-    options: { historicalAttemptCount?: number; legacyEpisode?: LegacyDispositionEpisode } = {},
++    options: { historicalAttemptCount?: number; legacyEpisode?: LegacyDispositionEpisode;
++      expectedLatestRunId?: string; expectedActionId?: string; expectedWakePolicy?: Record<string, unknown> } = {},
+   ): Promise<"queued" | "escalated" | "covered" | "skipped"> {
+@@ -3890,3 +3982,5 @@ export function recoveryService(
+       if (!latestRun) return "skipped";
+-      const decision = await decidePersistedLegacyContinuation(current, latestRun.id, state, episode);
++      const decision = await decidePersistedLegacyContinuation(
++        current, latestRun.id, state, episode, options.expectedLatestRunId,
++      );
+       if (decision.kind === "skip") return "skipped";
+@@ -3918,2 +4012,3 @@ export function recoveryService(
+     );
++    if (options.expectedActionId && activeRepairAction?.id !== options.expectedActionId) return "skipped";
+     // Budget admission may wait behind another recovery worker. Read the
+@@ -3976,3 +4071,3 @@ export function recoveryService(
+     const nextAttempt = sameFingerprintAttempt + 1;
+-    const action = await ensureDispositionRepairAction({
++    const action = options.expectedActionId ? activeRepairAction! : await ensureDispositionRepairAction({
+       issue: current,
+@@ -3990,4 +4089,6 @@ export function recoveryService(
+       legacyEpisode: episode,
++      pausedDispositionRepairRunId: options.expectedLatestRunId,
++      pausedWakePolicy: options.expectedWakePolicy,
+     });
+-    if (!scheduled && episode) {
++    if (!scheduled && episode && !options.expectedActionId) {
+       // Admission can reject a stale snapshot under the issue lock. An empty
+diff --git a/server/src/__tests__/heartbeat-process-recovery.test.ts b/server/src/__tests__/heartbeat-process-recovery.test.ts
+index 3b1d5d4..26788d2 100644
+--- a/server/src/__tests__/heartbeat-process-recovery.test.ts
++++ b/server/src/__tests__/heartbeat-process-recovery.test.ts
+@@ -8012,1 +8012,204 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
++  async function seedPausedDispositionRepair() {
++    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
++      status: "in_progress", runStatus: "succeeded",
++    });
++    const repairId = randomUUID();
++    const actionId = randomUUID();
++    const fingerprint = legacyDispositionFingerprint(companyId, issueId, agentId, runId);
++    await db.update(issues).set({ checkoutRunId: null }).where(eq(issues.id, issueId));
++    await db.update(agents).set({ adapterType: "hermes_local" }).where(eq(agents.id, agentId));
++    await db.update(heartbeatRuns).set({ createdAt: new Date(Date.now() - 10_000) }).where(eq(heartbeatRuns.id, runId));
++    await db.insert(heartbeatRuns).values({
++      id: repairId, companyId, agentId, status: "cancelled", runtimeMode: "legacy",
++      errorCode: "agent_paused", invocationSource: "automation", createdAt: new Date(Date.now() - 1000),
++      finishedAt: new Date(),
++      runnerProfileJson: { adapterDispatch: { adapterType: "hermes_local" } },
++      resultJson: { conversationContinuation: "continue_conversation_v1",
++        executionCancellation: { state: "acknowledged" } },
++      contextSnapshot: { issueId, taskId: issueId, wakeReason: "issue_disposition_repair",
++        retryReason: "issue_disposition_repair", recoveryActionId: actionId,
++        dispositionRepairSourceRunId: runId, dispositionRepairAttempt: 1, dispositionRepairMaxAttempts: 2,
++        dispositionRepairFingerprint: fingerprint,
++        legacyDispositionEpisode: { id: runId, attempt: 1, maxAttempts: 2 } },
++    });
++    await db.insert(issueRecoveryActions).values({
++      id: actionId, companyId, sourceIssueId: issueId, kind: "deliberate_wait_without_target",
++      status: "active", ownerType: "agent", ownerAgentId: agentId, returnOwnerAgentId: agentId,
++      cause: "deliberate_wait_without_target", fingerprint, nextAction: "Resume the owner.",
++      evidence: { sourceStateFingerprint: fingerprint },
++      wakePolicy: { type: "bounded_owner_disposition_repair", attempt: 1, maxAttempts: 2,
++        retryAt: new Date(0).toISOString(), scheduledRunId: repairId, retryAgentId: agentId },
++      attemptCount: 1, maxAttempts: 2,
++    });
++
++    return { companyId, agentId, issueId, runId, repairId, actionId, fingerprint };
++  }
++
++  it("resumes an acknowledged paused conversation repair under the same owner and budget", async () => {
++    const { companyId, agentId, issueId, runId, repairId } = await seedPausedDispositionRepair();
++    await heartbeatService(db).reconcileStrandedAssignedIssues({ companyId, issueId });
++    const runs = await selectRecoveryRunsByAgent(agentId);
++    const retries = runs.filter((run) => run.id !== runId && run.id !== repairId);
++    expect(retries).toHaveLength(1);
++    expect(retries[0].contextSnapshot).toMatchObject({
++      issueId, dispositionRepairSourceRunId: runId,
++      legacyDispositionEpisode: { id: runId, attempt: 2, maxAttempts: 2 },
++    });
++  });
++
++  it("keeps the tighter paused repair episode budget when the action has a higher cap", async () => {
++    const { companyId, agentId, actionId } = await seedPausedDispositionRepair();
++    await db.update(issueRecoveryActions).set({ maxAttempts: 5 }).where(eq(issueRecoveryActions.id, actionId));
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await recovery.reconcileActiveRecoveryActions({ companyId });
++    const runs = await selectRecoveryRunsByAgent(agentId);
++    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(1);
++    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
++    expect(action).toMatchObject({ status: "active", attemptCount: 2, maxAttempts: 2 });
++  });
++
++  it.each([
++    "paused", "budget", "operator_stop", "user_cancel", "unacknowledged", "non_hermes",
++    "unsafe_workspace", "live_owner", "different_source", "failed_source", "different_episode",
++    "reassigned", "changed_issue", "different_owner", "future_retry", "exhausted", "lower_action_cap", "newer_run",
++    "concurrent_run",
++  ])("does not resume a paused repair with %s", async (scenario) => {
++    const { companyId, agentId, issueId, runId, repairId, actionId, fingerprint } =
++      await seedPausedDispositionRepair();
++    const [repair] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, repairId));
++    const context = repair!.contextSnapshot!;
++    const resultJson = repair!.resultJson!;
++    const updateRun = (values: Partial<typeof heartbeatRuns.$inferInsert>) =>
++      db.update(heartbeatRuns).set(values).where(eq(heartbeatRuns.id, repairId));
++    if (scenario === "paused") await db.update(agents).set({ status: "paused" }).where(eq(agents.id, agentId));
++    if (scenario === "budget") await db.update(companies).set({ status: "paused", pauseReason: "budget" }).where(eq(companies.id, companyId));
++    if (scenario === "operator_stop") await updateRun({ errorCode: "operator_interrupted" });
++    if (scenario === "user_cancel") await updateRun({ resultJson: { ...resultJson, cancelledByActorType: "user" } });
++    if (scenario === "unacknowledged") await updateRun({ resultJson: { ...resultJson, executionCancellation: { state: "requested" } } });
++    if (scenario === "non_hermes") await updateRun({ runnerProfileJson: { adapterDispatch: { adapterType: "process" } } });
++    if (scenario === "unsafe_workspace") await updateRun({ resultJson: { ...resultJson, workspaceRestoreFailure: "restore_unsafe_archive" } });
++    if (scenario === "live_owner") await updateRun({ processPid: process.pid });
++    if (scenario === "different_source") await updateRun({ contextSnapshot: { ...context, dispositionRepairSourceRunId: randomUUID() } });
++    if (scenario === "failed_source") await db.update(heartbeatRuns).set({ status: "failed" }).where(eq(heartbeatRuns.id, runId));
++    if (scenario === "different_episode") await updateRun({ contextSnapshot: { ...context, legacyDispositionEpisode: { id: randomUUID(), attempt: 1, maxAttempts: 2 } } });
++    if (scenario === "reassigned") await db.update(issues).set({ assigneeAgentId: null, assigneeUserId: "responsible-user" }).where(eq(issues.id, issueId));
++    if (scenario === "changed_issue") await db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issueId));
++    if (scenario === "different_owner") await db.update(issueRecoveryActions).set({ returnOwnerAgentId: null }).where(eq(issueRecoveryActions.id, actionId));
++    if (scenario === "lower_action_cap") await db.update(issueRecoveryActions).set({ maxAttempts: 1 }).where(eq(issueRecoveryActions.id, actionId));
++    if (scenario === "future_retry") await db.update(issueRecoveryActions).set({ wakePolicy: {
++      type: "bounded_owner_disposition_repair", attempt: 1, maxAttempts: 2,
++      retryAt: new Date(Date.now() + 60_000).toISOString(), scheduledRunId: repairId, retryAgentId: agentId,
++    } }).where(eq(issueRecoveryActions.id, actionId));
++    if (scenario === "exhausted") {
++      await updateRun({ contextSnapshot: { ...context, dispositionRepairAttempt: 2,
++        legacyDispositionEpisode: { id: runId, attempt: 2, maxAttempts: 2 } } });
++      await db.update(issueRecoveryActions).set({ attemptCount: 2, wakePolicy: {
++        type: "bounded_owner_disposition_repair", attempt: 2, maxAttempts: 2,
++        retryAt: new Date(0).toISOString(), scheduledRunId: repairId, retryAgentId: agentId,
++      } }).where(eq(issueRecoveryActions.id, actionId));
++    }
++    if (scenario === "newer_run" || scenario === "concurrent_run") {
++      await db.insert(heartbeatRuns).values({
++        companyId, agentId, status: scenario === "newer_run" ? "succeeded" : "running",
++        invocationSource: "automation", createdAt: new Date(),
++        contextSnapshot: { issueId, taskId: issueId },
++      });
++    }
++
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await recovery.reconcileActiveRecoveryActions({ companyId });
++    const runs = await selectRecoveryRunsByAgent(agentId);
++    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(0);
++    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
++    expect(action?.fingerprint).toBe(fingerprint);
++  });
++
++  it("reserves one paused repair retry under concurrent recovery sweeps", async () => {
++    const { companyId, agentId, actionId } = await seedPausedDispositionRepair();
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await Promise.all([
++      recovery.reconcileActiveRecoveryActions({ companyId }),
++      recovery.reconcileActiveRecoveryActions({ companyId }),
++    ]);
++    const runs = await selectRecoveryRunsByAgent(agentId);
++    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(1);
++    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
++    expect(action).toMatchObject({ status: "active", attemptCount: 2, maxAttempts: 2 });
++  });
++
++  it("does not dispatch a paused repair after its recovery action is resolved", async () => {
++    const { companyId, agentId, actionId } = await seedPausedDispositionRepair();
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await recovery.reconcileActiveRecoveryActions({ companyId });
++    const scheduled = (await selectRecoveryRunsByAgent(agentId))
++      .find((run) => run.scheduledRetryReason === "issue_disposition_repair");
++    expect(scheduled).toBeDefined();
++    await db.update(issueRecoveryActions).set({ status: "resolved", outcome: "restored" })
++      .where(eq(issueRecoveryActions.id, actionId));
++    expect(await recovery.legacyRepairDispatchBlock(scheduled!.id)).not.toBeNull();
++    const promoted = await heartbeatService(db).promoteDueScheduledRetries(
++      new Date(scheduled!.scheduledRetryAt!.getTime() + 1),
++    );
++    expect(promoted.runIds).not.toContain(scheduled!.id);
++  });
++
++  it("rechecks a paused repair action under the final dispatch lock", async () => {
++    const { companyId, agentId, issueId, actionId } = await seedPausedDispositionRepair();
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await recovery.reconcileActiveRecoveryActions({ companyId });
++    const scheduled = (await selectRecoveryRunsByAgent(agentId))
++      .find((run) => run.scheduledRetryReason === "issue_disposition_repair")!;
++    expect(await recovery.legacyRepairDispatchBlock(scheduled.id)).toBeNull();
++    await db.update(heartbeatRuns).set({ status: "running" }).where(eq(heartbeatRuns.id, scheduled.id));
++    await db.update(issues).set({ executionRunId: scheduled.id }).where(eq(issues.id, issueId));
++    const { reserveRunBudget } = await import("../services/budget-reservations.js");
++    const reservation = await reserveRunBudget(db, companyId, scheduled.id, null);
++    await db.update(issueRecoveryActions).set({ status: "resolved", outcome: "restored" })
++      .where(eq(issueRecoveryActions.id, actionId));
++    const { createPostgresRunDispatchAdapter } = await import("../modules/run-dispatch/adapters/postgres.js");
++    const dispatch = vi.fn(async () => undefined);
++    const outcome = await createPostgresRunDispatchAdapter(db).dispatchResolvedInteractionIfCurrent({
++      companyId, runId: scheduled.id, reservationId: reservation.id, expectedStatus: "running",
++      enforceContinuationOwnership: true, now: new Date(), dispatch,
++    });
++    expect(outcome).toMatchObject({ dispatched: false, cancellation: { outcome: "cancelled" } });
++    expect(dispatch).not.toHaveBeenCalled();
++  });
++
++  it("does not overwrite a paused repair policy changed while scheduling", async () => {
++    const { companyId, agentId, actionId, repairId } = await seedPausedDispositionRepair();
++    let locked!: () => void;
++    let release!: () => void;
++    const lockReady = new Promise<void>((resolve) => { locked = resolve; });
++    const releaseLock = new Promise<void>((resolve) => { release = resolve; });
++    const retryAt = new Date(Date.now() + 300_000).toISOString();
++    const policy = { type: "bounded_owner_disposition_repair", attempt: 1, maxAttempts: 2,
++      retryAt, scheduledRunId: repairId, retryAgentId: agentId };
++    let lockerPid = 0;
++    const locker = db.transaction(async (tx) => {
++      lockerPid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0].pid);
++      await tx.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId)).for("update");
++      await tx.update(issueRecoveryActions).set({ wakePolicy: policy }).where(eq(issueRecoveryActions.id, actionId));
++      locked();
++      await releaseLock;
++    });
++    await lockReady;
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    const sweep = recovery.reconcileActiveRecoveryActions({ companyId });
++    try {
++      await vi.waitFor(async () => {
++        const waiting = await db.execute(sql`select pid from pg_stat_activity
++          where ${lockerPid} = any(pg_blocking_pids(pid)) and wait_event_type = 'Lock'`);
++        expect(waiting.length).toBeGreaterThan(0);
++      }, { timeout: 5000, interval: 50 });
++    } finally {
++      release();
++      await Promise.all([locker, sweep]);
++    }
++    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
++    expect(action).toMatchObject({ attemptCount: 1, wakePolicy: policy });
++    const runs = await selectRecoveryRunsByAgent(agentId);
++    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(0);
++  });
++
+   it("reschedules an expired persisted disposition repair without duplicating the retry", async () => {
+diff --git a/server/src/services/recovery/service.ts b/server/src/services/recovery/service.ts
+index a54fe7a..468f56a 100644
+--- a/server/src/services/recovery/service.ts
++++ b/server/src/services/recovery/service.ts
+@@ -3203,2 +3203,23 @@ export function recoveryService(
+     const idempotencyKey = `issue_disposition_repair:${input.issue.id}:${input.fingerprint}:${input.attempt}`;
++    if (input.pausedDispositionRepairRunId && timing.delayMs === 0) return null;
++    const actionUpdate = (scheduledRunId: string) => ({
++      attemptCount: input.attempt,
++      ...(input.pausedDispositionRepairRunId && input.legacyEpisode ? {
++        maxAttempts: sql`case when ${issueRecoveryActions.maxAttempts} is null then null
++          else least(${issueRecoveryActions.maxAttempts}, ${input.legacyEpisode.maxAttempts}) end`,
++      } : {}),
++      wakePolicy: {
++        type: "bounded_owner_disposition_repair",
++        retryAgentId: agentId,
++        attempt: input.attempt,
++        maxAttempts: input.legacyEpisode?.maxAttempts ?? DISPOSITION_REPAIR_MAX_ATTEMPTS,
++        baseBackoffMs: timing.baseDelayMs,
++        jitterMs: timing.jitterMs,
++        retryAt: retryAt.toISOString(),
++        scheduledRunId,
++      },
++      timeoutAt: retryAt,
++      lastAttemptAt: now,
++      updatedAt: now,
++    });
+     const context = withRecoveryContext(
+@@ -3279,2 +3300,19 @@ export function recoveryService(
+             await notifyScheduledRetryDispatch(tx, { companyId: input.issue.companyId });
++            if (input.pausedDispositionRepairRunId) {
++              const [action] = await tx.select({ id: issueRecoveryActions.id })
++                .from(issueRecoveryActions).where(and(
++                  eq(issueRecoveryActions.id, input.action.id),
++                  eq(issueRecoveryActions.companyId, input.issue.companyId),
++                  eq(issueRecoveryActions.sourceIssueId, input.issue.id),
++                  eq(issueRecoveryActions.status, "active"),
++                  eq(issueRecoveryActions.ownerType, "agent"),
++                  eq(issueRecoveryActions.ownerAgentId, agentId),
++                  eq(issueRecoveryActions.returnOwnerAgentId, agentId),
++                  eq(issueRecoveryActions.fingerprint, input.fingerprint),
++                  eq(issueRecoveryActions.attemptCount, input.attempt - 1),
++                  gte(issueRecoveryActions.maxAttempts, input.attempt),
++                  sql`${issueRecoveryActions.wakePolicy} = ${JSON.stringify(input.pausedWakePolicy ?? {})}::jsonb`,
++                )).for("update");
++              if (!action) return null;
++            }
+             const wakeup = await tx
+@@ -3329,5 +3367,9 @@ export function recoveryService(
+               .where(eq(agentWakeupRequests.id, wakeup.id));
++            if (input.pausedDispositionRepairRunId) {
++              await tx.update(issueRecoveryActions).set(actionUpdate(run.id))
++                .where(eq(issueRecoveryActions.id, input.action.id));
++            }
+             return run;
+           });
+-          created = true;
++          created = Boolean(scheduledRun);
+         }
+@@ -3345,23 +3387,4 @@ export function recoveryService(
+-    await db
++    if (!input.pausedDispositionRepairRunId) await db
+       .update(issueRecoveryActions)
+-      .set({
+-        attemptCount: input.attempt,
+-        ...(input.pausedDispositionRepairRunId && input.legacyEpisode ? {
+-          maxAttempts: sql`case when ${issueRecoveryActions.maxAttempts} is null then null
+-            else least(${issueRecoveryActions.maxAttempts}, ${input.legacyEpisode.maxAttempts}) end`,
+-        } : {}),
+-        wakePolicy: {
+-          type: "bounded_owner_disposition_repair",
+-          retryAgentId: agentId,
+-          attempt: input.attempt,
+-          maxAttempts: input.legacyEpisode?.maxAttempts ?? DISPOSITION_REPAIR_MAX_ATTEMPTS,
+-          baseBackoffMs: timing.baseDelayMs,
+-          jitterMs: timing.jitterMs,
+-          retryAt: retryAt.toISOString(),
+-          scheduledRunId: scheduledRun.id,
+-        },
+-        timeoutAt: retryAt,
+-        lastAttemptAt: now,
+-        updatedAt: now,
+-      })
++      .set(actionUpdate(scheduledRun.id))
+       .where(
+@@ -3375,9 +3398,2 @@ export function recoveryService(
+           eq(issueRecoveryActions.fingerprint, input.fingerprint),
+-          input.pausedDispositionRepairRunId ? and(
+-            eq(issueRecoveryActions.ownerAgentId, agentId),
+-            eq(issueRecoveryActions.returnOwnerAgentId, agentId),
+-            eq(issueRecoveryActions.attemptCount, input.attempt - 1),
+-            gte(issueRecoveryActions.maxAttempts, input.attempt),
+-            sql`${issueRecoveryActions.wakePolicy} = ${JSON.stringify(input.pausedWakePolicy ?? {})}::jsonb`,
+-          ) : undefined,
+           sql`${issueRecoveryActions.attemptCount} <= ${input.attempt}`,

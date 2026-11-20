@@ -25,6 +25,9 @@ also matches the original agent, so a different agent's handoff is not mistaken 
 The local patch also treats pending, wake-enabled interactions and unfinished visible blockers as
 durable review waits, and rechecks both before escalation. Resolved interactions, cards without
 a wake, and completed or hidden blockers do not suppress recovery.
+The patch also rechecks a paused Hermes disposition repair through the existing recovery worker.
+It retains the original owner, episode, retry budget, and execution and workspace safety gates;
+uncertain process-adapter outcomes remain held for reconciliation.
 
 The standalone private preview (`compose/v4/paperclip-private.yml`) runs only the combined
 Paperclip/Hermes image with authenticated access, a loopback-only published port, a dedicated
