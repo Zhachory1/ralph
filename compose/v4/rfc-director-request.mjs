@@ -45,6 +45,7 @@ export async function requestDirectorReview(job) {
   }
   const confirmation = await board(`issues/${issueId}/interactions`, "POST", {
     kind: "request_confirmation", idempotencyKey: document.latestRevisionId,
+    continuationPolicy: "wake_assignee_on_accept",
     resolverPolicy: "human_only", addresseeUserId: directorUserId,
     payload: {
       version: 1, prompt: "Approve this exact RFC revision?",

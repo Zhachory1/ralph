@@ -259,7 +259,15 @@ The overlay job `work-chat-digest` (Hermes cron, weekdays 08:30 New York) summar
 
 **Entry:** a card the review loop creates once a week on `intake`, assigned to `ralph-librarian`. **Exit:** a pull request on the docs repo reporting one pass, or a card completed with nothing to report. **Owners:** the weekly-card block in `run-review-loop`, `ralph-librarian`.
 
-A second, separate entry point hands the Librarian an RFC the Director accepted: the Feature Workflow Manager assigns a card naming the issue and the exact accepted revision, and the Librarian opens the one pull request that publishes those bytes unchanged — never authoring, revising, or claiming a pull request it did not open itself (`AGENTS.md`, "Build Ralph; do not do Ralph's job"). This handoff is not wired to any native trigger yet; `profiles/librarian/SOUL.md` and the Paperclip `Librarian`/`Feature Workflow Manager` seat instructions (`compose/v4/provision-paperclip.py`) describe the contract both sides must honor once it is.
+A second entry point uses the native `wake_assignee_on_accept` confirmation policy.
+Paperclip wakes the **current assignee**, not necessarily the agent that created the
+card. The Feature Workflow Manager keeps the confirmation issue open and assigned
+to itself; the Director is the confirmation's addressee, not the issue assignee.
+The manager uses the acceptance wake to assign the Librarian one publication task
+keyed by confirmation ID. The Librarian verifies the decision, opens the docs PR
+with unchanged bytes, and records its own receipt. No polling job replays old
+approvals. An issue with no agent assignee, or a closed issue, cannot provide
+this wake. A missing assignment or an operator-published PR is not a pass.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
 - Promotes a document from `in review` to `approved` once its newest `prs:` entry has merged and none is still open (`draft` is never promoted). Fills the memory front matter it can derive (`kind` from the folder, `date` and `source` from the file name or first commit, `profile` from that commit's author when it maps to a `ralph-*` profile) and nothing else; what it cannot derive goes in the pull request body. Merges duplicate notes and marks superseded ones, only when a pair passes three gates (same `kind`, a shared concrete anchor, one sentence true of both with no "and"), at most five of each per run. Archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead). Rewrites path links to anything moved, and regenerates folder indexes, leaving the repository's root `README.md` and any `README.md` that carries an `id` or `status` alone.
