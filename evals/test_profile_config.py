@@ -607,11 +607,11 @@ class DispatcherCapTests(unittest.TestCase):
         return {c[2]: int(c[3]) for c in calls if c[:2] == ["config", "set"]}
 
     def test_each_board_leaves_one_profile_share_for_the_boards_after_it(self):
-        for host, per_board in ((None, 4), (8, 6), (4, 2), (3, 2), (1, 2)):
+        for host, per_board in ((None, 3), (8, 5), (4, 3), (3, 3), (1, 3)):
             with self.subTest(RALPH_MAX_IN_PROGRESS=host):
                 caps = self.caps(host)
                 self.assertEqual(host or 6, caps["kanban.max_in_progress"])
-                self.assertEqual(2, caps["kanban.max_in_progress_per_profile"])
+                self.assertEqual(3, caps["kanban.max_in_progress_per_profile"])
                 self.assertEqual(per_board, caps["kanban.max_spawn"])
 
     def test_a_board_can_always_run_one_whole_profile(self):

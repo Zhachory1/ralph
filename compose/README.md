@@ -233,7 +233,8 @@ librarian card on `intake` (`RALPH_INTAKE_BOARD`). `ralph` holds human-facing fe
 still read (an in-flight Chat thread, an open librarian run), but no new card goes there. The notifier enumerates active boards, so a blocked machine-created card can page
 you. `kanban.max_in_progress` remains an instance-wide cap across all boards; adding boards
 does not increase concurrency. Boards spend it in name order, so `kanban.max_spawn` caps each
-board two below it: a lens flood leaves the maintainer its two cards instead of one.
+board one profile's share (3) below it: a lens flood leaves the maintainer its three cards
+instead of one.
 
 See [`docs`](https://github.com/Zhachory1/docs) project `fleet-into-ralph` for the design this
 implements, including the cost arithmetic behind these defaults.

@@ -22,7 +22,7 @@ digraph systemflow {
     board_q  [label="board: queues\nIntake + older cards", shape=cylinder, fillcolor="#F4F4F4"];
     board_lenses [label="board: lenses\nreview graphs", shape=cylinder, fillcolor="#F4F4F4"];
     board_maintain [label="board: maintain\nPR maintenance", shape=cylinder, fillcolor="#F4F4F4"];
-    dispatch [label="dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
+    dispatch [label="dispatcher\n8 at once, 5 per board,\n3 per profile, 3 attempts per card"];
   }
   subgraph cluster_work { label="3. Work (each in its own sandbox)"; style="rounded,filled"; fillcolor="#EEF7EC"; color="#4E8F48";
     author     [label="author\nPRD, design, plan PRs"];

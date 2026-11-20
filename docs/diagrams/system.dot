@@ -45,7 +45,7 @@ digraph ralph {
       board_q [label="Kanban board: queues\nIntake + older cards", shape=cylinder, fillcolor="#F4F4F4"];
       board_lenses [label="Kanban board: lenses\nreview graphs", shape=cylinder, fillcolor="#F4F4F4"];
       board_maintain [label="Kanban board: maintain\nPR maintenance", shape=cylinder, fillcolor="#F4F4F4"];
-      dispatch [label="Hermes dispatcher\n8 at once, 2 per profile,\n3 attempts per card"];
+      dispatch [label="Hermes dispatcher\n8 at once, 5 per board,\n3 per profile, 3 attempts per card"];
     }
 
     subgraph cluster_gates {

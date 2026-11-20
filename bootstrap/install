@@ -29,9 +29,9 @@ hermes config set kanban.review_dispatch true >/dev/null
 # clamp(MemTotal / 512MiB, 2, 8) -- which is silent and changes with the
 # machine's RAM rather than with a decision anyone made. So they are set,
 # per instance: max_in_progress counts one instance's boards only, so two
-# instances on one VM add up. 2 per profile keeps a queue flood from
+# instances on one VM add up. 3 per profile keeps a queue flood from
 # starving a hand-written card, and keeps the maintainer, the one profile
-# that builds and tests, to 2 at once.
+# that builds and tests, to 3 at once.
 #
 # Every board's tick spends from that one host cap, in board-name order, and
 # the per-profile count is per board. So `lenses`, whose short cards span
@@ -43,7 +43,7 @@ hermes config set kanban.review_dispatch true >/dev/null
 # Dispatcher settings are read once at gateway boot, so this takes a
 # restart to apply, not a reload.
 dispatcher_caps() {
-    local host=${RALPH_MAX_IN_PROGRESS:-6} per_profile=2
+    local host=${RALPH_MAX_IN_PROGRESS:-6} per_profile=3
     local per_board=$((host - per_profile))
     if ((per_board < per_profile)); then per_board=$per_profile; fi
     hermes config set kanban.max_in_progress "$host" >/dev/null
