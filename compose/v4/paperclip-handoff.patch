@@ -1019,7 +1019,7 @@
      await db.delete(issues);
      await db.delete(agents);
      await db.delete(companies);
-@@ -211,6 +215,47 @@
+@@ -211,6 +215,63 @@
      }});
      return { recorded, rows };
    }
@@ -1063,6 +1063,22 @@
 +    expect((await db.select().from(issues).where(eq(issues.id, issueId)))[0].status).toBe("in_review");
 +    expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId)))
 +      .toHaveLength(0);
++  });
++
++  it("still escalates a stranded review with no pending wake interaction", async () => {
++    const companyId = await seedCompany();
++    const agentId = await seedAgent({ companyId });
++    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "in_review" });
++    const runId = await seedRun({ companyId, agentId, status: "succeeded", contextSnapshot: { issueId } });
++    const [issue] = await db.select().from(issues).where(eq(issues.id, issueId));
++    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
++
++    const result = await recoveryService(db, { enqueueWakeup: vi.fn() }).escalateStrandedAssignedIssue({
++      issue, previousStatus: "in_review", latestRun: run, recoveryCause: "execution_review_participant_recovery",
++    });
++    expect(result?.status).toBe("blocked");
++    expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId)))
++      .toHaveLength(1);
 +  });
 -
 +

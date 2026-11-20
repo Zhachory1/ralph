@@ -106,6 +106,8 @@ else
         'any(.[]; .authorAgentId==$author and (.body|length)>0)' >/dev/null
     fi
     doc=$(pc "$PAPERCLIP_API_URL/api/issues/$issue/documents/rfc")
+    pc --json '{"body":"Fixture decision brief: Council supports this revision."}' \
+      "$PAPERCLIP_API_URL/api/issues/$issue/comments" >/dev/null
     payload=$(printf '%s' "$doc" | jq -c --arg issue "$issue" --arg human DIRECTOR \
       '{kind:"request_confirmation",resolverPolicy:"human_only",addresseeUserId:$human,
         continuationPolicy:"wake_assignee_on_accept",idempotencyKey:("approval:"+.latestRevisionId),
@@ -249,6 +251,8 @@ def check_council_comments(container, *, dissent=False, unclear=False):
         assert len(cards) == 1 and cards[0]["createdByAgentId"] == manager["id"] and cards[0]["status"] == "pending"
         assert cards[0]["resolverPolicy"] == "human_only" and cards[0]["addresseeUserId"] == director
         assert cards[0]["payload"]["target"]["revisionId"] == document["latestRevisionId"]
+        assert any(comment.get("authorAgentId") == manager["id"] and "Fixture decision brief" in comment["body"]
+                   for comment in board(f"{path}/comments"))
         if unclear:
             clarification = clarifications[0]
             assert clarification["status"] == "done" and clarification["assigneeAgentId"] == judges[1]["id"]
