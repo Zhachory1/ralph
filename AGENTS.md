@@ -17,6 +17,12 @@ The default profiles and templates shipped here are starting points. Users copy 
 
 ## Shared principles
 
+**Build Ralph; do not do Ralph’s job.** When implementing or testing a live workflow, the responsible Paperclip seat must perform its own task under its own identity. Authorization for an outcome, destination, or credential does not transfer the task to the coding assistant or host operator.
+
+For example, approval to publish an RFC in the docs repo means the Feature Manager delegates publication and the Librarian opens the PR. Do not push it from the host, manually create the missing handoff, or ask the Librarian to claim an existing operator-created PR.
+
+If a handoff fails, preserve the evidence, fix the underlying code or configuration, and rerun through the intended actor. Verify **who acted, on which run, and what artifact resulted**. If the native path remains blocked, report the blocker. An operator-assisted result is not an end-to-end pass.
+
 Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this repository. Ground the current system, reuse what exists, apply MVP/Occam/80-20 to scope, respect the Law of Demeter and profile boundaries, check system-wide effects, and carry work through review and maintenance. Then follow [profiles/STANDARDS.md](profiles/STANDARDS.md) for code, tests, ownership, and documentation. `bootstrap/install` puts both sources before every profile's role instructions; do not maintain separate copies here. Principles never override the narrower permissions and human approval rules below.
 
 ## Hard rules
