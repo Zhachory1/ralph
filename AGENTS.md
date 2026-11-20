@@ -19,7 +19,7 @@ The default profiles and templates shipped here are starting points. Users copy 
 
 **Build Ralph; do not do Ralph’s job.** When implementing or testing a live workflow, the responsible Paperclip seat must perform its own task under its own identity. Authorization for an outcome, destination, or credential does not transfer the task to the coding assistant or host operator.
 
-For example, approval to publish an RFC in the docs repo means the Feature Manager delegates publication and the Librarian opens the PR. Do not push it from the host, manually create the missing handoff, or ask the Librarian to claim an existing operator-created PR.
+For example, approval to publish an RFC in the docs repo means the Feature Workflow Manager delegates publication and the Librarian opens the PR. Do not push it from the host, manually create the missing handoff, or ask the Librarian to claim an existing operator-created PR.
 
 If a handoff fails, preserve the evidence, fix the underlying code or configuration, and rerun through the intended actor. Verify **who acted, on which run, and what artifact resulted**. If the native path remains blocked, report the blocker. An operator-assisted result is not an end-to-end pass.
 
