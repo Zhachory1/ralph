@@ -35,9 +35,9 @@ RFC approval and store the approved bytes in a disposable Git repository inside 
 By default it exercises Paperclip's native behavior: Done resumes a blocked downstream issue
 regardless of which revision was approved ([#243](https://github.com/Zhachory1/ralph/issues/243)
 tracks hardening this). Add `--require-downstream-gate` only if your deployment wants an
-unmatched revision to fail the run instead. Publication safety is unaffected either way: the
-probe's separate Git-storage check (see [workflows](workflows.md)) never stores or overwrites
-bytes the Director did not approve. The probe does not push to a remote or change live routing.
+unmatched revision to fail the run instead. The probe's separate Git-storage check
+(see [workflows](workflows.md)) runs only in the fixture; it does not enforce live publication.
+The probe does not push to a remote or change live routing.
 
 Run `python3 compose/v4/test/paperclip-routing-canary.py` with the same image and Node.js
 on the host. It uses scripted proposals and Council verdicts against an authenticated,

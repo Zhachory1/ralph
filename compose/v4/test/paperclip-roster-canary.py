@@ -8,7 +8,8 @@ from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
 fixture = runpy.run_path(str(TESTS / "paperclip-rfc-canary.py"))
-provision = runpy.run_path(str(TESTS.parent / "provision-paperclip.py"))["provision"]
+provisioning = runpy.run_path(str(TESTS.parent / "provision-paperclip.py"))
+provision = provisioning["provision"]
 
 
 def check_roster(container):
@@ -70,7 +71,7 @@ def check_roster(container):
     assert board(f"issues/{issue['id']}")["status"] == "backlog"
     for agent_id in full.values():
         instructions = board(f"agents/{agent_id}/instructions-bundle/file?path=AGENTS.md")["content"]
-        assert "Speak naturally between agents." in instructions
+        assert provisioning["HANDOFF_GUIDANCE"] in instructions
     manager = full["Feature Workflow Manager"]
     def manager_grant(enabled):
         board(f"agents/{manager}/permissions", {

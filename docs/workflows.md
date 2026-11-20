@@ -56,11 +56,9 @@ to the Director. Paperclip's native Done transition resumes a blocked downstream
 default even if the RFC changed from the Director-approved revision B to an unapproved C --
 that native release is not itself a revision or publication check, and most deployments do not
 need it to be. A deployment that wants Done to require the exact approved revision can opt into
-that stricter behavior with the canary's `--require-downstream-gate` flag. Publication safety
-is the separate, already-covered storage check: it re-reads the Director's accepted
-confirmation, fetches the immutable revision it names, commits B byte-for-byte to a disposable
-Git repository, refuses unapproved C, and verifies a retry leaves the same commit in place. It
-is not a live publisher.
+that stricter behavior with the canary's `--require-downstream-gate` flag. The canary separately
+tests a Git-storage check against the accepted revision in a disposable repository. That check
+is not a live publisher or a requirement on the Librarian.
 
 The offline routing canary uses scripted Hermes proposals and Council verdicts with real
 Paperclip confirmations and assignment records. Initiative approval is requested only after
@@ -285,12 +283,10 @@ Paperclip wakes the **current assignee**, not necessarily the agent that created
 card. The Feature Workflow Manager keeps the confirmation issue open and assigned
 to itself; the Director is the confirmation's addressee, not the issue assignee.
 The manager uses the acceptance wake to assign the Librarian one publication task
-keyed by confirmation ID. The Librarian verifies the decision, opens the docs PR
-with unchanged bytes, and records its own receipt. No polling job replays old
+keyed by confirmation ID. The Librarian uses the Manager's handoff, opens the docs
+PR, and returns its result without re-checking approval. No polling job replays old
 approvals. An issue with no agent assignee, or a closed issue, cannot provide
 this wake. A missing assignment or an operator-published PR is not a pass.
-The Librarian reads the source issue's native interactions and immutable document
-revision with its own run credentials; a missing or inaccessible receipt stops publication.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
 - Promotes a document from `in review` to `approved` once its newest `prs:` entry has merged and none is still open (`draft` is never promoted). Fills the memory front matter it can derive (`kind` from the folder, `date` and `source` from the file name or first commit, `profile` from that commit's author when it maps to a `ralph-*` profile) and nothing else; what it cannot derive goes in the pull request body. Merges duplicate notes and marks superseded ones, only when a pair passes three gates (same `kind`, a shared concrete anchor, one sentence true of both with no "and"), at most five of each per run. Archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead). Rewrites path links to anything moved, and regenerates folder indexes, leaving the repository's root `README.md` and any `README.md` that carries an `id` or `status` alone.
