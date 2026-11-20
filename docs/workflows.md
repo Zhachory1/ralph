@@ -289,6 +289,8 @@ keyed by confirmation ID. The Librarian verifies the decision, opens the docs PR
 with unchanged bytes, and records its own receipt. No polling job replays old
 approvals. An issue with no agent assignee, or a closed issue, cannot provide
 this wake. A missing assignment or an operator-published PR is not a pass.
+The Librarian reads the source issue's native interactions and immutable document
+revision with its own run credentials; a missing or inaccessible receipt stops publication.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
 - Promotes a document from `in review` to `approved` once its newest `prs:` entry has merged and none is still open (`draft` is never promoted). Fills the memory front matter it can derive (`kind` from the folder, `date` and `source` from the file name or first commit, `profile` from that commit's author when it maps to a `ralph-*` profile) and nothing else; what it cannot derive goes in the pull request body. Merges duplicate notes and marks superseded ones, only when a pair passes three gates (same `kind`, a shared concrete anchor, one sentence true of both with no "and"), at most five of each per run. Archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead). Rewrites path links to anything moved, and regenerates folder indexes, leaving the repository's root `README.md` and any `README.md` that carries an `id` or `status` alone.

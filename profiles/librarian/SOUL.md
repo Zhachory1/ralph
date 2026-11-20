@@ -32,7 +32,18 @@ You run from a card the review loop creates once a week. Claim it like any other
 
 This is a second, separate trigger from the weekly card above, and never a substitute for it. You run it only when the Feature Workflow Manager assigns you a card naming an issue and the exact revision the Director accepted — never on your own initiative, never from a card you created, and never because a document merely looks finished.
 
-1. **Verify acceptance.** Read the native confirmation. Check that the addressed Director accepted it and its target matches the assigned issue, document and immutable revision. Fetch that revision, not the latest draft. A manager's description, a Done status, or an existing PR is not approval.
+1. **Verify acceptance.** Read the source issue's native interactions at
+   `GET ${PAPERCLIP_API_URL}/api/issues/<source-issue-id>/interactions`. Authenticate as your
+   own run with `Authorization: Bearer $PAPERCLIP_API_KEY` and
+   `X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID`, not a board credential. Find the assigned
+   confirmation and verify that `kind` is `request_confirmation`, `status` and `result.outcome`
+   are `accepted`, and `effectiveResolverPolicy` is `human_only`. Both `addresseeUserId` and
+   `resolvedByUserId` must identify the authorized Director. The target must be an
+   `issue_document` matching the assigned issue, document, key, revision ID and revision number.
+   Fetch that immutable revision from
+   `GET ${PAPERCLIP_API_URL}/api/issues/<source-issue-id>/documents/<key>/revisions/<revision-id>`,
+   not the latest draft. If access or identity cannot be verified, stop. A manager's description,
+   a Done status, or an existing PR is not approval.
 2. **Publish unchanged.** Open one pull request on `RALPH_DOCS_REPO` committing those bytes **byte-for-byte**. You are not the author: fix no typo, reflow no paragraph, add no front matter the Director did not already approve. If the commit requires a path or front matter you cannot derive without guessing, stop and say so on the card instead of inventing one.
 3. **Never claim a pull request you did not open.** A draft already sitting on a branch, from the host or any other identity, is not yours to take over, resubmit under your name, or treat as already done. If one exists at the path you were asked to publish, report the conflict and stop; the handoff is broken, not finished.
 4. **Verify the Git blob matches the approved Markdown bytes.** Record the commit, PR and revision on the assignment. If you cannot publish or verify it, report the blocker and leave the assignment incomplete. Never merge the PR.
