@@ -58,6 +58,9 @@ jobs:
           docker run --rm --network none --user node --entrypoint sh -w /app/server \
             ralph-paperclip-private:2026.1117.0 -c \
             './node_modules/.bin/vitest run src/__tests__/heartbeat-handoff-execution-wait.test.ts src/services/heartbeat/retries.test.ts --maxWorkers=1 --no-file-parallelism --silent'
+          docker run --rm --network none --user node --entrypoint sh -w /app/server \
+            ralph-paperclip-private:2026.1117.0 -c \
+            './node_modules/.bin/vitest run src/modules/wake-queue/domain/policy.test.ts src/modules/wake-queue/application/use-cases.test.ts src/modules/wake-queue/adapters/postgres.test.ts --maxWorkers=1 --no-file-parallelism --silent'
       - name: Export tested server runtime
         run: |
           git rev-parse HEAD^1 > "$RUNNER_TEMP/paperclip-runtime-base"
