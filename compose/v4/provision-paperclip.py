@@ -24,9 +24,13 @@ SEATS = (
 WORKFLOW_SEATS = (
     ("Feature Workflow Manager", "general", "hermes_local", "Own the feature outcome; assign the Author and specialists. "
      "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
-     "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch."),
+     "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch. "
+     "Once the Director accepts an RFC confirmation, hand the exact accepted issue and revision to the Librarian "
+     "as a new assignment; publish nothing yourself, and never ask the Librarian to claim a pull request you or "
+     "anyone else already opened."),
     ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
-    ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge."),
+    ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge. "
+     + (Path(__file__).resolve().parents[2] / "profiles/librarian/SOUL.md").read_text()),
     ("Comms", "general", "hermes_local", "Triage communications; external sends require Director approval."),
     ("Council Architecture", "general", "hermes_local", "Return an independent architecture_scale verdict."),
     ("Council Security", "general", "hermes_local", "Return an independent security_blast_radius verdict."),
