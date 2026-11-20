@@ -29,13 +29,28 @@ hermes config set kanban.review_dispatch true >/dev/null
 # clamp(MemTotal / 512MiB, 2, 8) -- which is silent and changes with the
 # machine's RAM rather than with a decision anyone made. So they are set,
 # per instance: max_in_progress counts one instance's boards only, so two
-# instances on one VM add up. 2 per profile keeps a queue flood from
+# instances on one VM add up. 3 per profile keeps a queue flood from
 # starving a hand-written card, and keeps the maintainer, the one profile
-# that builds and tests, to 2 at once.
+# that builds and tests, to 3 at once.
+#
+# Every board's tick spends from that one host cap, in board-name order, and
+# the per-profile count is per board. So `lenses`, whose short cards span
+# several profiles and which ticks before `maintain`, took each freed slot
+# first and held the maintainer to one card through a review flood. max_spawn
+# caps one board at the host cap less a profile's share, so the boards after
+# it can always run one profile in full. Never below one share: the gateway
+# reads max_spawn 0 as a cap of zero, and nothing would run.
 # Dispatcher settings are read once at gateway boot, so this takes a
 # restart to apply, not a reload.
-hermes config set kanban.max_in_progress "${RALPH_MAX_IN_PROGRESS:-6}" >/dev/null
-hermes config set kanban.max_in_progress_per_profile 2 >/dev/null
+dispatcher_caps() {
+    local host=${RALPH_MAX_IN_PROGRESS:-6} per_profile=3
+    local per_board=$((host - per_profile))
+    if ((per_board < per_profile)); then per_board=$per_profile; fi
+    hermes config set kanban.max_in_progress "$host" >/dev/null
+    hermes config set kanban.max_in_progress_per_profile "$per_profile" >/dev/null
+    hermes config set kanban.max_spawn "$per_board" >/dev/null
+}
+dispatcher_caps
 
 # A card-dispatched worker runs with nobody present to answer an approval
 # prompt, and Hermes' default is to refuse the approval-gated tools outright.
