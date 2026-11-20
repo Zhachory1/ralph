@@ -27,6 +27,7 @@ Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this rep
 
 ## Hard rules
 
+- **Use the native path. Do not build a workaround.** Before adding code or changing a workflow, check the pinned platform and repository for an existing feature, service, module, class, function, or library that already does the job. Trace how an existing caller uses it and verify the smallest relevant case. If it fits, use it through the intended actor. If it fails, fix its configuration or underlying implementation and retest that path. If no supported path fits, report what you checked and the concrete gap before proposing new machinery. A missing approval card, for example, calls for checking the native confirmation workflow—not adding a button that changes task status.
 - **Nothing private, internal, or employer-specific in this repository.** No internal hostnames, service names, document-standard names, MCP endpoints, ticket IDs, or incident-process detail. This repository is public. Layer 3 exists precisely so that material has somewhere else to live.
 - **No secrets, tokens, or credentials**, including in examples, tests, and fixtures. Examples use obvious placeholders.
 - **Invariants are enforced in permissions, not prose.** A safety property that exists only as text in a `SKILL.md` is not enforced, because Hermes can rewrite skill text. If you add a safety rule, add the token scope, blocked command, or branch protection that backs it, and say in the same change which mechanism enforces it.
@@ -37,7 +38,6 @@ Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this rep
 
 - **One concern per PR**, preferably under 400 changed lines. Don't split an indivisible working slice to hit the number.
 - **Create directories when the first real file lands in them.** The README's layout is a proposal; empty placeholder trees are scaffolding to match a diagram.
-- **Reach for the existing thing first.** Reuse before adding a helper; the standard library before a dependency; an installed dependency before a new one.
 - **Prefer deletion.** The design calls for reviewing the profile split once a year and asking, for each boundary, whether it still protects something or only adds handoffs. Apply that to code too.
 - **Don't add error handling for conditions that can't happen.** Validate at system boundaries; trust internal code.
 - **Comments explain why, not what.** Default to none.
