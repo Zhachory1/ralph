@@ -461,7 +461,7 @@
 +}
 --- /dev/null
 +++ b/server/src/__tests__/heartbeat-handoff-execution-wait.test.ts
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,473 @@
 +import { randomUUID } from "node:crypto";
 +import { and, eq, sql } from "drizzle-orm";
 +import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -882,6 +882,38 @@
 +    });
 +    expect(result.reviewParticipantRequeued, JSON.stringify(result)).toBe(1);
 +    expect((await f.successors()).filter(run => run.id !== prior.id)).toHaveLength(1);
++  });
++
++  it("automatically recovers a historical skipped review wake after startup", async () => {
++    const f = await fixture();
++    const [issue] = await db.select().from(issues).where(eq(issues.id, f.issueId));
++    const state = issue.executionState!;
++    await db.update(issues).set({ executionPolicy: { mode: "normal", commentRequired: true, stages: [{
++      id: state.currentStageId, type: "review",
++      participants: [state.currentParticipant], approvalsNeeded: 1,
++    }] } }).where(eq(issues.id, f.issueId));
++    const [prior] = await db.insert(heartbeatRuns).values({
++      companyId: f.companyId, agentId: f.reviewerId, status: "cancelled", runtimeMode: "legacy",
++      startedAt: new Date(Date.now() - 20_000), finishedAt: new Date(Date.now() - 15_000),
++      errorCode: "issue_reassigned", contextSnapshot: { issueId: f.issueId, wakeReason: "issue_execution_followup" },
++      resultJson: { conversationContinuation: "continue_conversation_v1", reassignmentStopConfirmed: true,
++        executionCancellation: { state: "acknowledged" } },
++    }).returning();
++    await f.wake();
++    const [wake] = await f.requests();
++    const payload = { ...wake.payload, interruptedRunId: f.run.id };
++    delete payload._paperclipExecutionHandoff;
++    await db.update(agentWakeupRequests).set({
++      status: "skipped", reason: "execution_reconciliation_required", payload, finishedAt: new Date(),
++    }).where(eq(agentWakeupRequests.id, wake.id));
++    await f.release();
++    const errors: unknown[] = [];
++    coordinator = createDeliveryWorkCoordinator({ owner: db, canRun: () => true, canReconcile: () => true,
++      onError: error => errors.push(error) });
++    await heartbeatService(db).registerIssueStateRecoveryWork(coordinator, () => true).ready;
++    await vi.waitFor(async () => expect((await f.successors()).filter(run => run.id !== prior.id)).toHaveLength(1),
++      { timeout: 10_000 });
++    expect(errors).toEqual([]);
 +  });
 +
 +  it.each([true, false])("reconstructs pending work (saved before startup: %s), wakes from lease cleanup and becomes idle", async savedBeforeStartup => {
