@@ -20,6 +20,7 @@ on:
       - "compose/v4/test/paperclip-board-key-canary.py"
       - "profiles/PRINCIPLES.md"
       - "profiles/council/rubric-v1.md"
+      - "profiles/librarian/SOUL.md"
 
 permissions:
   contents: read

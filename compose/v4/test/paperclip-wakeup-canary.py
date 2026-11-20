@@ -7,6 +7,7 @@ run-scoped credentials (not the Director's or an operator's), and the resulting 
 assignment is created with idempotencyKey publish-rfc:<confirmation-id> so a replay does
 not create a second assignment. Both the manager and the Librarian are scripted `process`
 fixtures: this probes the native trigger and idempotency, not an LLM's judgment.
+The Librarian fixture verifies the receipt and revision; it does not publish a PR.
 """
 
 import runpy
@@ -37,6 +38,33 @@ if [ "$kind" = "request_confirmation" ] && [ "$status" = "accepted" ] && [ -n "$
     '{title: ("Publish accepted RFC " + $conf), description: $target, status: "todo", parentId: $parent, assigneeAgentId: $assignee, idempotencyKey: $key}')
   pc --json "$body" "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues" > /tmp/wakeup-assignment.json
 fi
+"""
+
+LIBRARIAN_SCRIPT = r"""
+set -e
+pc() { curl -fsS --max-time 5 -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" "$@"; }
+source=SOURCE_LITERAL
+confirmation=CONFIRMATION_LITERAL
+director=DIRECTOR_LITERAL
+document=DOCUMENT_LITERAL
+revision=REVISION_LITERAL
+number=NUMBER_LITERAL
+issue=$(pc "$PAPERCLIP_API_URL/api/heartbeat-runs/$PAPERCLIP_RUN_ID" | jq -r '.issueId')
+pc "$PAPERCLIP_API_URL/api/issues/$source/interactions" |
+  jq -e --arg card "$confirmation" --arg human "$director" --arg source "$source" \
+    --arg document "$document" --arg revision "$revision" --argjson number "$number" \
+    'any(.[]; .id==$card and .kind=="request_confirmation" and .status=="accepted"
+      and .effectiveResolverPolicy=="human_only" and .addresseeUserId==$human and .resolvedByUserId==$human
+      and .result.outcome=="accepted" and .payload.target.type=="issue_document"
+      and .payload.target.issueId==$source and .payload.target.key=="rfc"
+      and .payload.target.documentId==$document and .payload.target.revisionId==$revision
+      and .payload.target.revisionNumber==$number)' >/dev/null
+pc "$PAPERCLIP_API_URL/api/issues/$source/documents/rfc/revisions/$revision" |
+  jq -e --arg revision "$revision" \
+    '.id==$revision and .body=="Keep this sentence.\n\nApproved revision.\n"' >/dev/null
+pc --json '{"status":"done","comment":"Verified the native confirmation and exact RFC revision."}' \
+  -X PATCH "$PAPERCLIP_API_URL/api/issues/$issue" >/dev/null
 """
 
 
@@ -76,11 +104,8 @@ def check_wakeup(container):
     company = director("companies", {"name": "Wakeup canary"})
     root = f"companies/{company['id']}"
 
-    librarian = director(f"{root}/agents", {"name": "Librarian", "adapterType": "process",
-                                             "adapterConfig": {"command": "/bin/sh", "args": ["-ec", "true"]}})
     manager = director(f"{root}/agents", {"name": "Manager", "adapterType": "process",
                                            "adapterConfig": {"command": "/bin/sh", "args": ["-ec", MANAGER_SCRIPT]}})
-    wait_ready(director, librarian["id"])
     wait_ready(director, manager["id"])
 
     coordination = director(f"{root}/issues", {
@@ -105,6 +130,16 @@ def check_wakeup(container):
             },
         },
     })
+    script = LIBRARIAN_SCRIPT
+    for name, value in {
+        "SOURCE_LITERAL": coordination["id"], "CONFIRMATION_LITERAL": pending["id"],
+        "DIRECTOR_LITERAL": director_id, "DOCUMENT_LITERAL": document["id"],
+        "REVISION_LITERAL": document["latestRevisionId"], "NUMBER_LITERAL": document["latestRevisionNumber"],
+    }.items():
+        script = script.replace(name, json.dumps(value))
+    librarian = director(f"{root}/agents", {"name": "Librarian", "adapterType": "process",
+        "adapterConfig": {"command": "/bin/sh", "args": ["-ec", script]}})
+    wait_ready(director, librarian["id"])
     director(path, {"status": "in_review", "reviewInteractionId": pending["id"]}, "PATCH")
     time.sleep(3)
 
@@ -129,6 +164,21 @@ def check_wakeup(container):
     assert assignment["createdByAgentId"] == manager["id"], "Assignment was not created under the Manager's own credentials"
     assert pending["id"] in assignment["title"] or pending["id"] in (assignment.get("description") or "")
     print("PASS: the Manager's own run credentials created the Librarian assignment, keyed by confirmation ID")
+
+    deadline = time.monotonic() + 20
+    receipt = None
+    while time.monotonic() < deadline:
+        comments = director(f"issues/{assignment['id']}/comments")
+        receipt = next((comment for comment in comments
+                        if comment.get("authorAgentId") == librarian["id"]
+                        and comment["body"] == "Verified the native confirmation and exact RFC revision."), None)
+        if receipt:
+            break
+        time.sleep(0.5)
+    assert receipt, "The Librarian did not verify the native confirmation and exact RFC revision"
+    assert any(run["runId"] == receipt.get("createdByRunId") and run["agentId"] == librarian["id"]
+               for run in director(f"issues/{assignment['id']}/runs"))
+    print("PASS: the Librarian's own run read the native confirmation and exact RFC revision")
 
     key = director(f"agents/{manager['id']}/keys", {"name": "Disposable manager"})["token"]
     replay_status, replay = bearer(container, key, f"{root}/issues", body={
