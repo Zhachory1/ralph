@@ -28,7 +28,7 @@ def event():
             "name": "spaces/fixture/messages/message-1",
             "thread": {"name": "spaces/fixture/threads/thread-1"},
             "text": "Please help.",
-            "sender": {"type": "HUMAN"},
+            "sender": {"type": "HUMAN", "name": "users/fixture-user"},
             "createTime": "2026-01-01T00:00:00Z",
         },
     }
@@ -63,7 +63,7 @@ class ChatIngressTest(unittest.TestCase):
                 "name": "spaces/fixture/messages/message-1",
                 "thread": "spaces/fixture/threads/thread-1",
                 "text": "Please help.",
-                "sender": {"type": "HUMAN"},
+                "sender": {"type": "HUMAN", "name": "users/fixture-user"},
                 "createTime": "2026-01-01T00:00:00Z",
             },
         }])

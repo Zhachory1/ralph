@@ -1,0 +1,17 @@
+# Runtime for the opt-in local communications receivers; it holds no sender credentials.
+FROM node:22.14.0-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/comms \
+ && /opt/comms/bin/pip install --no-cache-dir \
+      google-api-python-client==2.160.0 \
+      google-auth==2.38.0 \
+      requests==2.32.3 \
+ && mkdir -p /var/lib/ralph-gmail/credentials /var/lib/ralph-gmail/state \
+ && chown -R node:node /var/lib/ralph-gmail
+
+USER node
+WORKDIR /ralph
+CMD ["sleep", "infinity"]

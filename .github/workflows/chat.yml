@@ -16,7 +16,18 @@ on:
       - "bootstrap/chat_*"
       - "bootstrap/run-chat-*"
       - "compose/Dockerfile.notifier"
+      - "compose/Dockerfile.comms"
       - "compose/docker-compose.yml"
+      - "compose/v4/comms-*"
+      - "compose/v4/chat-ingress.py"
+      - "compose/v4/gmail-history-worker.py"
+      - "compose/v4/test/comms-intake-worker.test.mjs"
+      - "compose/v4/test/test-chat-ingress.py"
+      - "compose/v4/test/test-gmail-history-worker.py"
+      - "compose/v4/test/test-comms-admin.py"
+      - "compose/v4/comms-admin.py"
+      - "compose/v4/test/**"
+      - "compose/v4/comms-intake.md"
       - "skills/ops/google-chat/**"
       - "evals/test_chat_*"
 
@@ -57,3 +68,15 @@ jobs:
 
       - name: Sidecar compose, entrypoint and pinned identity
         run: python3 evals/test_chat_sender_compose.py
+
+      - name: Communications intake worker
+        run: node --test compose/v4/test/comms-intake-worker.test.mjs
+
+      - name: Chat receive authentication
+        run: python3 compose/v4/test/test-chat-ingress.py
+
+      - name: Gmail history resolution and cursor safety
+        run: python3 compose/v4/test/test-gmail-history-worker.py
+
+      - name: Local communications admin page
+        run: python3 compose/v4/test/test-comms-admin.py

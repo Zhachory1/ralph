@@ -125,6 +125,7 @@ All answered (2026-11-08), from a first round of CLI probing ([`docs/spikes/herm
 
 - [System diagram](docs/diagrams/system.svg): I/O, System and Tools on one page.
 - [Infrastructure](docs/infrastructure.md): instances, containers, sandboxes, profiles, credentials, schedules, knowledge.
+- [Communications intake operations](compose/v4/comms-intake.md): authenticated Gmail and Chat receive paths, local status panel, and replay-safe Paperclip intake.
 - [Workflows](docs/workflows.md): feature, review, maintenance, Chat, digest, cleanup, and knowledge search and memories, with diagrams.
 - [Operations and onboarding](docs/operations.md): new instance, safe changes, pause and stop, stuck cards, logs, knowledge index, glossary.
 - [Decisions](docs/decisions/).

@@ -150,15 +150,16 @@ serially — one does not imply the other) are documented in that runbook, not r
 
 Run `node --test compose/v4/test/comms-intake-worker.test.mjs` to check the first
 offline slice of Gmail/Chat intake into Paperclip Routines (#266,
-[comms-intake.md](1-projects/v4-architecture/comms-intake.md)): a normalized Gmail or
-Chat event, read on stdin by a local CLI that trusts its caller already authenticated
-it with Google, an allowlist, and one idempotent `POST routines/{id}/run`. Synthetic
-throughout, including one test that spawns the real
-`compose/v4/comms-intake-worker.mjs` CLI against a loopback-only in-process stand-in —
-no Docker, no live Google credentials, and no webhook registered anywhere by this.
+[comms-intake.md](../compose/v4/comms-intake.md)): a normalized Gmail or
+Chat event, one idempotent `POST routines/{id}/run` per thread and one idempotent
+comment per message. Also run `python3 compose/v4/test/test-chat-ingress.py`,
+`python3 compose/v4/test/test-gmail-history-worker.py` and
+`python3 compose/v4/test/test-comms-admin.py`. The tests use synthetic messages and
+in-process Paperclip/API shapes; no Docker, live Google credentials, mailbox access,
+or registered webhook is needed.
 
 For the opt-in Google Chat bridge, configuration and offline tests are in
-[comms-intake.md](1-projects/v4-architecture/comms-intake.md#authenticated-chat-bridge).
+[comms-intake.md](../compose/v4/comms-intake.md#google-chat).
 The bridge listens on loopback only; no public ingress or live routing is created by setup.
 
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3

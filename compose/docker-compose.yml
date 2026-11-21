@@ -386,6 +386,83 @@ services:
       - ${RALPH_WORKSPACES:-./workspaces}:/workspaces
     restart: unless-stopped
 
+  # Inbound Chat has its own receiver process and Paperclip key. It does not
+  # mount chat-creds, which belongs only to the separately authorized sender.
+  chat-intake:
+    profiles: ["chat-receive"]
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.comms
+    command:
+      - python3
+      - /ralph/compose/v4/chat-ingress.py
+      - --origin
+      - ${RALPH_PAPERCLIP_ORIGIN:-}
+      - --company-id
+      - ${RALPH_COMMS_COMPANY_ID:-}
+      - --routine-id
+      - ${RALPH_COMMS_ROUTINE_ID:-}
+      - --spaces
+      - ${RALPH_COMMS_CHAT_SPACES:-}
+      - --audience
+      - ${CHAT_WEBHOOK_AUDIENCE:-}
+      - --port
+      - "${RALPH_CHAT_INGRESS_PORT:-18765}"
+    environment:
+      PAPERCLIP_API_KEY: ${RALPH_COMMS_BOARD_KEY:-}
+      CHAT_BIND_HOST: 0.0.0.0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${RALPH_CHAT_INGRESS_PORT:-18765}:${RALPH_CHAT_INGRESS_PORT:-18765}"
+    volumes:
+      - ../compose/v4:/ralph/compose/v4:ro
+    restart: unless-stopped
+
+  # Gmail history uses an independent read-only token and cursor volume. Feed
+  # authenticated Pub/Sub notifications to the local CLI; there is no listener.
+  gmail-intake:
+    profiles: ["gmail-receive"]
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.comms
+    command: ["sleep", "infinity"]
+    environment:
+      PAPERCLIP_API_KEY: ${RALPH_COMMS_BOARD_KEY:-}
+      PAPERCLIP_ORIGIN: ${RALPH_PAPERCLIP_ORIGIN:-}
+      PAPERCLIP_COMPANY_ID: ${RALPH_COMMS_COMPANY_ID:-}
+      PAPERCLIP_ROUTINE_ID: ${RALPH_COMMS_ROUTINE_ID:-}
+      GMAIL_MAILBOX: ${GMAIL_MAILBOX:-}
+      GMAIL_ALLOWLIST: ${GMAIL_ALLOWLIST:-}
+      GMAIL_READ_TOKEN_FILE: /var/lib/ralph-gmail/credentials/token.json
+      GMAIL_HISTORY_CURSOR_FILE: /var/lib/ralph-gmail/state/history.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../compose/v4:/ralph/compose/v4:ro
+      - gmail-intake-creds:/var/lib/ralph-gmail/credentials:ro
+      - gmail-intake-state:/var/lib/ralph-gmail/state
+    restart: unless-stopped
+
+  # A read-only local status page; it cannot connect accounts or change routes.
+  comms-admin:
+    profiles: ["comms-admin"]
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile.comms
+    command: ["python3", "/ralph/compose/v4/comms-admin.py", "--port", "8789"]
+    environment:
+      GMAIL_MAILBOX: ${GMAIL_MAILBOX:-}
+      GMAIL_ALLOWLIST: ${GMAIL_ALLOWLIST:-}
+      RALPH_COMMS_CHAT_SPACES: ${RALPH_COMMS_CHAT_SPACES:-}
+      CHAT_WEBHOOK_AUDIENCE: ${CHAT_WEBHOOK_AUDIENCE:-}
+      PAPERCLIP_ROUTINE_ID: ${RALPH_COMMS_ROUTINE_ID:-}
+    ports:
+      - "127.0.0.1:${RALPH_COMMS_ADMIN_PORT:-8789}:8789"
+    volumes:
+      - ../compose/v4:/ralph/compose/v4:ro
+    restart: unless-stopped
+
   # tracker-sync: exec'd into by chat-sender, never ticked on its own
   # (dd-tracker.md Sec2). Its own profile gating, separate from "chat", so a
   # plain `docker compose up` -- or `--profile chat up` alone -- starts
@@ -522,6 +599,9 @@ volumes:
   # The Chat token, re-encrypted for the chat-sender container by
   # bootstrap/chat-creds-copy (D8). Empty until the owner runs that, once.
   chat-creds:
+  # Separate, read-only source credentials and cursor for inbound Gmail.
+  gmail-intake-creds:
+  gmail-intake-state:
   # The work tracker's own key file (tracker plan D1). Empty until that
   # plan's own runbook step; no pull request writes to it yet.
   tracker-creds:
