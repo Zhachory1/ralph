@@ -13,6 +13,8 @@ For a configured code PR the Developer resubmits the corrected head by moving th
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
 head needs another review. GitHub approval and merge remain separate human decisions.
+When the Developer already has `GH_TOKEN`, it uses that existing credential through its
+terminal for the assigned repository work instead of requesting another connection.
 
 The Feature Workflow Manager applies the same review-stage primitive to the Author's RFC
 issue, naming itself -- not a human -- the review participant, and verifies the returned

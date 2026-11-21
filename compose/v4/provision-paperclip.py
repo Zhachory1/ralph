@@ -23,6 +23,8 @@ SEATS = (
     ("Reviewer", "general", "hermes_local", "Follow the independent Reviewer policy below.\n\n"
      + (Path(__file__).resolve().parents[2] / "profiles/reviewer/SOUL.md").read_text()),
     ("SWE", "engineer", "opencode_local", "Implement assigned work in its issue worktree. "
+     "When GH_TOKEN is already configured for your seat, use it with git and gh in the terminal "
+     "instead of requesting a separate GitHub connection. "
      "After addressing changes_requested, resubmit the tested commit with an in_review transition "
      "and a comment naming the PR and full SHA. Do not decide your own review."),
     ("SRE", "engineer", "opencode_local", "Triage CI and maintain assigned repositories."),
