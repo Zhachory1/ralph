@@ -69,7 +69,7 @@ function fixtureBoard() {
       const commentKey = `${commentPath[1]}:${body.clientRequestId}`;
       const existing = comments.get(commentKey);
       if (existing) return existing;
-      const created = { id: `comment-${comments.size + 1}`, clientRequestId: body.clientRequestId, body: body.body };
+      const created = { id: `comment-${comments.size + 1}`, body: body.body };
       comments.set(commentKey, created);
       return created;
     }
@@ -245,9 +245,7 @@ test("the CLI trusts stdin, checks the allowlist, and dedupes a retriggered Gmai
       if (req.url === "/api/issues/issue-1/comments" && req.method === "POST") {
         const payload = JSON.parse(body);
         if (!comments.has(payload.clientRequestId)) {
-          comments.set(payload.clientRequestId, {
-            id: `comment-${comments.size + 1}`, clientRequestId: payload.clientRequestId,
-          });
+          comments.set(payload.clientRequestId, { id: `comment-${comments.size + 1}` });
         }
         res.end(JSON.stringify(comments.get(payload.clientRequestId)));
         return;

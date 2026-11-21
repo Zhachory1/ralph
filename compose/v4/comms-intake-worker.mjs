@@ -239,8 +239,10 @@ export async function triggerCommsRoutine({ board, companyId, routineId, normali
     body: commentBody(normalized),
     clientRequestId: normalized.commentRequestId,
   });
-  if (comment.clientRequestId !== normalized.commentRequestId || typeof comment.id !== "string") {
-    throw new Error("Paperclip returned a mismatched comment for this message");
+  // Paperclip's comments endpoint accepts clientRequestId for native replay
+  // deduplication, but does not echo it in the returned comment representation.
+  if (!comment || typeof comment.id !== "string") {
+    throw new Error("Paperclip returned an invalid comment for this message");
   }
   return {
     runId: run.id,

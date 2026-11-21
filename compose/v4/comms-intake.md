@@ -27,17 +27,20 @@ webhook requires separate authorization.
 ## Gmail
 
 `gmail-history-worker.py` accepts a notification from an authenticated caller,
-lists mailbox history using a separate `gmail.readonly` OAuth token, resolves
-each `messagesAdded` ID with `messages.get`, and only then passes the actual
-message into the shared worker. Notification text is never treated as message
-content. The token is rejected unless its only scope is `gmail.readonly`; Gmail
-credentials are not shared with Chat or any sender.
+verifies that Gmail's authenticated `users.getProfile(userId="me")` mailbox
+matches `GMAIL_MAILBOX`, then lists mailbox history using a separate
+`gmail.readonly` OAuth token. It resolves each `messagesAdded` ID with
+`messages.get` and only passes messages carrying the `INBOX` label and neither
+`SENT` nor `DRAFT` to the shared worker. Notification text is never treated as
+message content. The token is rejected unless its only scope is
+`gmail.readonly`; Gmail credentials are not shared with Chat or any sender.
 
 The worker saves the Gmail history API's high-water mark only after all history
-pages have been traversed, every message resolved, and every Paperclip intake
-accepted. Partial failure leaves the stored cursor unchanged, and replays are
-safe through Paperclip's native task/comment idempotency. A 404/expired cursor
-is reported without resetting it. Initial cursor setup and expired-history
+pages have been traversed, every message resolved and classified, and every
+intended inbound Paperclip intake accepted. A mailbox mismatch, missing message
+labels, or partial failure leaves the stored cursor unchanged. Replays are safe
+through Paperclip's native task/comment idempotency. A 404/expired cursor is
+reported without resetting it. Initial cursor setup and expired-history
 recovery are operator actions.
 
 The `gmail-receive` Compose profile stays idle until an authenticated caller
@@ -77,7 +80,7 @@ python3 compose/v4/test/test-comms-admin.py
 ```
 
 The tests use synthetic messages and in-process API shapes. They verify sender
-attribution, thread mapping, redelivery, message resolution, cursor safety,
-read-only OAuth scope and receive/send separation. They do not connect an
-account, access a mailbox, register a webhook, send a message, or start
-containers.
+attribution, thread mapping, redelivery, message resolution, OAuth mailbox
+identity and read-only scope, inbound label filtering, cursor safety, and
+receive/send separation. They do not connect an account, access a mailbox,
+register a webhook, send a message, or start containers.

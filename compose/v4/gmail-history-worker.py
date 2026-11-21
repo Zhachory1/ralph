@@ -124,15 +124,40 @@ def _message_event(message, history_id, mailbox):
     return event
 
 
-def process_history(*, service, notification, cursor, deliver, save_cursor):
+def _verify_mailbox(service, expected_mailbox):
+    if not isinstance(expected_mailbox, str) or not expected_mailbox.strip():
+        raise ValueError("Configure the expected Gmail receive account")
+    try:
+        profile = service.users().getProfile(userId="me").execute()
+    except Exception as error:
+        raise HistoryBatchError("Unable to verify the authenticated Gmail account") from error
+    actual_mailbox = profile.get("emailAddress") if isinstance(profile, dict) else None
+    if (not isinstance(actual_mailbox, str)
+            or actual_mailbox.casefold() != expected_mailbox.strip().casefold()):
+        raise ValueError("Authenticated Gmail account does not match configured receive account")
+
+
+def _is_inbound_message(message):
+    labels = message.get("labelIds")
+    if not isinstance(labels, list):
+        raise HistoryBatchError("Gmail returned a message without label identities")
+    label_set = {label for label in labels if isinstance(label, str)}
+    return "INBOX" in label_set and not label_set.intersection({"SENT", "DRAFT"})
+
+
+def process_history(*, service, notification, cursor, expected_mailbox, deliver, save_cursor):
     """Deliver all additions since cursor and only then persist the returned high-water mark."""
     mailbox, _ = notification_history_id(notification)
     if not isinstance(cursor, str) or not re.fullmatch(r"[0-9]{1,20}", cursor):
         raise ValueError("A saved Gmail history cursor is required")
+    _verify_mailbox(service, expected_mailbox)
+    if mailbox.casefold() != expected_mailbox.strip().casefold():
+        raise ValueError("Gmail notification mailbox does not match authenticated receive account")
 
     page_token = None
     pages = 0
-    delivered_ids = set()
+    processed_ids = set()
+    delivered_count = 0
     latest_history_id = cursor
     while True:
         pages += 1
@@ -163,9 +188,9 @@ def process_history(*, service, notification, cursor, deliver, save_cursor):
                 message_id = reference.get("id")
                 if not isinstance(message_id, str):
                     raise HistoryBatchError("Gmail history record has no message id")
-                if message_id in delivered_ids:
+                if message_id in processed_ids:
                     continue
-                if len(delivered_ids) >= MAX_MESSAGES_PER_BATCH:
+                if len(processed_ids) >= MAX_MESSAGES_PER_BATCH:
                     raise HistoryBatchError("Gmail message batch limit exceeded")
                 try:
                     message = service.users().messages().get(
@@ -175,14 +200,16 @@ def process_history(*, service, notification, cursor, deliver, save_cursor):
                     raise HistoryBatchError("Unable to resolve a Gmail history message") from error
                 if message.get("id") != message_id:
                     raise HistoryBatchError("Gmail returned a different message than requested")
-                deliver(_message_event(message, record_history_id, mailbox))
-                delivered_ids.add(message_id)
+                processed_ids.add(message_id)
+                if _is_inbound_message(message):
+                    deliver(_message_event(message, record_history_id, mailbox))
+                    delivered_count += 1
         page_token = result.get("nextPageToken")
         if not page_token:
             break
 
     save_cursor(latest_history_id)
-    return {"messageCount": len(delivered_ids), "historyId": latest_history_id}
+    return {"messageCount": delivered_count, "historyId": latest_history_id}
 
 
 def read_cursor(path):
@@ -248,6 +275,7 @@ def main():
     cursor_file = os.environ.get("GMAIL_HISTORY_CURSOR_FILE", "/var/lib/ralph-gmail/history.json")
     result = process_history(
         service=_gmail_service(), notification=notification, cursor=read_cursor(cursor_file),
+        expected_mailbox=expected_mailbox,
         deliver=_deliver_to_paperclip, save_cursor=lambda value: write_cursor(cursor_file, value),
     )
     print(json.dumps(result))

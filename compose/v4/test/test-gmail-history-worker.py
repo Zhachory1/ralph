@@ -26,11 +26,13 @@ class Request:
 
 
 class FakeService:
-    def __init__(self, pages, messages):
+    def __init__(self, pages, messages, mailbox="intake@example.com"):
         self.pages = pages
         self.message_data = messages
+        self.mailbox = mailbox
         self.history_options = []
         self.message_requests = []
+        self.profile_requests = []
 
     def users(self):
         return self
@@ -40,6 +42,10 @@ class FakeService:
 
     def messages(self):
         return self
+
+    def getProfile(self, **options):
+        self.profile_requests.append(options)
+        return Request({"emailAddress": self.mailbox})
 
     def list(self, **options):
         self.history_options.append(options)
@@ -63,6 +69,7 @@ def gmail_message(message_id, thread_id):
             {"name": "From", "value": "Requester <requester@example.com>"},
             {"name": "Subject", "value": "Status request"},
         ], "mimeType": "text/plain", "body": {"data": body}},
+        "labelIds": ["INBOX"],
     })
 
 
@@ -89,7 +96,7 @@ class GmailHistoryTest(unittest.TestCase):
         delivered = []
         saved = []
         result = worker.process_history(
-            service=service, notification=notification(), cursor="29",
+            service=service, notification=notification(), cursor="29", expected_mailbox="intake@example.com",
             deliver=delivered.append, save_cursor=saved.append,
         )
 
@@ -102,6 +109,7 @@ class GmailHistoryTest(unittest.TestCase):
         self.assertTrue(all(event["text"].startswith("Full resolved body") for event in delivered))
         self.assertEqual(saved, ["35"])
         self.assertEqual(len(service.message_requests), 2)
+        self.assertEqual(service.profile_requests, [{"userId": "me"}])
         self.assertTrue(all(request["format"] == "full" for request in service.message_requests))
         self.assertEqual([options["startHistoryId"] for options in service.history_options], ["29", "29"])
 
@@ -127,7 +135,7 @@ class GmailHistoryTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             worker.process_history(
-                service=service, notification=notification(), cursor="29",
+                service=service, notification=notification(), cursor="29", expected_mailbox="intake@example.com",
                 deliver=fail_second, save_cursor=saved.append,
             )
         self.assertEqual(len(delivered), 2)
@@ -140,7 +148,7 @@ class GmailHistoryTest(unittest.TestCase):
         saved = []
         with self.assertRaises(worker.ExpiredHistory):
             worker.process_history(
-                service=service, notification=notification(), cursor="29",
+                service=service, notification=notification(), cursor="29", expected_mailbox="intake@example.com",
                 deliver=lambda _event: None, save_cursor=saved.append,
             )
         self.assertEqual(saved, [])
@@ -155,7 +163,7 @@ class GmailHistoryTest(unittest.TestCase):
         saved = []
         with self.assertRaises(worker.HistoryBatchError):
             worker.process_history(
-                service=service, notification=notification(), cursor="29",
+                service=service, notification=notification(), cursor="29", expected_mailbox="intake@example.com",
                 deliver=lambda _event: None, save_cursor=saved.append,
             )
         self.assertEqual(saved, [])
@@ -171,12 +179,60 @@ class GmailHistoryTest(unittest.TestCase):
         delivered = []
         saved = []
         result = worker.process_history(
-            service=service, notification=notification(), cursor="29",
+            service=service, notification=notification(), cursor="29", expected_mailbox="intake@example.com",
             deliver=delivered.append, save_cursor=saved.append,
         )
         self.assertEqual(result["messageCount"], 1)
         self.assertEqual(len(delivered), 1)
         self.assertEqual(len(service.message_requests), 1)
+        self.assertEqual(saved, ["35"])
+
+    def test_wrong_authenticated_mailbox_causes_no_history_read_delivery_or_cursor_advance(self):
+        service = FakeService(
+            pages={None: Request({"historyId": "35", "history": []})},
+            messages={}, mailbox="other@example.com",
+        )
+        delivered = []
+        saved = []
+        with self.assertRaisesRegex(ValueError, "does not match configured receive account"):
+            worker.process_history(
+                service=service, notification=notification(), cursor="29",
+                expected_mailbox="intake@example.com", deliver=delivered.append, save_cursor=saved.append,
+            )
+        self.assertEqual(service.profile_requests, [{"userId": "me"}])
+        self.assertEqual(service.history_options, [])
+        self.assertEqual(service.message_requests, [])
+        self.assertEqual(delivered, [])
+        self.assertEqual(saved, [])
+
+    def test_sent_and_draft_messages_are_resolved_but_never_delivered(self):
+        sent = gmail_message("a1b2c3d4", "f1e2d3c4").result
+        sent["labelIds"] = ["INBOX", "SENT"]
+        draft = gmail_message("b1c2d3e4", "f1e2d3c4").result
+        draft["labelIds"] = ["DRAFT"]
+        inbound = gmail_message("c1d2e3f4", "f1e2d3c4").result
+        service = FakeService(
+            pages={None: Request({"historyId": "35", "history": [{
+                "id": "31", "messagesAdded": [
+                    {"message": {"id": "a1b2c3d4"}},
+                    {"message": {"id": "b1c2d3e4"}},
+                    {"message": {"id": "c1d2e3f4"}},
+                ],
+            }]})},
+            messages={
+                "a1b2c3d4": Request(sent),
+                "b1c2d3e4": Request(draft),
+                "c1d2e3f4": Request(inbound),
+            },
+        )
+        delivered = []
+        saved = []
+        result = worker.process_history(
+            service=service, notification=notification(), cursor="29",
+            expected_mailbox="intake@example.com", deliver=delivered.append, save_cursor=saved.append,
+        )
+        self.assertEqual([event["messageId"] for event in delivered], ["c1d2e3f4"])
+        self.assertEqual(result, {"messageCount": 1, "historyId": "35"})
         self.assertEqual(saved, ["35"])
 
     def test_pubsub_envelope_is_unwrapped_but_does_not_supply_message_content(self):
