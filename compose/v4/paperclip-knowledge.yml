@@ -1,0 +1,23 @@
+# Optional QMD service for an existing Paperclip network.
+services:
+  knowledge:
+    image: ralph-knowledge-qmd:2.8.3
+    pull_policy: never
+    restart: unless-stopped
+    mem_limit: 2g
+    environment:
+      QMD_ALLOWED_HOSTS: knowledge
+      QMD_EMBED_PARALLELISM: "1"
+    volumes:
+      - knowledge:/var/lib/ralph-knowledge
+    networks:
+      paperclip:
+        aliases: [knowledge]
+
+networks:
+  paperclip:
+    external: true
+    name: ${PAPERCLIP_NETWORK:?Set the existing Paperclip network name}
+
+volumes:
+  knowledge:

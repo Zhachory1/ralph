@@ -255,6 +255,35 @@ run, or touch a live target, and it removes its container and volumes on exit. S
 the model's own tool discovery through Hermes' deferred tool_search/describe/call catalog is
 a separate, not-yet-covered gap (see the canary's module docstring).
 
+### Add QMD to an existing Paperclip network
+
+Cache the pinned `ralph-knowledge-qmd:2.8.3` image, then set `PAPERCLIP_NETWORK` to the
+existing board network. Start only the QMD service; this does not recreate Paperclip:
+
+```sh
+PAPERCLIP_NETWORK=EXISTING_NETWORK docker compose -p PROJECT \
+  -f compose/v4/paperclip-knowledge.yml up -d --no-deps --no-build --pull never knowledge
+```
+
+The service exposes MCP only on the Docker network and stores its data in a named volume.
+Use one QMD service per Paperclip network; the service name `knowledge` is its network alias.
+Any seat that can reach that network may query it. The default approved-only snapshot
+procedure remains above. If the Director explicitly chooses a whole-repository index,
+drafts and unmarked files become searchable; retrieval does not approve their contents.
+Create a clean detached worktree inside the QMD volume, apply the same symlink and submodule
+checks as above, and add the worktree root as the collection path:
+
+```sh
+PAPERCLIP_NETWORK=EXISTING_NETWORK docker compose -p PROJECT \
+  -f compose/v4/paperclip-knowledge.yml exec knowledge \
+  qmd collection add /var/lib/ralph-knowledge/snapshot --name docs --mask '**/*.md'
+```
+
+Register `http://knowledge:8181/mcp` in the intended seat's Hermes home with `hermes mcp add`
+and include `qmd` in explicit toolsets. This service does not need the in-process
+`bootstrap-qmd-gateway.sh` installation. The snapshot does not advance automatically.
+Initial lexical indexing does not build vectors; `qmd embed` downloads a local model.
+
 ### Paperclip cold restore drill
 
 Run `python3 compose/v4/test/paperclip-restore-canary.py` with the cached canary image.

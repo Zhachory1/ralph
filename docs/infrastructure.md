@@ -63,6 +63,10 @@ the issuing account's permissions bound that key. External HTTPS routing is not 
 The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
 pinned to the approved commit. It does not start an MCP server or connect Hindsight.
 
+The optional v4 QMD service in `compose/v4/paperclip-knowledge.yml` joins an existing
+Paperclip network, keeps its index in a separate named volume, and publishes no host port.
+Network access is not a per-seat authorization boundary.
+
 The v4 qmd gateway canary (`compose/v4/bootstrap-qmd-gateway.sh`,
 `compose/v4/test/paperclip-qmd-gateway-canary.py`) grants a disposable `hermes_local`
 Paperclip seat that same approved-only index through Hermes' own native `hermes mcp add`
