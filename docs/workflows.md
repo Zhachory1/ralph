@@ -95,6 +95,9 @@ when the approved worktree advances. The separate draft and untracked run transc
 unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight
 retention or production refresh.
 
+An optional QMD service can join the Paperclip network without recreating the board. Its
+index scope is an operator decision; a search result does not confer approval.
+
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
 or route work.
