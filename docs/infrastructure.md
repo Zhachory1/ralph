@@ -60,6 +60,13 @@ The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;
 the issuing account's permissions bound that key. External HTTPS routing is not provisioned.
 
+The opt-in communications receivers are isolated from sender identities. Chat's
+`chat-intake` profile does not mount the `chat-sender` token; its listener is
+published on host loopback. Gmail's `gmail-intake` profile has a separate read-only
+OAuth volume and durable history-cursor volume, and waits for an authenticated caller
+to invoke its CLI. The read-only `comms-admin` profile is also loopback-published and
+does not mount credentials. None of these profiles is enabled by default.
+
 The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
 pinned to the approved commit. It does not start an MCP server or connect Hindsight.
 

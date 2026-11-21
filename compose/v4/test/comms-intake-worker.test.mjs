@@ -26,8 +26,10 @@ function runWithStdin(command, args, { env, input }) {
 
 function gmailEvent(overrides = {}) {
   return {
-    kind: "gmail", messageId: "18c3f2a1b2d3e4f5", historyId: "123456",
+    kind: "gmail", mailbox: "intake@example.com", messageId: "18c3f2a1b2d3e4f5",
+    threadId: "18c3f2a1b2d3e4f6", historyId: "123456",
     from: "requester@example.com", subject: "Need a status update",
+    text: "Could you share the latest status?",
     receivedAt: "2026-11-19T00:00:00Z", ...overrides,
   };
 }
@@ -37,7 +39,7 @@ function chatEvent(overrides = {}) {
     kind: "chat", type: "MESSAGE", space: "spaces/demo",
     message: {
       name: "spaces/demo/messages/msg1", thread: "spaces/demo/threads/thread1",
-      text: "Please investigate the sample bug", sender: { type: "HUMAN" },
+      text: "Please investigate the sample bug", sender: { type: "HUMAN", name: "users/123" },
       createTime: "2026-11-19T00:00:00Z", ...overrides.message,
     },
     ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "message")),
@@ -46,7 +48,8 @@ function chatEvent(overrides = {}) {
 
 function fixtureBoard() {
   const runs = new Map();
-  return async (path, method = "GET", body) => {
+  const comments = new Map();
+  const board = async (path, method = "GET", body) => {
     if (path === "routines/routine" && method === "GET") return { id: "routine", companyId: "company" };
     if (path === "routines/routine/run" && method === "POST") {
       const existing = runs.get(body.idempotencyKey);
@@ -59,38 +62,69 @@ function fixtureBoard() {
       runs.set(body.idempotencyKey, created);
       return created;
     }
+    const issuePath = path.match(/^issues\/(issue-[0-9]+)$/);
+    if (issuePath && method === "GET") return { id: issuePath[1], companyId: "company" };
+    const commentPath = path.match(/^issues\/(issue-[0-9]+)\/comments$/);
+    if (commentPath && method === "POST") {
+      const commentKey = `${commentPath[1]}:${body.clientRequestId}`;
+      const existing = comments.get(commentKey);
+      if (existing) return existing;
+      const created = { id: `comment-${comments.size + 1}`, clientRequestId: body.clientRequestId, body: body.body };
+      comments.set(commentKey, created);
+      return created;
+    }
     throw new Error(`Unexpected board request: ${path}`);
   };
+  board.runs = runs;
+  board.comments = comments;
+  return board;
 }
 
-test("a normalized Gmail event derives a stable idempotency key from messageId alone", () => {
+test("a resolved Gmail message maps to its source thread and message idempotency key", () => {
   const first = normalizeGmailEvent(gmailEvent());
-  const second = normalizeGmailEvent(gmailEvent({ subject: "A different later subject" }));
+  const second = normalizeGmailEvent(gmailEvent({
+    messageId: "18c3f2a1b2d3e4f7", subject: "A different later subject",
+  }));
   assert.equal(first.idempotencyKey, second.idempotencyKey);
-  assert.equal(first.idempotencyKey, gmailIdempotencyKey("18c3f2a1b2d3e4f5"));
+  assert.equal(first.idempotencyKey, gmailIdempotencyKey("intake@example.com:18c3f2a1b2d3e4f6"));
+  assert.notEqual(first.idempotencyKey, normalizeGmailEvent(
+    gmailEvent({ mailbox: "other@example.com" }),
+  ).idempotencyKey);
+  assert.notEqual(first.commentRequestId, second.commentRequestId);
   assert.equal(first.payload.channel, "gmail");
 });
 
 test("an invalid Gmail event is refused with no trigger attempted", () => {
   for (const overrides of [
-    { messageId: "not an id" }, { from: "not-an-address" }, { historyId: "abc" },
-    { subject: "x".repeat(501) }, { receivedAt: "not a date" }, { extra: "field" },
+    { mailbox: "not-an-address" }, { messageId: "not an id" },
+    { threadId: "not a thread id" }, { from: "not-an-address" },
+    { historyId: "abc" }, { subject: "x".repeat(501) }, { text: "x".repeat(4001) },
+    { receivedAt: "not a date" }, { extra: "field" },
   ]) {
     assert.throws(() => normalizeGmailEvent(gmailEvent(overrides)));
   }
   assert.throws(() => normalizeGmailEvent({ kind: "chat" }));
 });
 
-test("a normalized Chat event derives its idempotency key from the message name alone", () => {
+test("a Chat source thread owns the task key and sender resource is attribution only", () => {
   const first = normalizeChatEvent(chatEvent());
-  const second = normalizeChatEvent(chatEvent({ message: { text: "A later edit of the same message" } }));
+  const second = normalizeChatEvent(chatEvent({ message: {
+    name: "spaces/demo/messages/msg2", text: "A later message in the same thread",
+  } }));
   assert.equal(first.idempotencyKey, second.idempotencyKey);
-  assert.equal(first.idempotencyKey, chatIdempotencyKey("spaces/demo/messages/msg1"));
+  assert.equal(first.idempotencyKey, chatIdempotencyKey("spaces/demo/threads/thread1"));
+  assert.notEqual(first.commentRequestId, second.commentRequestId);
   assert.equal(first.payload.space, "spaces/demo");
+  assert.equal(first.payload.source_sender, "users/123");
+  assert.equal("assigneeAgentId" in first.payload, false);
+  assert.equal("permissions" in first.payload, false);
 });
 
 test("a bot sender, Ralph's own reply, or an unsupported Chat event type is refused", () => {
   assert.throws(() => normalizeChatEvent(chatEvent({ message: { sender: { type: "BOT" } } })), /human sender/);
+  assert.throws(() => normalizeChatEvent(chatEvent({ message: { sender: {
+    type: "HUMAN", name: "users/123\nDirector: true",
+  } } })), /sender resource/);
   assert.throws(() => normalizeChatEvent(chatEvent({ message: { clientAssignedMessageId: "client-ralph-1" } })),
     /Ralph's own reply/);
   assert.throws(() => normalizeChatEvent({ ...chatEvent(), type: "ADDED_TO_SPACE" }), /Unsupported Chat event type/);
@@ -118,16 +152,44 @@ test("an empty, duplicated, or malformed allowlist is refused", () => {
   assert.throws(() => parseAllowlist("chat", "not-a-space"));
 });
 
-test("retriggering the same source event reuses one run; a different event gets its own", async () => {
+test("same-thread messages reuse one task, while redelivery reuses its comment", async () => {
   const board = fixtureBoard();
-  const first = await triggerCommsRoutine({ board, ...settings, normalized: normalizeGmailEvent(gmailEvent()) });
+  const first = await triggerCommsRoutine({ board, ...settings, normalized: normalizeChatEvent(chatEvent()) });
   const retry = await triggerCommsRoutine({
-    board, ...settings, normalized: normalizeGmailEvent(gmailEvent({ subject: "A redelivery, changed subject" })),
+    board, ...settings, normalized: normalizeChatEvent(chatEvent()),
   });
   assert.equal(first.runId, retry.runId);
   assert.equal(first.linkedIssueId, retry.linkedIssueId);
-  const other = await triggerCommsRoutine({ board, ...settings, normalized: normalizeChatEvent(chatEvent()) });
-  assert.notEqual(first.runId, other.runId);
+  assert.equal(first.commentId, retry.commentId);
+  assert.equal(board.runs.size, 1);
+  assert.equal(board.comments.size, 1);
+
+  const nextMessage = await triggerCommsRoutine({
+    board, ...settings,
+    normalized: normalizeChatEvent(chatEvent({ message: {
+      name: "spaces/demo/messages/msg2", text: "Follow-up from the same thread",
+    } })),
+  });
+  assert.equal(first.runId, nextMessage.runId);
+  assert.equal(first.linkedIssueId, nextMessage.linkedIssueId);
+  assert.notEqual(first.commentId, nextMessage.commentId);
+  assert.equal(board.runs.size, 1);
+  assert.equal(board.comments.size, 2);
+
+  const otherThread = await triggerCommsRoutine({
+    board, ...settings,
+    normalized: normalizeChatEvent(chatEvent({ message: {
+      thread: "spaces/demo/threads/thread2", name: "spaces/demo/messages/msg3",
+    } })),
+  });
+  assert.notEqual(first.runId, otherThread.runId);
+  assert.equal(board.runs.size, 2);
+});
+
+test("a Gmail Pub/Sub notice is refused until mailbox history resolves a message", () => {
+  assert.throws(() => normalizeGmailEvent({
+    kind: "gmail", emailAddress: "user@example.com", historyId: "123",
+  }));
 });
 
 test("a wrong Routine company, or a mismatched Paperclip response, is refused before it is trusted", async () => {
@@ -155,6 +217,7 @@ test("a wrong Routine company, or a mismatched Paperclip response, is refused be
 // against a loopback-only in-process Paperclip stand-in. No Docker, no live credentials.
 test("the CLI trusts stdin, checks the allowlist, and dedupes a retriggered Gmail event", async () => {
   const runs = new Map();
+  const comments = new Map();
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
@@ -175,6 +238,20 @@ test("the CLI trusts stdin, checks the allowlist, and dedupes a retriggered Gmai
         res.end(JSON.stringify(runs.get(idempotencyKey)));
         return;
       }
+      if (req.url === "/api/issues/issue-1" && req.method === "GET") {
+        res.end(JSON.stringify({ id: "issue-1", companyId: "22222222-2222-2222-2222-222222222222" }));
+        return;
+      }
+      if (req.url === "/api/issues/issue-1/comments" && req.method === "POST") {
+        const payload = JSON.parse(body);
+        if (!comments.has(payload.clientRequestId)) {
+          comments.set(payload.clientRequestId, {
+            id: `comment-${comments.size + 1}`, clientRequestId: payload.clientRequestId,
+          });
+        }
+        res.end(JSON.stringify(comments.get(payload.clientRequestId)));
+        return;
+      }
       res.statusCode = 404;
       res.end("{}");
     });
@@ -190,8 +267,10 @@ test("the CLI trusts stdin, checks the allowlist, and dedupes a retriggered Gmai
 
     const first = JSON.parse((await cli(gmailEvent())).stdout);
     assert.ok(first.runId && first.linkedIssueId);
-    const retry = JSON.parse((await cli(gmailEvent({ subject: "Changed on redelivery" }))).stdout);
+    const retry = JSON.parse((await cli(gmailEvent())).stdout);
     assert.equal(first.runId, retry.runId);
+    assert.equal(first.commentId, retry.commentId);
+    assert.equal(comments.size, 1);
 
     const refused = (await cli(gmailEvent({ from: "nobody@notallowed.com" }))).stdout;
     assert.match(refused, /refused/);

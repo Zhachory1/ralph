@@ -1,6 +1,5 @@
-// Bridge a normalized Gmail Pub/Sub notification or Google Chat event into a native
-// Paperclip Routine trigger (POST routines/{id}/run, source: "api"). Review-only: no
-// Gmail/Chat send call exists in this file. First offline slice of #266.
+// Bridge authenticated Gmail and Google Chat messages into one native Paperclip
+// Routine task per source thread, with idempotent comments for each message.
 //
 // Trust contract: a local CLI, invoked synchronously by a bridge that has already
 // authenticated the event with Google (a verified Pub/Sub push subscription, or a
@@ -9,13 +8,13 @@
 // inside the event payload would be neither Google's auth nor a real boundary for a
 // call that is, by construction, already local and trusted -- only a secret worth
 // leaking. It enforces shape validation, a per-source allowlist, a Paperclip
-// company/routine match, and one idempotent trigger per source event, keyed only
-// on the event's stable identifier (Gmail messageId / Chat message name).
+// company/routine match, one idempotent Routine per source thread, and one
+// idempotent comment per message. Source sender resources are attribution only.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const ORIGIN = /^http:\/\/127\.0\.0\.1:[0-9]+$/;
+const ORIGIN = /^http:\/\/(?:127\.0\.0\.1|host\.docker\.internal):[0-9]+$/;
 const UUID = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,17 +26,27 @@ const THREAD_NAME = /^spaces\/[A-Za-z0-9_-]+\/threads\/[A-Za-z0-9_.-]+$/;
 const MAX_ALLOWLIST = 16;
 const MAX_TEXT = 4000; // chat-route's own cap on untrusted body text
 const MAX_SUBJECT = 500;
+const COMMENT_UUID_NAMESPACE = Buffer.from("6ba7b8129dad11d180b400c04fd430c8", "hex");
 
 function sha256Hex(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
 export function gmailIdempotencyKey(messageId) {
-  return "gmail-" + sha256Hex(messageId);
+  return "gmail-thread-" + sha256Hex(messageId);
 }
 
-export function chatIdempotencyKey(messageName) {
-  return "chat-" + sha256Hex(messageName);
+export function chatIdempotencyKey(threadName) {
+  return "chat-thread-" + sha256Hex(threadName);
+}
+
+function commentClientRequestId(source, messageId) {
+  const name = Buffer.from(`urn:ralph:comms:comment:${source}:${messageId}`);
+  const bytes = createHash("sha1").update(Buffer.concat([COMMENT_UUID_NAMESPACE, name])).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function isoOrNull(value) {
@@ -46,19 +55,27 @@ function isoOrNull(value) {
   return Number.isNaN(parsed.getTime()) ? null : value;
 }
 
-// The input is a normalized Gmail notification (already resolved past the raw
-// Pub/Sub envelope by an upstream, authenticated step out of this slice's scope).
+// Gmail events are actual messages returned by the authenticated mailbox API,
+// not Pub/Sub notifications or history records.
 export function normalizeGmailEvent(raw) {
   if (!raw || typeof raw !== "object" || raw.kind !== "gmail") {
     throw new Error("Expected a normalized Gmail event");
   }
-  const allowed = new Set(["kind", "messageId", "historyId", "from", "subject", "receivedAt"]);
+  const allowed = new Set([
+    "kind", "mailbox", "messageId", "threadId", "historyId", "from", "subject", "text", "receivedAt",
+  ]);
   if (Object.keys(raw).some((key) => !allowed.has(key))) {
     throw new Error("Unexpected field on a Gmail event");
   }
-  const { messageId, historyId, from, subject, receivedAt } = raw;
+  const { mailbox, messageId, threadId, historyId, from, subject, text, receivedAt } = raw;
+  if (typeof mailbox !== "string" || !EMAIL.test(mailbox)) {
+    throw new Error("Invalid Gmail mailbox");
+  }
   if (typeof messageId !== "string" || !GMAIL_MESSAGE_ID.test(messageId)) {
     throw new Error("Invalid Gmail messageId");
+  }
+  if (typeof threadId !== "string" || !GMAIL_MESSAGE_ID.test(threadId)) {
+    throw new Error("Invalid Gmail threadId");
   }
   if (typeof historyId !== "string" || !GMAIL_HISTORY_ID.test(historyId)) {
     throw new Error("Invalid Gmail historyId");
@@ -69,18 +86,25 @@ export function normalizeGmailEvent(raw) {
   if (typeof subject !== "string" || subject.length > MAX_SUBJECT) {
     throw new Error("Invalid Gmail subject");
   }
+  if (typeof text !== "string" || text.length > MAX_TEXT) {
+    throw new Error("Invalid Gmail message text");
+  }
   if (receivedAt !== undefined && isoOrNull(receivedAt) === null) {
     throw new Error("Invalid Gmail receivedAt");
   }
   return {
     source: "gmail",
-    idempotencyKey: gmailIdempotencyKey(messageId),
+    idempotencyKey: gmailIdempotencyKey(`${mailbox.toLowerCase()}:${threadId}`),
+    commentRequestId: commentClientRequestId("gmail", messageId),
     payload: {
       channel: "gmail",
+      mailbox,
       message_id: messageId,
+      thread_id: threadId,
       history_id: historyId,
       from,
       subject,
+      text,
       received_at: receivedAt ?? null,
     },
   };
@@ -122,24 +146,50 @@ export function normalizeChatEvent(raw) {
   if (!sender || typeof sender !== "object" || sender.type !== "HUMAN") {
     throw new Error("Chat message is not from a human sender");
   }
+  if (sender.name !== undefined && (typeof sender.name !== "string"
+      || !/^users\/[A-Za-z0-9._@+-]{1,240}$/.test(sender.name))) {
+    throw new Error("Invalid Chat sender resource");
+  }
   if (typeof clientAssignedMessageId === "string" && clientAssignedMessageId.startsWith("client-ralph-")) {
     throw new Error("Chat message originated from Ralph's own reply");
   }
   if (createTime !== undefined && isoOrNull(createTime) === null) {
     throw new Error("Invalid Chat createTime");
   }
+  const threadName = thread ?? name;
   return {
     source: "chat",
-    idempotencyKey: chatIdempotencyKey(name),
+    idempotencyKey: chatIdempotencyKey(threadName),
+    commentRequestId: commentClientRequestId("chat", name),
     payload: {
       channel: "chat",
       space,
-      thread: thread ?? null,
+      thread: threadName,
       message_name: name,
       text,
       sender_type: sender.type,
+      source_sender: sender.name ?? null,
     },
   };
+}
+
+export function commentBody(normalized) {
+  const { source, payload } = normalized;
+  if (source === "chat") {
+    return [
+      `Google Chat · ${payload.space} · ${payload.thread}`,
+      `Sender resource (source attribution only): ${payload.source_sender ?? "not provided"}`,
+      "",
+      payload.text,
+    ].join("\n");
+  }
+  return [
+    `Gmail · thread ${payload.thread_id}`,
+    `From: ${payload.from}`,
+    `Subject: ${payload.subject.replace(/[\r\n]+/g, " ")}`,
+    "",
+    payload.text,
+  ].join("\n");
 }
 
 export function isAllowedGmailSender(address, allowedDomains) {
@@ -165,9 +215,8 @@ export function parseAllowlist(source, raw) {
   return source === "gmail" ? new Set(items.map((item) => item.toLowerCase())) : unique;
 }
 
-// Creates (or, on a redelivered idempotencyKey, reuses) one Paperclip Routine run.
-// Paperclip's own API restricts `source` to "manual"|"api"; "api" is this ingress's
-// value, with the comms channel (gmail/chat) carried in payload.channel instead.
+// The native Routine idempotency key maps every message in a source thread to one
+// task. Paperclip's comment clientRequestId deduplicates each message on replay.
 export async function triggerCommsRoutine({ board, companyId, routineId, normalized }) {
   const { source, idempotencyKey, payload } = normalized;
   const routine = await board(`routines/${routineId}`);
@@ -179,7 +228,29 @@ export async function triggerCommsRoutine({ board, companyId, routineId, normali
       || run.source !== "api" || run.idempotencyKey !== idempotencyKey) {
     throw new Error("Paperclip returned a mismatched run for this trigger");
   }
-  return { runId: run.id, linkedIssueId: run.linkedIssueId ?? null, status: run.status, source, idempotencyKey };
+  if (typeof run.linkedIssueId !== "string") {
+    throw new Error("Paperclip Routine run has no linked task");
+  }
+  const issue = await board(`issues/${run.linkedIssueId}`);
+  if (issue.id !== run.linkedIssueId || issue.companyId !== companyId) {
+    throw new Error("Unexpected linked task company");
+  }
+  const comment = await board(`issues/${run.linkedIssueId}/comments`, "POST", {
+    body: commentBody(normalized),
+    clientRequestId: normalized.commentRequestId,
+  });
+  if (comment.clientRequestId !== normalized.commentRequestId || typeof comment.id !== "string") {
+    throw new Error("Paperclip returned a mismatched comment for this message");
+  }
+  return {
+    runId: run.id,
+    linkedIssueId: run.linkedIssueId,
+    commentId: comment.id,
+    status: run.status,
+    source,
+    idempotencyKey,
+    commentRequestId: normalized.commentRequestId,
+  };
 }
 
 async function main() {

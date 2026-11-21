@@ -69,6 +69,12 @@ The opt-in Chat bridge verifies Google's token before forwarding human messages 
 existing allowlisted, idempotent Routine intake. Offline checks use synthetic signed tokens
 and a disposable Paperclip board; they do not activate a live webhook or send.
 
+The #266 receive path maps one source thread to one native Routine task and uses native
+Paperclip comment request IDs to deduplicate message replay. Gmail history notifications
+are resolved through the read-only mailbox API before intake; its cursor advances only after
+the entire batch has been accepted. Chat and Gmail receive credentials are separate from
+the existing send identity. The local admin page is read-only and cannot activate routing.
+
 The first integrated slice connects `draftRfc`, the Council panel and `decideRequestRoute`
 end to end, as a library function and as a host CLI that reuses the Routine audit worker's
 loopback-origin, board-API-bearer-token convention. It drafts an RFC, runs the real

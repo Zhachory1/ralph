@@ -101,6 +101,8 @@ def handle_request(*, authorization, body, audience, verify_token, dispatch):
         "text": message["text"],
         "sender": {"type": sender["type"]},
     }
+    if isinstance(sender.get("name"), str):
+        normalized_message["sender"]["name"] = sender["name"]
     if thread is not None:
         normalized_message["thread"] = thread["name"]
     for key in ("createTime", "clientAssignedMessageId"):
@@ -225,8 +227,8 @@ def main():
     url = urlsplit(args.audience)
     if url.scheme != "https" or not url.hostname or url.username or url.password or url.fragment:
         parser.error("Use the configured HTTPS Google Chat endpoint as the audience")
-    if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]+", args.origin):
-        parser.error("Use a loopback Paperclip origin")
+    if not re.fullmatch(r"http://(?:127\.0\.0\.1|host\.docker\.internal):[0-9]+", args.origin):
+        parser.error("Use a loopback or Compose host-gateway Paperclip origin")
     uuid = r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}"
     if not re.fullmatch(uuid, args.company_id) or not re.fullmatch(uuid, args.routine_id):
         parser.error("Use valid Paperclip company and Routine IDs")
@@ -248,7 +250,10 @@ def main():
         audience=args.audience, verify_token=verify_google_token,
         dispatch=make_dispatch(args.origin, args.company_id, args.routine_id, args.spaces, token),
     )
-    ChatHTTPServer(("127.0.0.1", args.port), handler).serve_forever()
+    bind_host = os.environ.get("CHAT_BIND_HOST", "127.0.0.1")
+    if bind_host not in ("127.0.0.1", "0.0.0.0"):
+        parser.error("CHAT_BIND_HOST must be loopback or the isolated Compose interface")
+    ChatHTTPServer((bind_host, args.port), handler).serve_forever()
 
 
 if __name__ == "__main__":
