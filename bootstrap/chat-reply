@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post chat-maintainer's replies to the original Chat thread, from the host.
+"""Prepare chat-maintainer's replies for the native confirmation-gated sender.
 
 Three replies, each at most once per request:
   ack    - intake card decided `route`: its `ack` text, after the orchestrator card exists
@@ -7,8 +7,10 @@ Three replies, each at most once per request:
   final  - report card on the work board decided `send`: its `body`, only after the ack
 
 The destination always comes from the staged intake evidence for the request's
-operation id, never from agent-written text. Uses the host's encrypted Google
-Chat credential through gchat.py; no credential reaches Hermes or a card.
+operation id, never from agent-written text. The exact message, ordered parts,
+account and destination are stored in a locked Paperclip issue document; every
+actual send waits for its one addressed human confirmation. The host's encrypted
+Google Chat credential is used only by gchat.py; it never reaches Hermes or a card.
 
 Per-thread ceilings (CEILINGS) bound how many times one request's thread can be
 messaged; a breach blocks the card and alerts (block_and_alert()) instead of
@@ -69,6 +71,7 @@ CEILINGS = {"clarify": 2, "decline": 1, "ack": 1, "final": 1}
 MAX_TEXT = 4000
 # A long reply is split into at most this many messages, in order.
 MAX_PARTS = 5
+USER = re.compile(r"users/[A-Za-z0-9._@+-]+\Z")
 # A non-zero `--record` below this many consecutive attempts retries next scan,
 # by itself, with no block and no alert (dd-tracker.md:322-333, plan-tracker.md
 # PR 3). Five is one per scan, so five minutes before the quiet failure is made
@@ -87,9 +90,7 @@ class Refused(ValueError):
 def command(argv):
     """Run one command. A timeout is a failed result (124), never an exception:
     a hung `gchat.py send` or `docker exec` must fail its own operation and let
-    the scan carry on with the next, not abort the whole pass. A send that timed
-    out after leaving is safe to retry: every part keeps fixed ids, so the Chat
-    API dedupes it."""
+    the scan carry on with the next, not abort the whole pass."""
     try:
         return subprocess.run(argv, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
@@ -144,7 +145,7 @@ def write_record_failures(path, count):
 def record_item(container, board, task_id, root, op_id):
     """`tracker-sync --record`, before the acknowledgement, on an `ack` only
     (dd-tracker.md Sec3.1, plan-tracker.md PR 3). Returns 0 to let `handle()`
-    carry on to `post()` -- recorded, or tracker not configured -- or the
+    carry on to the guarded sender -- recorded, or tracker not configured -- or the
     value `handle()` must return instead: 1 while a transient failure is
     still inside the retry budget, 2 once a refusal or the budget itself ends
     the automatic retry and blocks the card.
@@ -357,26 +358,90 @@ def refuse_unsendable(body, tracker_host):
     return body
 
 
-def post(space, thread, body, kind, op_id):
-    """Each part keeps fixed ids across retries, so the Chat API dedupes a
-    part that already went out and a retry resumes where it failed. Part 1
-    keeps the original ids, so a single-message reply is unchanged."""
-    digest = hashlib.sha256(op_id.encode()).hexdigest()
-    sender = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
-    for n, part in enumerate(parts(body), 1):
-        suffix = "" if n == 1 else f"-{n}"
-        sent = command([sys.executable, str(sender), "send", space, part,
-                        "--thread", thread, "--strict-thread",
-                        "--request-id", f"ralph-{kind}-{digest}{suffix}",
-                        "--message-id", f"client-ralph-{kind}-{digest[:40]}{suffix}"])
-        if sent.returncode:
-            return False
-        try:
-            if json.loads(sent.stdout).get("sent") is not True:
-                return False
-        except (ValueError, AttributeError):
-            return False
-    return True
+def send_guard_config(instance_env):
+    values = {}
+    if instance_env is None:
+        return None
+    try:
+        for line in instance_env.read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key in {"CHAT_PAPERCLIP_API_URL", "CHAT_PAPERCLIP_API_KEY",
+                                     "CHAT_SEND_ISSUE_ID", "CHAT_SEND_APPROVER_USER_ID",
+                                     "CHAT_SEND_ACCOUNT_ID"}:
+                values[key] = value.strip().strip("'\"")
+    except OSError:
+        return None
+    required = {"CHAT_PAPERCLIP_API_URL", "CHAT_PAPERCLIP_API_KEY", "CHAT_SEND_ISSUE_ID",
+                "CHAT_SEND_APPROVER_USER_ID", "CHAT_SEND_ACCOUNT_ID"}
+    if not required <= set(values) or any(not values[key] for key in required):
+        return None
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", values["CHAT_SEND_ISSUE_ID"]):
+        return None
+    return {
+        "api_url": values["CHAT_PAPERCLIP_API_URL"],
+        "api_key": values["CHAT_PAPERCLIP_API_KEY"],
+        "issue_id": values["CHAT_SEND_ISSUE_ID"],
+        "approver_user_id": values["CHAT_SEND_APPROVER_USER_ID"],
+        "account_id": values["CHAT_SEND_ACCOUNT_ID"],
+    }
+
+
+def send_envelope(op_id, kind, run_id, item, body, account_id):
+    sender = item.get("sender") or {}
+    recipient = sender.get("name")
+    if not isinstance(recipient, str) or not USER.fullmatch(recipient):
+        raise Refused("staged Chat sender has no safe user resource name")
+    if not isinstance(run_id, str) or not run_id or len(run_id) > 128:
+        raise Refused("completed Chat decision has no stable run id")
+    intent_id = f"{op_id}:{kind}:{run_id}"
+    digest = hashlib.sha256(intent_id.encode()).hexdigest()
+    message_parts = []
+    for index, part in enumerate(parts(body), 1):
+        suffix = "" if index == 1 else f"-{index}"
+        message_parts.append({
+            "index": index,
+            "text": part,
+            "requestId": f"ralph-{kind}-{digest[:40]}{suffix}",
+            "messageId": f"client-ralph-{kind}-{digest[:32]}{suffix}",
+        })
+    return {
+        "version": 1,
+        "intentId": intent_id,
+        "operationId": op_id,
+        "decisionRunId": run_id,
+        "kind": kind,
+        "provider": "google_chat",
+        "accountId": account_id,
+        "recipient": recipient,
+        "space": item["space"],
+        "thread": item["thread"],
+        "message": body,
+        "parts": message_parts,
+    }
+
+
+def guarded_send(envelope, config):
+    """Run the Paperclip guard with its board key in the child environment only."""
+    if not config:
+        return {"status": "not_configured"}
+    worker = HERE.parent / "compose" / "v4" / "comms-outbound-worker.mjs"
+    child_env = os.environ.copy()
+    child_env.update({
+        "CHAT_PAPERCLIP_API_URL": config["api_url"],
+        "CHAT_PAPERCLIP_API_KEY": config["api_key"],
+        "CHAT_SEND_ISSUE_ID": config["issue_id"],
+        "CHAT_SEND_APPROVER_USER_ID": config["approver_user_id"],
+        "CHAT_SEND_ACCOUNT_ID": config["account_id"],
+    })
+    try:
+        result = subprocess.run(["node", str(worker)], input=json.dumps(envelope),
+                                capture_output=True, text=True, timeout=360, env=child_env)
+    except subprocess.TimeoutExpired:
+        return {"status": "held_for_reconciliation"}
+    try:
+        return json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return {"status": "worker_error"}
 
 
 def mark(root, op_id, kind):
@@ -403,6 +468,44 @@ def sent(root, op_id, kind):
 
 def held(root, op_id, kind):
     return (root / op_id / f".held-{kind}").is_file()
+
+
+def awaiting_ack(root, op_id):
+    return (root / op_id / ".awaiting-ack").is_file()
+
+
+def set_awaiting_ack(root, op_id):
+    marker = root / op_id / ".awaiting-ack"
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+    except FileExistsError:
+        pass
+
+
+def clear_awaiting_ack(root, op_id):
+    try:
+        (root / op_id / ".awaiting-ack").unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def intent_hold_path(root, op_id, kind, intent_id):
+    digest = hashlib.sha256(intent_id.encode()).hexdigest()
+    return root / op_id / f".held-{kind}-{digest}"
+
+
+def intent_held(root, op_id, kind, intent_id):
+    return intent_hold_path(root, op_id, kind, intent_id).is_file()
+
+
+def hold_intent(root, op_id, kind, intent_id):
+    fd = os.open(intent_hold_path(root, op_id, kind, intent_id),
+                 os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
 
 
 def answered(root, op_id, kind):
@@ -503,8 +606,9 @@ def block_and_alert(container, board, task_id, root, op_id, kind, reason, block=
         print(f"could not record Chat alert sentinel for {op_id}/{kind}", file=sys.stderr)
 
 
-def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, send_enabled=True):
-    """0 done or nothing to send, 1 retryable failure, 2 refused."""
+def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, send_enabled=True,
+           instance_env=None):
+    """0 done or waiting for confirmation, 1 held/retry, 2 refused."""
     op_id = kind = None
     try:
         shown = command(["docker", "exec", "-u", "hermes", container, "hermes", "kanban",
@@ -519,6 +623,9 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
             raise Refused("Chat card is not complete")
         op_id = operation_of(task)
         metadata = decision_of(detail)
+        decision_run_id = detail["runs"][-1].get("id")
+        if not isinstance(decision_run_id, str) or not decision_run_id:
+            raise Refused("completed Chat decision has no stable run id")
         choice = metadata["decision"]
         if board in INTAKE_BOARDS:
             if task["workspace_path"] != "/workspaces/chat-inbox/" + op_id:
@@ -549,8 +656,13 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
             if answered(root, op_id, "final"):
                 return 0
             if send_enabled and not sent(root, op_id, "ack"):
+                if awaiting_ack(root, op_id):
+                    return 0
                 raise Refused("final response before the request was acknowledged")
         item = destination(root, op_id, allowed_spaces)
+        if not isinstance((item.get("sender") or {}).get("name"), str) \
+                or not USER.fullmatch((item.get("sender") or {}).get("name", "")):
+            raise Refused("staged Chat sender has no safe user resource name")
     except (KeyError, IndexError, ValueError, TypeError, OSError, json.JSONDecodeError) as error:
         reason = str(error) if isinstance(error, (Refused, chat_evidence.Invalid)) \
             else "invalid bound decision or destination"
@@ -603,11 +715,53 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
                 return 1
             print(f"Chat {kind} held for {task_id}")
             return 0
-        if not post(space, thread, body, kind, op_id):
-            reason = f"Chat {kind} failed for {task_id}; retry reuses the same ids"
+        config = send_guard_config(instance_env)
+        envelope = send_envelope(op_id, kind, decision_run_id, item, body,
+                                 config["account_id"] if config else "")
+        if intent_held(root, op_id, kind, envelope["intentId"]):
+            return 0
+        result = guarded_send(envelope, config)
+        status = result.get("status")
+        if status == "awaiting_confirmation":
+            if kind == "ack":
+                try:
+                    set_awaiting_ack(root, op_id)
+                except OSError:
+                    print(f"Chat acknowledgement is pending; could not persist its hold for {op_id}",
+                          file=sys.stderr)
+                    return 3
+            print(f"Chat {kind} awaiting its addressed Paperclip confirmation for {task_id}")
+            return 0
+        if status == "not_configured":
+            if kind == "ack":
+                try:
+                    set_awaiting_ack(root, op_id)
+                except OSError:
+                    return 3
+            print("Chat outbound guard is not configured; no message was sent", file=sys.stderr)
+            return 1
+        if status not in {"delivered", "already_delivered"}:
+            reason = f"Chat {kind} held by the outbound guard ({status or 'unknown'}); inspect its Paperclip intent"
             print(reason, file=sys.stderr)
-            block_and_alert(container, board, task_id, root, op_id, kind, reason,
-                            block=False)
+            if kind == "ack":
+                try:
+                    set_awaiting_ack(root, op_id)
+                except OSError:
+                    return 3
+            try:
+                hold_intent(root, op_id, kind, envelope["intentId"])
+            except FileExistsError:
+                pass
+            except OSError:
+                return 1
+            if status in {"held_for_reconciliation", "receipt_readback_failed", "worker_error"}:
+                try:
+                    hold(root, op_id, kind)
+                except FileExistsError:
+                    pass
+                except OSError:
+                    print(f"could not record Chat {kind} hold for {op_id}", file=sys.stderr)
+                block_and_alert(container, board, task_id, root, op_id, kind, reason, block=False)
             return 1
         try:
             mark(root, op_id, kind)
@@ -619,6 +773,12 @@ def handle(container, root, allowed_spaces, board, task_id, tracker_host=None, s
             block_and_alert(container, board, task_id, root, op_id, kind, reason,
                             block=False)
             return 1
+        if kind == "ack":
+            if not clear_awaiting_ack(root, op_id):
+                reason = "Chat acknowledgement sent, but its final-reply hold could not be cleared"
+                print(reason, file=sys.stderr)
+                block_and_alert(container, board, task_id, root, op_id, kind, reason, block=False)
+                return 1
         print(f"Chat {kind} sent for {task_id}")
         return 0
 
@@ -630,6 +790,7 @@ def scan(instance_env):
         print("invalid Chat pilot configuration", file=sys.stderr)
         return 1
     status = 0
+    awaiting_ack_ops = set()
     # Once per scan, before any card is handled: everything `--settle` does
     # happens after a reply has already gone out (dd-tracker.md:240-243), so a
     # failure here sets the scan's exit status and alerts, and withholds no
@@ -662,8 +823,14 @@ def scan(instance_env):
                                        or answered(root, op_id, "clarify")
                                        or answered(root, op_id, "decline")):
                 continue
-            if handle(container, root, allowed_spaces, board, task["id"], tracker_host,
-                      send_enabled) == 1:
+            if board == "ralph" and op_id in awaiting_ack_ops:
+                continue
+            result = handle(container, root, allowed_spaces, board, task["id"], tracker_host,
+                            send_enabled, instance_env)
+            if result == 3:
+                awaiting_ack_ops.add(op_id)
+                status = 1
+            elif result == 1:
                 status = 1
     return status
 
@@ -681,7 +848,8 @@ def main():
     if args.scan:
         return scan(args.instance_env)
     container, root, allowed_spaces, tracker_host, send_enabled = instance_config(args.instance_env)
-    return handle(container, root, allowed_spaces, args.board, args.task, tracker_host, send_enabled)
+    return handle(container, root, allowed_spaces, args.board, args.task, tracker_host,
+                  send_enabled, args.instance_env)
 
 
 if __name__ == "__main__":

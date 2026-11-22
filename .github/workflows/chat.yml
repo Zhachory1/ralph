@@ -15,8 +15,11 @@ on:
       - "bootstrap/chat-*"
       - "bootstrap/chat_*"
       - "bootstrap/run-chat-*"
+      - "compose/.env.example"
       - "compose/Dockerfile.notifier"
       - "compose/docker-compose.yml"
+      - "compose/v4/comms-outbound-worker.mjs"
+      - "compose/v4/test/comms-outbound-worker.test.mjs"
       - "skills/ops/google-chat/**"
       - "evals/test_chat_*"
 
@@ -34,6 +37,9 @@ jobs:
 
       - name: Router
         run: python3 evals/test_chat_route.py
+
+      - name: Native outbound confirmation and receipt guard
+        run: node --test compose/v4/test/comms-outbound-worker.test.mjs
 
       # test_gchat_send.py imports skills/ops/google-chat/gchat.py directly,
       # outside its usual `uv run` isolation, so it needs gchat.py's own

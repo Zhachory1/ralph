@@ -362,6 +362,11 @@ services:
       RALPH_WORKSPACES: /workspaces
       CHAT_ROUTE_SPACES: ${CHAT_ROUTE_SPACES:-}
       CHAT_SEND: ${CHAT_SEND:-on}
+      CHAT_PAPERCLIP_API_URL: ${CHAT_PAPERCLIP_API_URL:-}
+      CHAT_PAPERCLIP_API_KEY: ${CHAT_PAPERCLIP_API_KEY:-}
+      CHAT_SEND_ISSUE_ID: ${CHAT_SEND_ISSUE_ID:-}
+      CHAT_SEND_APPROVER_USER_ID: ${CHAT_SEND_APPROVER_USER_ID:-}
+      CHAT_SEND_ACCOUNT_ID: ${CHAT_SEND_ACCOUNT_ID:-}
       RALPH_NOTIFY_URL: ${RALPH_NOTIFY_URL:-${GCHAT_WEBHOOK_URL:-}}
       RALPH_HERMES_CONTAINER: ${RALPH_INSTANCE:-ralph}-hermes-1
       # Named for a later pull request to read (tracker plan assumption 7);
@@ -377,7 +382,7 @@ services:
       # Read-write: a token refresh rewrites it in place (gchat.py:139-143).
       - chat-creds:/root/.config/gws-cli
       - ../bootstrap:/ralph/bootstrap:ro
-      # post() shells out two levels up to skills/ops/google-chat/gchat.py
+      # The outbound worker shells out to skills/ops/google-chat/gchat.py
       # (chat-reply:128), as init already mounts it (:93 above).
       - ../skills:/ralph/skills:ro
       # Same host path as the hermes service, because bootstrap/install finds

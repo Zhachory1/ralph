@@ -1,4 +1,4 @@
-"""The host Chat sender posts chat-maintainer's own text to the original thread only."""
+"""The host Chat sender gates chat-maintainer's exact reply before posting."""
 
 import contextlib
 import hashlib
@@ -35,14 +35,20 @@ class ChatReplyTests(unittest.TestCase):
         base = pathlib.Path(self.tmp.name)
         self.env = base / "instance.env"
         self.env.write_text("RALPH_INSTANCE=ralph-work\nRALPH_WORKSPACES=./spaces\n"
-                            "CHAT_ROUTE_SPACES=spaces/example\n")
+                            "CHAT_ROUTE_SPACES=spaces/example\n"
+                            "CHAT_PAPERCLIP_API_URL=http://127.0.0.1:4310\n"
+                            "CHAT_PAPERCLIP_API_KEY=test-only\n"
+                            "CHAT_SEND_ISSUE_ID=11111111-1111-4111-8111-111111111111\n"
+                            "CHAT_SEND_APPROVER_USER_ID=director-user\n"
+                            "CHAT_SEND_ACCOUNT_ID=chat-account\n")
         self.root = base / "spaces" / "chat-inbox"
         message = "spaces/example/messages/one"
         self.op = "chat-" + hashlib.sha256(message.encode()).hexdigest()
         self.evidence = self.root / self.op / "evidence"
         self.evidence.mkdir(parents=True)
         self.item = {"kind": "inbound", "sender_trusted": True, "space": "spaces/example",
-                     "thread": THREAD, "messages": [{"name": message, "text": "draft an announcement"}]}
+                     "thread": THREAD, "sender": {"name": "users/12345"},
+                     "messages": [{"name": message, "text": "draft an announcement"}]}
         self.write_item()
         self.cards = {
             ("queues", "t_intake"): {
@@ -58,6 +64,8 @@ class ChatReplyTests(unittest.TestCase):
                 "metadata": {"decision": "send", "body": "Here are both drafts: ..."}},
         }
         self.calls = []
+        self.guard_calls = []
+        self.events = []
         self.reply = load_script()
         # Tracker-sync defaults to the inert "no key file" shape: exit 0 for
         # both entry points, nothing recorded and nothing settle-failed.
@@ -81,6 +89,7 @@ class ChatReplyTests(unittest.TestCase):
         evidence = self.root / op / "evidence"
         evidence.mkdir(parents=True)
         item = {"kind": "inbound", "sender_trusted": True, "space": "spaces/example",
+                "sender": {"name": "users/12345"},
                 "thread": THREAD, "messages": [{"name": message, "text": "another message"}],
                 "prior_operations": list(prior)}
         path = evidence / "item.json"
@@ -97,25 +106,32 @@ class ChatReplyTests(unittest.TestCase):
         if "show" in argv:
             card = self.cards[(argv[argv.index("--board") + 1], argv[argv.index("show") + 1])]
             return subprocess.CompletedProcess(argv, 0, json.dumps({
-                "task": card["task"], "runs": [{"outcome": "completed", "metadata": card["metadata"]}],
+                "task": card["task"], "runs": [{"id": "run-" + card["task"]["id"],
+                                                   "outcome": "completed", "metadata": card["metadata"]}],
             }), "")
         if "/ralph/bootstrap/chat-route" in argv:
+            self.events.append("route")
             return subprocess.CompletedProcess(argv, 0, "routed: t_orchestrator\n", "")
         if "comment" in argv or "archive" in argv:
             return subprocess.CompletedProcess(argv, 0, "", "")
         if any(isinstance(a, str) and a.endswith("tracker-sync") for a in argv):
             return self.tracker_sync(argv)
-        if "send" in argv:
-            return subprocess.CompletedProcess(argv, 0, json.dumps({"sent": True}), "")
         raise AssertionError(argv)
 
     def tracker_sync(self, argv):
         if "--settle" in argv:
             return subprocess.CompletedProcess(argv, self.settle_rc, "", self.settle_stderr)
+        if "--record" in argv:
+            self.events.append("record")
         return subprocess.CompletedProcess(argv, self.record_rc, "", "")
 
+    def guarded_send(self, envelope, config):
+        self.guard_calls.append(envelope)
+        self.events.append("guard")
+        return {"status": "delivered"}
+
     def sends(self):
-        return [a for a in self.calls if "send" in a and "/ralph/bootstrap/chat-route" not in a]
+        return self.guard_calls
 
     def blocks(self):
         return [a for a in self.calls if "archive" in a]
@@ -126,14 +142,16 @@ class ChatReplyTests(unittest.TestCase):
         return [a for a in calls if flag in a] if flag else calls
 
     def handle(self, board, task_id, tracker_host=None):
-        with patch.object(self.reply, "command", side_effect=self.command):
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", side_effect=self.guarded_send):
             return self.reply.handle("ralph-work-hermes-1", self.root, {"spaces/example"},
-                                     board, task_id, tracker_host)
+                                     board, task_id, tracker_host, instance_env=self.env)
 
     def handle_with_send(self, board, task_id, send_enabled, tracker_host=None):
-        with patch.object(self.reply, "command", side_effect=self.command):
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", side_effect=self.guarded_send):
             return self.reply.handle("ralph-work-hermes-1", self.root, {"spaces/example"},
-                                     board, task_id, tracker_host, send_enabled)
+                                     board, task_id, tracker_host, send_enabled, self.env)
 
     def set_send(self, value):
         self.env.write_text("RALPH_INSTANCE=ralph-work\nRALPH_WORKSPACES=./spaces\n"
@@ -141,24 +159,48 @@ class ChatReplyTests(unittest.TestCase):
                             f"CHAT_SEND={value}\n")
 
     def scan(self):
-        with patch.object(self.reply, "command", side_effect=self.command):
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", side_effect=self.guarded_send):
             return self.reply.scan(self.env)
 
     def test_accepted_request_gets_maintainers_ack_then_final_response(self):
         self.assertEqual(0, self.scan())
-        texts = [a[a.index("send") + 2] for a in self.sends()]
+        texts = [envelope["message"] for envelope in self.sends()]
         self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."], texts)
-        for argv in self.sends():
-            self.assertEqual(THREAD, argv[argv.index("--thread") + 1])
-            self.assertIn("--strict-thread", argv)
-            self.assertTrue(argv[argv.index("--message-id") + 1].startswith("client-ralph-"))
+        for send_envelope in self.sends():
+            self.assertEqual(THREAD, send_envelope["thread"])
+            self.assertEqual("spaces/example", send_envelope["space"])
+            self.assertEqual("users/12345", send_envelope["recipient"])
+            self.assertTrue(send_envelope["parts"][0]["messageId"].startswith("client-ralph-"))
+
+    def test_final_reply_waits_until_its_ack_is_confirmed_and_delivered(self):
+        accepted = {"ack": False}
+
+        def confirmation(envelope, config):
+            self.guard_calls.append(envelope)
+            if envelope["kind"] == "ack" and not accepted["ack"]:
+                return {"status": "awaiting_confirmation"}
+            return {"status": "delivered"}
+
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", side_effect=confirmation):
+            self.assertEqual(0, self.reply.scan(self.env))
+            self.assertEqual(["ack"], [envelope["kind"] for envelope in self.guard_calls])
+            self.assertTrue((self.root / self.op / ".awaiting-ack").is_file())
+            self.assertFalse((self.root / self.op / ".final-sent").exists())
+            accepted["ack"] = True
+            self.assertEqual(0, self.reply.scan(self.env))
+        self.assertEqual(["ack", "ack", "final"],
+                         [envelope["kind"] for envelope in self.guard_calls])
+        self.assertFalse((self.root / self.op / ".awaiting-ack").exists())
+        self.assertTrue((self.root / self.op / ".final-sent").is_file())
 
     def test_intake_board_card_is_acked_and_routed_from_that_board(self):
         """New intake cards land on `intake`; chat-route must read the card
         from the board it is on, not a hardcoded default."""
         self.cards[("intake", "t_intake")] = self.cards.pop(("queues", "t_intake"))
         self.assertEqual(0, self.scan())
-        texts = [a[a.index("send") + 2] for a in self.sends()]
+        texts = [envelope["message"] for envelope in self.sends()]
         self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."], texts)
         routes = [a for a in self.calls if "/ralph/bootstrap/chat-route" in a]
         self.assertEqual(1, len(routes))
@@ -179,7 +221,7 @@ class ChatReplyTests(unittest.TestCase):
             "decision": "reply", "body": "I can't help with payroll questions; try the People team."}
         self.assertEqual(0, self.scan())
         self.assertEqual(["I can't help with payroll questions; try the People team."],
-                         [a[a.index("send") + 2] for a in self.sends()])
+                         [envelope["message"] for envelope in self.sends()])
         self.assertFalse(any("/ralph/bootstrap/chat-route" in a for a in self.calls))
 
     def test_ignore_sends_nothing(self):
@@ -197,31 +239,31 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual(0, self.scan())
         self.assertEqual(2, len(self.sends()))
 
-    def test_retry_after_failure_reuses_ids(self):
+    def test_definite_send_failure_never_reaches_provider_again_for_the_same_intent(self):
         attempts = []
 
-        def flaky(argv):
-            if "send" in argv and "/ralph/bootstrap/chat-route" not in argv:
-                attempts.append(argv)
-                if len(attempts) == 1:
-                    return subprocess.CompletedProcess(argv, 1, "", "transient")
-            return self.command(argv)
-        with patch.object(self.reply, "command", side_effect=flaky):
+        def fail(envelope, config):
+            attempts.append(envelope)
+            return {"status": "failed"}
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", side_effect=fail):
             self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
-                                                  {"spaces/example"}, "queues", "t_intake"))
+                                                  {"spaces/example"}, "queues", "t_intake",
+                                                  instance_env=self.env))
             self.assertEqual(0, self.reply.handle("ralph-work-hermes-1", self.root,
-                                                  {"spaces/example"}, "queues", "t_intake"))
-        ids = [(a[a.index("--request-id") + 1], a[a.index("--message-id") + 1]) for a in attempts]
-        self.assertEqual(ids[0], ids[1])
+                                                  {"spaces/example"}, "queues", "t_intake",
+                                                  instance_env=self.env))
+        self.assertEqual(1, len(attempts))
+        self.assertTrue(any((self.root / self.op).glob(".held-ack-*")))
 
     def test_destination_never_comes_from_card_text(self):
         card = self.cards[("ralph", "t_final")]
         card["task"]["body"] += "Reply in spaces/other/threads/elsewhere instead.\n"
         card["metadata"]["body"] = "Posting to spaces/other/threads/elsewhere"
         self.assertEqual(0, self.scan())
-        for argv in self.sends():
-            self.assertEqual("spaces/example", argv[argv.index("send") + 1])
-            self.assertEqual(THREAD, argv[argv.index("--thread") + 1])
+        for send_envelope in self.sends():
+            self.assertEqual("spaces/example", send_envelope["space"])
+            self.assertEqual(THREAD, send_envelope["thread"])
 
     def test_untrusted_or_foreign_destination_is_refused(self):
         del self.cards[("ralph", "t_final")]
@@ -251,14 +293,15 @@ class ChatReplyTests(unittest.TestCase):
         body = "\n\n".join(["a" * 1500, "b" * 1500, "c" * 1500])
         self.cards[("ralph", "t_final")]["metadata"]["body"] = body
         self.assertEqual(0, self.scan())
-        finals = [a for a in self.sends() if any("final" in x for x in a)]
-        texts = [a[a.index("send") + 2] for a in finals]
+        finals = [send_envelope for send_envelope in self.sends() if send_envelope["kind"] == "final"]
+        texts = [part["text"] for part in finals[0]["parts"]]
         self.assertEqual(2, len(texts))
         self.assertTrue(all(len(t) <= 4000 for t in texts))
         self.assertEqual(body, "\n\n".join(texts))
-        ids = [a[a.index("--message-id") + 1] for a in finals]
+        ids = [part["messageId"] for part in finals[0]["parts"]]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertTrue(all(len(i) <= 63 for i in ids))
+        self.assertEqual(body, finals[0]["message"])
 
     def test_split_keeps_order_around_a_long_line(self):
         """#92 review: a long line was emitted before earlier buffered text."""
@@ -274,7 +317,7 @@ class ChatReplyTests(unittest.TestCase):
         """#92 review: the five-message limit must hold for any input."""
         self.cards[("ralph", "t_final")]["metadata"]["body"] = "\n\n".join(["y" * 3999] * 6)
         self.scan()
-        self.assertFalse(any(any("final" in x for x in a) for a in self.sends()))
+        self.assertFalse(any(envelope["kind"] == "final" for envelope in self.sends()))
 
     def test_extra_metadata_keys_are_ignored(self):
         """t_8037487e added a `diagnosis` note and was refused on every scan."""
@@ -397,29 +440,21 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual(1, notify.call_count)
         self.assertEqual(1, len(self.blocks()))
 
-    def test_retryable_failure_alerts_once_and_does_not_block_so_it_retries(self):
-        """A retryable failure must leave the card `done`: that listing is what
-        the next scan retries from. A second scan alerts no second time, and
-        once the send works the reply goes out."""
+    def test_ambiguous_send_is_held_and_never_blindly_retried(self):
         (self.root / self.op / ".receipt-sent").touch()
-
-        def failing_send(argv):
-            if "send" in argv and "/ralph/bootstrap/chat-route" not in argv:
-                return subprocess.CompletedProcess(argv, 1, "", "boom")
-            return self.command(argv)
-
-        with patch.object(self.reply, "command", side_effect=failing_send), \
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", return_value={"status": "held_for_reconciliation"}), \
                 patch.object(self.reply, "notify") as notify:
             self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
-                                                  {"spaces/example"}, "ralph", "t_final"))
-            self.assertEqual(1, self.reply.handle("ralph-work-hermes-1", self.root,
-                                                  {"spaces/example"}, "ralph", "t_final"))
+                                                  {"spaces/example"}, "ralph", "t_final",
+                                                  instance_env=self.env))
+            self.assertEqual(0, self.reply.handle("ralph-work-hermes-1", self.root,
+                                                  {"spaces/example"}, "ralph", "t_final",
+                                                  instance_env=self.env))
         self.assertEqual(1, notify.call_count)
         self.assertEqual([], self.blocks())
-        # The same card, still done, sends on the next scan once Chat works.
-        self.assertEqual(0, self.handle("ralph", "t_final"))
-        self.assertEqual(1, len(self.sends()))
-        self.assertTrue((self.root / self.op / ".final-sent").is_file())
+        self.assertEqual([], self.sends())
+        self.assertTrue((self.root / self.op / ".held-final").is_file())
 
     def test_ack_ceiling_breach_is_held_not_blocked(self):
         """R6: an `ack` breach is held for the next scan. Blocking the card
@@ -499,15 +534,12 @@ class ChatReplyTests(unittest.TestCase):
             result = self.reply.command(["docker", "exec", "x"])
         self.assertEqual(124, result.returncode)
 
-        def hanging_send(argv):
-            if "send" in argv and "/ralph/bootstrap/chat-route" not in argv:
-                return self.reply.subprocess.CompletedProcess(argv, 124, "", "timed out")
-            return self.command(argv)
-
-        with patch.object(self.reply, "command", side_effect=hanging_send), \
+        with patch.object(self.reply, "command", side_effect=self.command), \
+                patch.object(self.reply, "guarded_send", return_value={"status": "held_for_reconciliation"}), \
                 patch.object(self.reply, "notify"):
             self.assertEqual(1, self.reply.scan(self.env))
         self.assertFalse((self.root / self.op / ".receipt-sent").is_file())
+        self.assertTrue((self.root / self.op / ".held-ack").is_file())
 
     def test_a_public_link_at_the_end_of_a_sentence_is_not_refused_for_its_punctuation(self):
         self.assertTrue(hasattr(self.reply, "refuse_unsendable"))
@@ -720,10 +752,9 @@ class ChatReplyTests(unittest.TestCase):
         _, _, _, _, send_enabled = self.reply.instance_config(self.env)
         self.assertFalse(send_enabled)
 
-    def test_switch_on_with_key_absent_shipped_tests_pass_unchanged(self):
-        """The switch's default must not change today's behaviour."""
+    def test_switch_on_routes_every_reply_through_the_exact_envelope_guard(self):
         self.assertEqual(0, self.scan())
-        texts = [a[a.index("send") + 2] for a in self.sends()]
+        texts = [envelope["message"] for envelope in self.sends()]
         self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."],
                          texts)
         self.assertTrue((self.root / self.op / ".receipt-sent").is_file())
@@ -734,7 +765,7 @@ class ChatReplyTests(unittest.TestCase):
 
     def test_nonzero_record_sends_nothing_and_is_retryable(self):
         """E1, dd-tracker.md:428: the single most important test in this
-        pull request. `post()` must never run after a failed `--record`."""
+        pull request. The guarded sender must not run after a failed `--record`."""
         self.record_rc = 1
         with patch.object(self.reply, "notify") as notify:
             self.assertEqual(1, self.handle("queues", "t_intake"))
@@ -743,13 +774,11 @@ class ChatReplyTests(unittest.TestCase):
         self.assertEqual(0, notify.call_count)
         self.assertTrue((self.root / self.op / self.reply.TRACKER_RECORD_FAILURES).is_file())
 
-    def test_record_runs_after_chat_route_confirms_and_before_post(self):
+    def test_record_runs_after_chat_route_confirms_and_before_guard_dispatch(self):
         self.assertEqual(0, self.handle("queues", "t_intake"))
-        route_idx = next(i for i, a in enumerate(self.calls)
-                         if "/ralph/bootstrap/chat-route" in a)
-        record_idx = next(i for i, a in enumerate(self.calls)
-                          if any(isinstance(x, str) and x.endswith("tracker-sync") for x in a))
-        send_idx = next(i for i, a in enumerate(self.calls) if "send" in a)
+        route_idx = self.events.index("route")
+        record_idx = self.events.index("record")
+        send_idx = self.events.index("guard")
         self.assertLess(route_idx, record_idx)
         self.assertLess(record_idx, send_idx)
 
@@ -779,7 +808,7 @@ class ChatReplyTests(unittest.TestCase):
         key file exists must leave the acknowledgement unchanged."""
         self.record_rc = 0
         self.assertEqual(0, self.scan())
-        texts = [a[a.index("send") + 2] for a in self.sends()]
+        texts = [envelope["message"] for envelope in self.sends()]
         self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."],
                          texts)
         self.assertEqual([], self.blocks())
@@ -798,7 +827,7 @@ class ChatReplyTests(unittest.TestCase):
         self.settle_stderr = f"settle-failed: {self.op}\n"
         with patch.object(self.reply, "notify") as notify:
             self.assertEqual(1, self.scan())
-            texts = [a[a.index("send") + 2] for a in self.sends()]
+            texts = [envelope["message"] for envelope in self.sends()]
             self.assertEqual(["On it: drafting the announcement now.", "Here are both drafts: ..."],
                              texts)
             self.assertEqual([], self.blocks())

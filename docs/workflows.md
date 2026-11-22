@@ -233,27 +233,43 @@ sequenceDiagram
     participant CM as chat-maintainer
     participant O as orchestrator
     participant R as chat-sender: reply loop (60 s)
+    participant PC as Paperclip outbound issue
     User->>P: message
     P->>CM: staged thread evidence, intake card
     alt accepted
         CM->>R: route + ack text
-        R->>User: acknowledgement
+        R->>PC: lock exact ack envelope; request one addressed confirmation
+        PC->>User: human_only confirmation of exact revision
+        User-->>PC: accept or reject
+        PC-->>R: accepted interaction and revision read-back
+        R->>User: exact approved acknowledgement parts
         CM->>O: request card
         O->>CM: final card with results
-        CM->>R: send text
-        R->>User: final reply (split if over 4,000 chars)
+        CM->>R: exact final text
+        R->>PC: lock exact final envelope; request one addressed confirmation
+        PC->>User: human_only confirmation of exact revision
+        User-->>PC: accept or reject
+        PC-->>R: accepted interaction and revision read-back
+        R->>User: exact approved parts (split in order)
     else cannot do / needs clarification
         CM->>R: reply text
-        R->>User: reply
+        R->>PC: lock exact reply envelope; request one addressed confirmation
+        PC->>User: human_only confirmation of exact revision
+        User-->>PC: accept or reject
+        PC-->>R: accepted interaction and revision read-back
+        R->>User: exact approved reply parts
     end
 ```
 
 - Chat intake goes on `intake`, while routed work stays on `ralph`; the board distinguishes the acknowledgement from the final reply. Email intake also goes on `intake`. Intake cards created before the move stay on the legacy `queues` board and are still answered there.
 - The destination always comes from the staged intake, never from model text. Ralph's own messages carry a `client-ralph-*` id and are skipped at intake.
+- Every outbound acknowledgement, reply, clarification, decline and final uses the same guard; there is no automatic-send exemption. The guard stores provider/account, original sender, space, thread, exact complete message and ordered provider parts in a locked Paperclip issue document. One addressed `human_only` confirmation targets that exact revision for the whole multi-part send.
+- The worker claims the intent through Paperclip's revisioned document compare-and-swap, then re-reads the server-authenticated accepted interaction and exact locked revision immediately before each provider part. Provider message names and timestamps are written to the send-state document and read back before `delivered`; a timeout or uncertain state is held for reconciliation and never automatically retried. Native revision write behavior was checked against Paperclip `v2026.1117.0` source (`server/src/services/documents.ts` and the document revision schema): each write is transactional, `baseRevisionId` must match the current head, and a unique document/revision-number index admits one concurrent updater. First-claim creation also uses the unique issue/document-key index. A competing write can report a server error rather than HTTP 409, so the worker reads persisted state and dispatches only if its exact claim won.
+- Configure `CHAT_PAPERCLIP_API_URL`, a narrowly scoped `CHAT_PAPERCLIP_API_KEY`, `CHAT_SEND_ISSUE_ID`, `CHAT_SEND_APPROVER_USER_ID` and the non-secret `CHAT_SEND_ACCOUNT_ID` in the private instance config. The configured issue must be private to the approver and send operator because it contains exact message text. The account label must match the Google OAuth identity selected by `GWS_CFG_DIR`. A missing or mismatched configuration fails closed. CI tests use stubbed Paperclip and provider boundaries; they create no confirmation cards and make no live calls.
 - Both halves run as one compose service (`chat-sender`, `COMPOSE_PROFILES=chat`), the Chat token in its own volume the agent's container never mounts (dd-chat.md Sec4.1, D5). Before the owner's cutover (`docs/operations.md`), the overlay `chat_inbox.py` cron job and the host LaunchAgent `chat-reply` do the same two jobs instead.
 - Builder card workers can call `list_spaces` through a fixed read-only sidecar command to resolve space IDs; they cannot read messages or send Chat through this tool. A missing sidecar or token returns an error, not an empty list.
 
-**Failure mode:** *no reply arrives.* Check `docker logs <instance>-chat-sender-1` for refusals (or, before the cutover, the LaunchAgent log `~/Library/Logs/ralph-chat-reply-<instance>.err.log`).
+**Failure mode:** *no reply arrives.* Check `docker logs <instance>-chat-sender-1` for refusals/confirmation holds (or, before the cutover, the LaunchAgent log `~/Library/Logs/ralph-chat-reply-<instance>.err.log`). Ambiguous send states require provider reconciliation; never clear a hold by blindly retrying.
 
 ## Daily Chat digest
 

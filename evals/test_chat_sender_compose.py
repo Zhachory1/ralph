@@ -105,6 +105,9 @@ class PinnedIdentityTests(unittest.TestCase):
         # No USER directive: the image's own default user is root.
         self.assertNotIn("\nUSER ", "\n" + DOCKERFILE)
 
+    def test_notifier_image_includes_node_for_the_outbound_guard(self):
+        self.assertIn("nodejs", DOCKERFILE)
+
 
 class RunChatSenderTests(unittest.TestCase):
     """bootstrap/run-chat-sender: one failing pass must not stop the next."""
@@ -199,6 +202,23 @@ class RunChatSenderTests(unittest.TestCase):
         chat_reply = load_module("chat_reply", CHAT_REPLY)
         _, _, _, _, send_enabled = chat_reply.instance_config(instance_env)
         self.assertFalse(send_enabled)
+
+    def test_native_guard_configuration_is_rendered_to_the_private_instance_env(self):
+        result, instance_env = self.run_sender(
+            'test -z "${CHAT_PAPERCLIP_API_KEY:-}"',
+            'test -z "${CHAT_PAPERCLIP_API_KEY:-}"', 1, {
+            "CHAT_PAPERCLIP_API_URL": "http://127.0.0.1:4310",
+            "CHAT_PAPERCLIP_API_KEY": "test-only-key",
+            "CHAT_SEND_ISSUE_ID": "11111111-1111-4111-8111-111111111111",
+            "CHAT_SEND_APPROVER_USER_ID": "director-user",
+            "CHAT_SEND_ACCOUNT_ID": "chat-account",
+        })
+        self.assertEqual(0, result.returncode, result.stderr)
+        values = dict(line.split("=", 1) for line in instance_env.read_text().splitlines())
+        self.assertEqual("test-only-key", values["CHAT_PAPERCLIP_API_KEY"])
+        self.assertEqual("director-user", values["CHAT_SEND_APPROVER_USER_ID"])
+        self.assertEqual("chat-account", values["CHAT_SEND_ACCOUNT_ID"])
+        self.assertEqual(0o600, instance_env.stat().st_mode & 0o777)
 
 
 class ChatSpacesTests(unittest.TestCase):

@@ -638,6 +638,30 @@ On the first cutover run, the notifier preserves older sent-once history: the ol
 
 After the `chat-sender` sidecar is running with its token, re-run `init` to grant builder card workers the read-only `list_spaces` MCP tool. It returns bounded space IDs, display names and types; neither Chat credentials nor message content reach the worker. If the sidecar is stopped or has no token, the tool reports an error. The private digest job has its own credential path and does not enable this tool by itself.
 
+## Guarded outbound Chat sends
+
+Before enabling replies, configure `CHAT_PAPERCLIP_API_URL`, `CHAT_PAPERCLIP_API_KEY`,
+`CHAT_SEND_ISSUE_ID`, `CHAT_SEND_APPROVER_USER_ID` and `CHAT_SEND_ACCOUNT_ID` in the private
+instance environment. The API key must be scoped to a dedicated **private** Paperclip issue;
+the issue holds exact outbound text and receipts as versioned documents. The configured
+approver ID is a Paperclip human user ID. `CHAT_SEND_ACCOUNT_ID` is a non-secret label that
+must match the Google OAuth account selected by `GWS_CFG_DIR`. Missing or invalid settings
+fail closed; no account is discovered or changed by the worker. The Chat sidecar image includes
+Node.js for the outbound guard; a host LaunchAgent installation also requires `node` on `PATH`.
+
+Every ack, reply, clarification, decline and final response uses one confirmation addressed
+to that human and bound to the locked envelope revision. A multi-part reply has one approval
+for its full ordered parts. After claiming an intent, the worker re-reads the accepted interaction
+and immutable envelope revision before each provider part, then stores and reads back provider
+message names/timestamps before it marks the operation sent. A timeout or `sending` state is
+ambiguous: do not clear a local hold or rerun it until the provider outcome has been reconciled.
+A declined or changed envelope never dispatches under the old confirmation.
+
+Offline verification (no board, provider or confirmation card) is
+`node --test compose/v4/test/comms-outbound-worker.test.mjs` and
+`python3 evals/test_chat_reply.py`. GitHub CI runs the same fake-boundary tests; its job has
+no Paperclip or Google credentials. Do not use a live reply as a setup check.
+
 ## Chat sidecar cutover (owner-only)
 
 Not this card's job -- not any build card's job. None of these is a pull request, and nothing schedules them; do them by hand, in order, once chat PR 8 has merged.
@@ -645,10 +669,10 @@ Not this card's job -- not any build card's job. None of these is a pull request
 1. **Start the sidecar first (`docker compose --profile chat up -d chat-sender`).** The token copy in step 3 `docker exec`s into this container, so it has to be running. With no token it is idle: it reads nothing, sends nothing and alerts nothing, and says so once in `docker logs <instance>-chat-sender-1`.
 2. **Stop the private overlay's `chat_inbox.py` intake cron job.** The sidecar's producer replaces it; two producers would stage the same messages twice. Intake is paused from here until step 3 lands.
 3. **Copy today's Chat token into the sidecar's volume (D8).** Not a browser step, not a second OAuth grant: `bootstrap/chat-creds-copy --instance-env .env.<name>` re-encrypts the token you already have (`~/.config/gws-cli/chat_token.json.enc`) for the `chat-sender` container's own pinned identity and writes it into that container's `chat-creds` volume over `docker exec`/`docker cp`. Your host token is untouched; a second copy now exists that can post as you until you revoke the grant in your Google account. Within one interval the sidecar starts.
-4. **Check that the sidecar sends, then retire the LaunchAgent.** Send yourself a message in a pilot space, confirm `docker logs <instance>-chat-sender-1` shows the scan picking it up and a reply posted in that thread, and only then unload the host `chat-reply` LaunchAgent. Until then both run; the markers live in the shared `chat-inbox` directory and every part is sent with a fixed id, so the Chat API drops a repeat. **Rollback:** the reverse, in reverse order.
+4. **Check that the guarded sidecar is configured before retiring the LaunchAgent.** Verify the private Paperclip issue ID, approver, account label and scoped board key are set. Do not send a setup message; each later reply still waits for its addressed confirmation. Keep the old sender stopped before enabling the new one so two processes cannot claim the same thread at once. **Rollback:** the reverse, in reverse order.
 5. **Bring skipped threads back, when you want them (no deadline).** `bootstrap/chat-producer`'s cutover guard prints `guarded <op> <thread>` and stages nothing for a thread Ralph already answered under the overlay's own operation ids; `--allow-unseen-history` lifts it at the cost of at most one duplicate acknowledgement per thread.
-6. **Set the send switch.** `CHAT_SEND` (`compose/.env.example`) defaults **on**, so replies keep going out after the cutover. Set it to `0`/`off` as a stop button and recreate the sidecar to apply it (`docker compose --profile chat up -d chat-sender`): the container reads it when it is created, so editing `.env` alone changes nothing in a running one. The host LaunchAgent, by contrast, re-reads its instance file every scan. See `docs/workflows.md`'s Chat loop.
-7. **Run one threaded reply in a space of your own before the first real send.** The code asks the Chat API for `REPLY_MESSAGE_OR_FAIL`, not for proof that a thread id captured minutes earlier is still the right one; the token holds no delete scope.
+6. **Set the send switch.** `CHAT_SEND` defaults **on**, but the native Paperclip confirmation and durable receipt guard is mandatory for every send. Set it to `0`/`off` as an additional stop button; recreate the sidecar to apply that change. The host LaunchAgent re-reads its instance file every scan. See [the Chat workflow](workflows.md#chat-loop).
+7. **Keep live activation separate.** A future authorized operator chooses when the route is enabled. The first real reply still requires an addressed human acceptance of the exact envelope; a test or a Paperclip issue being configured is not authorization to send.
 8. **Pick the pilot spaces (`CHAT_ROUTE_SPACES`) knowing Ralph reads every human message in them.** Every one is an operation, an intake card and one model run.
 
 ## Knowledge index

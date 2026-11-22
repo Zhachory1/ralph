@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "skills/ops/google-chat/gchat.py"
+THREAD = "spaces/example/threads/one"
 
 
 def load_gchat():
@@ -28,7 +29,10 @@ class ChatSendTests(unittest.TestCase):
         class Messages:
             def create(self, **kwargs):
                 calls.append(kwargs)
-                return mock.Mock(execute=lambda: {"name": "spaces/example/messages/ack"})
+                return mock.Mock(execute=lambda: {
+                    "name": "spaces/example/messages/ack",
+                    "createTime": "2026-11-22T00:00:00Z",
+                })
 
         service = mock.Mock()
         service.spaces.return_value.messages.return_value = Messages()
@@ -59,6 +63,48 @@ class ChatSendTests(unittest.TestCase):
     def test_strict_send_to_another_space_fails_before_api_call(self):
         with self.assertRaises(ValueError):
             self.send(thread="spaces/other/threads/one")
+
+    def test_send_receipt_includes_provider_message_name_and_time(self):
+        calls = []
+
+        class Messages:
+            def create(self, **kwargs):
+                return mock.Mock(execute=lambda: {
+                    "name": "spaces/example/messages/ack",
+                    "createTime": "2026-11-22T00:00:00Z",
+                })
+
+        service = mock.Mock()
+        service.spaces.return_value.messages.return_value = Messages()
+        args = argparse.Namespace(space="spaces/example", text="Test acknowledgement",
+                                  thread=THREAD, strict_thread=True, request_id="ack-example-1",
+                                  message_id="client-ralph-ack-example")
+        with mock.patch.object(gchat, "_svc", return_value=service), \
+                mock.patch.object(gchat, "_emit", side_effect=lambda _args, result: calls.append(result)):
+            gchat.cmd_send(args)
+        self.assertEqual([{"sent": True, "name": "spaces/example/messages/ack",
+                           "createTime": "2026-11-22T00:00:00Z"}], calls)
+
+    def test_definite_provider_4xx_failure_is_distinguished_from_ambiguous_timeout(self):
+        from googleapiclient.errors import HttpError
+
+        calls = []
+
+        class Messages:
+            def create(self, **kwargs):
+                response = mock.Mock(status=403)
+                return mock.Mock(execute=mock.Mock(side_effect=HttpError(response, b"denied")))
+
+        service = mock.Mock()
+        service.spaces.return_value.messages.return_value = Messages()
+        args = argparse.Namespace(space="spaces/example", text="Test acknowledgement",
+                                  thread=THREAD, strict_thread=True, request_id="ack-example-1",
+                                  message_id="client-ralph-ack-example")
+        with mock.patch.object(gchat, "_svc", return_value=service), \
+                mock.patch.object(gchat, "_emit", side_effect=lambda _args, result: calls.append(result)):
+            gchat.cmd_send(args)
+        self.assertEqual("definite_failure", calls[0]["outcome"])
+        self.assertEqual("http_403", calls[0]["code"])
 
 
 class ConfigDirOverrideTests(unittest.TestCase):

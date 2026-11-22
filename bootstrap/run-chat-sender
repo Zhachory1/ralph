@@ -27,7 +27,9 @@ TOKEN_FILE=${RALPH_CHAT_TOKEN_FILE:-/root/.config/gws-cli/chat_token.json.enc}
 # One pass may not hold the loop: a hung Chat read in the producer would
 # otherwise stop the sender from ever running again. `timeout` ends it (exit
 # 124), the next command runs, and the next interval retries both.
-PASS_TIMEOUT=${RALPH_CHAT_PASS_TIMEOUT_SECONDS:-120}
+# The guarded reply may send five ordered parts after its board checks; cap a
+# whole pass above five per-part provider timeouts without allowing a stuck scan.
+PASS_TIMEOUT=${RALPH_CHAT_PASS_TIMEOUT_SECONDS:-360}
 
 # chat-producer and chat-reply both take one `--instance-env` file
 # (chat-producer:300, chat-reply:529); this service carries its variables as
@@ -46,13 +48,25 @@ render_instance_env() {
         echo "RALPH_WORKSPACES=/workspaces"
         echo "CHAT_ROUTE_SPACES=${CHAT_ROUTE_SPACES:-}"
         echo "CHAT_SEND=${CHAT_SEND:-on}"
+        for key in CHAT_PAPERCLIP_API_URL CHAT_PAPERCLIP_API_KEY CHAT_SEND_ISSUE_ID \
+                   CHAT_SEND_APPROVER_USER_ID CHAT_SEND_ACCOUNT_ID; do
+            value=$(printenv "$key" || true)
+            if [ -n "$value" ]; then
+                printf '%s=%s\n' "$key" "$value"
+            fi
+        done
         if [ -n "${RALPH_TRACKER_HOST:-}" ]; then
             echo "RALPH_TRACKER_HOST=${RALPH_TRACKER_HOST}"
         fi
     } > "$INSTANCE_ENV"
+    chmod 600 "$INSTANCE_ENV"
 }
 
 render_instance_env
+# The producer needs only its Chat token. Keep the board key in the protected
+# instance file for chat-reply, not in either loop command's inherited env.
+unset CHAT_PAPERCLIP_API_URL CHAT_PAPERCLIP_API_KEY CHAT_SEND_ISSUE_ID \
+      CHAT_SEND_APPROVER_USER_ID CHAT_SEND_ACCOUNT_ID
 echo "ralph chat sidecar: instance=${RALPH_INSTANCE:-ralph} every ${INTERVAL}s"
 
 iteration=0

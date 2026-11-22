@@ -2,7 +2,8 @@
 #
 # Holding no chat credential is enforced by where the credential lives, not by
 # this file or the SOUL: the Google Chat OAuth credential stays on the host,
-# where bootstrap/chat-reply posts this profile's text to the original thread.
+# where bootstrap/chat-reply routes this profile's text through the exact,
+# addressed Paperclip confirmation and provider-receipt guard.
 # Like every profile it has a terminal with the instance's repository token
 # (docs/decisions/0001), so it can look things up in GitHub; it still has no
 # board write and no Chat send.
