@@ -12,6 +12,12 @@ provisioning = runpy.run_path(str(TESTS.parent / "provision-paperclip.py"))
 provision = provisioning["provision"]
 
 
+def assert_orchestrator_handoffs(instructions):
+    for role in ("Feature Workflow Manager", "Review Workflow Manager", "Author", "Council"):
+        assert role in instructions, f"Orchestrator instructions omit {role}"
+    assert "Do not draft the feature RFC or request its approval yourself" in instructions
+
+
 def check_roster(container):
     def board(path, body=None, method="POST"):
         response = fixture["request"](container, "director", path, body, method)[1]
@@ -72,6 +78,8 @@ def check_roster(container):
     for agent_id in full.values():
         instructions = board(f"agents/{agent_id}/instructions-bundle/file?path=AGENTS.md")["content"]
         assert provisioning["HANDOFF_GUIDANCE"] in instructions
+        if agent_id == full["Orchestrator"]:
+            assert_orchestrator_handoffs(instructions)
     manager = full["Feature Workflow Manager"]
     def manager_grant(enabled):
         board(f"agents/{manager}/permissions", {

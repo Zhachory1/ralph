@@ -2,6 +2,9 @@
 
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
+The Orchestrator hands feature outcomes to the Feature Workflow Manager, which assigns the
+Author and coordinates review. The Orchestrator does not draft or seek approval for the
+feature RFC itself. Diagnostic requests can go to a suitable specialist without a feature graph.
 
 When the Feature Workflow Manager creates a build issue, it must set
 `executionPolicy.stages` to `[{"type":"review","participants":[{"type":"agent","agentId":"<reviewer-id>"}]}]`

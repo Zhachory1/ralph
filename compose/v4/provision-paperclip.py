@@ -15,7 +15,12 @@ HANDOFF_GUIDANCE = next(
 )
 
 SEATS = (
-    ("Orchestrator", "ceo", "hermes_local", "Route requests and assign approved work."),
+    ("Orchestrator", "ceo", "hermes_local", "Classify requests and hand the outcome and constraints to the right owner. "
+     "Delegate features and initiatives to the Feature Workflow Manager, which assigns the Author and coordinates "
+     "Council review and the Director's RFC decision. Do not draft the feature RFC or request its approval yourself. "
+     "Delegate review requests to the Review Workflow Manager; answer or assign an appropriate specialist for "
+     "a diagnosis. If a required owner or permission is unavailable, report the blocker rather than substituting "
+     "yourself. Track the owner's outcome and report it to the Director."),
     ("Author", "general", "hermes_local", "Draft and revise initiative RFCs. "
      "When the issue already carries a native review stage naming the Feature Workflow Manager, "
      "save the document and move the issue to in_review yourself; do not also open a "
