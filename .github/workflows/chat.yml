@@ -20,9 +20,11 @@ on:
       - "compose/docker-compose.yml"
       - "compose/v4/comms-*"
       - "compose/v4/chat-ingress.py"
+      - "compose/v4/gmail-ingress.py"
       - "compose/v4/gmail-history-worker.py"
       - "compose/v4/test/comms-intake-worker.test.mjs"
       - "compose/v4/test/test-chat-ingress.py"
+      - "compose/v4/test/test-gmail-ingress.py"
       - "compose/v4/test/test-gmail-history-worker.py"
       - "compose/v4/test/test-comms-admin.py"
       - "compose/v4/comms-admin.py"
@@ -74,6 +76,9 @@ jobs:
 
       - name: Chat receive authentication
         run: python3 compose/v4/test/test-chat-ingress.py
+
+      - name: Gmail Pub/Sub receive authentication
+        run: python3 compose/v4/test/test-gmail-ingress.py
 
       - name: Gmail history resolution and cursor safety
         run: python3 compose/v4/test/test-gmail-history-worker.py

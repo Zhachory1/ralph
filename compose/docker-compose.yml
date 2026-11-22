@@ -419,14 +419,26 @@ services:
       - ../compose/v4:/ralph/compose/v4:ro
     restart: unless-stopped
 
-  # Gmail history uses an independent read-only token and cursor volume. Feed
-  # authenticated Pub/Sub notifications to the local CLI; there is no listener.
+  # Gmail's authenticated Pub/Sub receiver uses an independent read-only token
+  # and cursor volume. Any external HTTPS route remains operator-managed.
   gmail-intake:
     profiles: ["gmail-receive"]
     build:
       context: ..
       dockerfile: compose/Dockerfile.comms
-    command: ["sleep", "infinity"]
+    command:
+      - /opt/comms/bin/python
+      - /ralph/compose/v4/gmail-ingress.py
+      - --audience
+      - ${GMAIL_PUBSUB_AUDIENCE:-}
+      - --service-account
+      - ${GMAIL_PUBSUB_SERVICE_ACCOUNT:-}
+      - --subscription
+      - ${GMAIL_PUBSUB_SUBSCRIPTION:-}
+      - --mailbox
+      - ${GMAIL_MAILBOX:-}
+      - --port
+      - "${RALPH_GMAIL_INGRESS_PORT:-18766}"
     environment:
       PAPERCLIP_API_KEY: ${RALPH_COMMS_BOARD_KEY:-}
       PAPERCLIP_ORIGIN: ${RALPH_PAPERCLIP_ORIGIN:-}
@@ -436,8 +448,11 @@ services:
       GMAIL_ALLOWLIST: ${GMAIL_ALLOWLIST:-}
       GMAIL_READ_TOKEN_FILE: /var/lib/ralph-gmail/credentials/token.json
       GMAIL_HISTORY_CURSOR_FILE: /var/lib/ralph-gmail/state/history.json
+      GMAIL_INGRESS_BIND_HOST: 0.0.0.0
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${RALPH_GMAIL_INGRESS_PORT:-18766}:${RALPH_GMAIL_INGRESS_PORT:-18766}"
     volumes:
       - ../compose/v4:/ralph/compose/v4:ro
       - gmail-intake-creds:/var/lib/ralph-gmail/credentials:ro

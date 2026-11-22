@@ -1,6 +1,8 @@
 """Resolve Gmail history notifications into real messages before Paperclip intake."""
 import base64
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import json
 import os
 import re
@@ -212,6 +214,33 @@ def process_history(*, service, notification, cursor, expected_mailbox, deliver,
     return {"messageCount": delivered_count, "historyId": latest_history_id}
 
 
+@contextmanager
+def cursor_lock(path):
+    """Serialize a complete cursor read/process/commit transaction across workers."""
+    lock_path = Path(path).with_name(f"{Path(path).name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def process_notification(*, service, notification, cursor_file, expected_mailbox, deliver):
+    """Read, resolve, deliver and durably commit while holding the cursor lock."""
+    cursor_path = Path(cursor_file)
+    with cursor_lock(cursor_path):
+        return process_history(
+            service=service,
+            notification=notification,
+            cursor=read_cursor(cursor_path),
+            expected_mailbox=expected_mailbox,
+            deliver=deliver,
+            save_cursor=lambda value: write_cursor(cursor_path, value),
+        )
+
+
 def read_cursor(path):
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -225,13 +254,46 @@ def read_cursor(path):
 def write_cursor(path, history_id):
     cursor_path = Path(path)
     cursor_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=cursor_path.parent,
-                                     prefix=f".{cursor_path.name}.", delete=False) as temp_file:
-        json.dump({"historyId": history_id}, temp_file)
-        temp_file.flush()
-        os.fsync(temp_file.fileno())
-        temporary_path = temp_file.name
-    os.replace(temporary_path, cursor_path)
+    old_contents = cursor_path.read_bytes() if cursor_path.exists() else None
+
+    def replace_bytes(contents):
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile("wb", dir=cursor_path.parent,
+                                             prefix=f".{cursor_path.name}.", delete=False) as temp_file:
+                temp_file.write(contents)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+                temporary_path = temp_file.name
+            os.replace(temporary_path, cursor_path)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except FileNotFoundError:
+                    pass
+
+    def fsync_parent():
+        directory_fd = os.open(cursor_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    replace_bytes(json.dumps({"historyId": history_id}).encode("utf-8"))
+    try:
+        fsync_parent()
+    except OSError:
+        # If the rename reached the filesystem but its directory entry could
+        # not be made durable, restore the previous cursor before reporting a
+        # retryable failure. The worker never acknowledges an uncertain commit.
+        if old_contents is None:
+            cursor_path.unlink(missing_ok=True)
+        else:
+            replace_bytes(old_contents)
+        fsync_parent()
+        raise
 
 
 def _deliver_to_paperclip(event):
@@ -273,10 +335,9 @@ def main():
     if not expected_mailbox or mailbox.casefold() != expected_mailbox.casefold():
         raise ValueError("Gmail notification mailbox does not match configured receive account")
     cursor_file = os.environ.get("GMAIL_HISTORY_CURSOR_FILE", "/var/lib/ralph-gmail/history.json")
-    result = process_history(
-        service=_gmail_service(), notification=notification, cursor=read_cursor(cursor_file),
-        expected_mailbox=expected_mailbox,
-        deliver=_deliver_to_paperclip, save_cursor=lambda value: write_cursor(cursor_file, value),
+    result = process_notification(
+        service=_gmail_service(), notification=notification, cursor_file=cursor_file,
+        expected_mailbox=expected_mailbox, deliver=_deliver_to_paperclip,
     )
     print(json.dumps(result))
 

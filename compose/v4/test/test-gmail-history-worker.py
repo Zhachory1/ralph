@@ -3,6 +3,7 @@ import base64
 import importlib.util
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -255,6 +256,91 @@ class GmailHistoryTest(unittest.TestCase):
             worker.write_cursor(cursor_path, "35")
             self.assertEqual(worker.read_cursor(cursor_path), "35")
             self.assertEqual(json.loads(cursor_path.read_text()), {"historyId": "35"})
+
+    def test_cursor_directory_fsync_failure_restores_the_previous_cursor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cursor_path = Path(directory) / "cursor" / "history.json"
+            worker.write_cursor(cursor_path, "29")
+            with patch.object(worker.os, "fsync", side_effect=[None, OSError("directory fsync failed"), None, None]):
+                with self.assertRaisesRegex(OSError, "directory fsync failed"):
+                    worker.write_cursor(cursor_path, "35")
+            self.assertEqual(worker.read_cursor(cursor_path), "29")
+
+    def test_cursor_commit_failure_keeps_the_stored_cursor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cursor_path = Path(directory) / "cursor" / "history.json"
+            worker.write_cursor(cursor_path, "29")
+            service = FakeService(pages={None: Request({"historyId": "35", "history": []})}, messages={})
+            with patch.object(worker, "write_cursor", side_effect=OSError("cursor unavailable")):
+                with self.assertRaisesRegex(OSError, "cursor unavailable"):
+                    worker.process_notification(
+                        service=service, notification=notification(), cursor_file=cursor_path,
+                        expected_mailbox="intake@example.com", deliver=lambda _event: None,
+                    )
+            self.assertEqual(worker.read_cursor(cursor_path), "29")
+
+    def test_competing_notifications_serialize_read_delivery_and_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cursor_path = Path(directory) / "history.json"
+            worker.write_cursor(cursor_path, "10")
+            first_service = FakeService(
+                pages={None: Request({"historyId": "20", "history": [{
+                    "id": "19", "messagesAdded": [{"message": {"id": "a1b2c3d4"}}],
+                }]})},
+                messages={"a1b2c3d4": gmail_message("a1b2c3d4", "f1e2d3c4")},
+            )
+            second_service = FakeService(
+                pages={None: Request({"historyId": "15", "history": []})}, messages={},
+            )
+            first_delivery_started = threading.Event()
+            finish_first_delivery = threading.Event()
+            second_started = threading.Event()
+            second_finished = threading.Event()
+            errors = []
+
+            def hold_first_delivery(_event):
+                first_delivery_started.set()
+                if not finish_first_delivery.wait(timeout=5):
+                    raise TimeoutError("test release was not signalled")
+
+            def process_first():
+                try:
+                    worker.process_notification(
+                        service=first_service, notification=notification("30"), cursor_file=cursor_path,
+                        expected_mailbox="intake@example.com", deliver=hold_first_delivery,
+                    )
+                except Exception as error:
+                    errors.append(error)
+
+            def process_second():
+                second_started.set()
+                try:
+                    worker.process_notification(
+                        service=second_service, notification=notification("15"), cursor_file=cursor_path,
+                        expected_mailbox="intake@example.com", deliver=lambda _event: None,
+                    )
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    second_finished.set()
+
+            first = threading.Thread(target=process_first)
+            second = threading.Thread(target=process_second)
+            first.start()
+            self.assertTrue(first_delivery_started.wait(timeout=5))
+            second.start()
+            self.assertTrue(second_started.wait(timeout=5))
+            self.assertFalse(second_finished.wait(timeout=0.1))
+            finish_first_delivery.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(first_service.history_options[0]["startHistoryId"], "10")
+            self.assertEqual(second_service.history_options[0]["startHistoryId"], "20")
+            self.assertEqual(worker.read_cursor(cursor_path), "20")
 
 
 if __name__ == "__main__":
