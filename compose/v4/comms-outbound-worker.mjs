@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 const MAX_BODY_BYTES = 100_000;
 const MAX_PARTS = 5;
+const MAX_PART_CHARACTERS = 4_000;
 const uuid = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 function intentKey(prefix, intentId) {
@@ -37,8 +38,9 @@ function validateEnvelope(envelope) {
       || typeof envelope.thread !== "string" || !envelope.thread.startsWith(`${envelope.space}/threads/`)
       || typeof envelope.message !== "string" || !envelope.message.trim()
       || !Array.isArray(envelope.parts) || envelope.parts.length < 1 || envelope.parts.length > MAX_PARTS
-      || envelope.parts.some((part, index) => part?.index !== index + 1 || typeof part.text !== "string"
-        || !part.text.trim() || typeof part.requestId !== "string" || typeof part.messageId !== "string")) {
+       || envelope.parts.some((part, index) => part?.index !== index + 1 || typeof part.text !== "string"
+         || !part.text.trim() || Array.from(part.text).length > MAX_PART_CHARACTERS
+         || typeof part.requestId !== "string" || typeof part.messageId !== "string")) {
     throw new Error("Invalid exact Chat send envelope");
   }
   return envelope;

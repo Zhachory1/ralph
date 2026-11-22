@@ -160,6 +160,19 @@ test("a changed envelope cannot reuse its old confirmation and a new intent gets
   assert.equal(board.interactions.length, 2);
 });
 
+test("an oversized provider part is refused before requesting confirmation", async () => {
+  const board = new FakeBoard();
+  const message = "x".repeat(4_001);
+  const oversized = envelope({ message, parts: [
+    { index: 1, text: message, requestId: "request-1", messageId: "client-1" },
+  ] });
+  let sends = 0;
+  await assert.rejects(runOutboundSend(oversized, config(), board, async () => { sends += 1; }),
+    /Invalid exact Chat send envelope/);
+  assert.equal(board.interactions.length, 0);
+  assert.equal(sends, 0);
+});
+
 test("replay and concurrent accepted attempts claim once and dispatch the ordered parts once", async () => {
   const board = new FakeBoard();
   const approved = envelope();
