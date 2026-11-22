@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { auditPr } from "../../coding-harness/audit-pr.js";
+import { findRoutineRun } from "./routine-runs.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -13,8 +14,7 @@ export async function runRoutineAudit({
 }) {
   const routine = await board(`routines/${routineId}`);
   if (routine.id !== routineId || routine.companyId !== companyId) throw new Error("Unexpected Routine company");
-  const runs = await board(`routines/${routineId}/runs`);
-  const run = runs.find((row) => row.id === runId);
+  const run = await findRoutineRun(board, routineId, runId);
   const payload = run?.triggerPayload;
   if (!run?.linkedIssueId || run.source !== "manual" || payload?.repo !== repoName || !Number.isSafeInteger(payload.pr_number)
       || payload.pr_number < 1 || typeof payload.head_sha !== "string" || !sha.test(payload.head_sha)) {

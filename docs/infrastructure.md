@@ -57,6 +57,8 @@ The manual Routine worker runs on the host against a localhost Paperclip board a
 Git clone. Its canary uses the authenticated fixture and a temporary local Git repository
 without GitHub credentials. The existing audit runner puts test and lint in separate
 network-disabled containers with no bind mounts.
+The native inbound worker uses the owning Paperclip process seat and run credentials;
+its read-only GitHub token and audit configuration belong only to that seat.
 
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;

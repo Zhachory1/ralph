@@ -7,16 +7,17 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { auditPr } from "../../coding-harness/audit-pr.js";
 import { auditCloneHead, runRoutineAudit } from "./routine-audit-worker.mjs";
+import { routineRunHistory } from "./routine-runs.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const repoSlug = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const login = /^[\w.@-]+$/;
 const submitted = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
+const searchLimit = 1000;
 
-async function reconcileReviews({ board, companyId, routineId, repoName, prReviews, reviewer }) {
-  const runs = await board(`routines/${routineId}/runs?limit=100`);
-  for (const { id, source, linkedIssueId, triggerPayload: payload } of runs) {
+async function reconcileReviews({ board, companyId, routineId, repoName, prHead, prReviews, reviewer }) {
+  for await (const { id, source, linkedIssueId, triggerPayload: payload } of routineRunHistory(board, routineId)) {
     if (source !== "manual" || typeof linkedIssueId !== "string" || !uuid.test(linkedIssueId)
         || payload?.repo !== repoName || !Number.isSafeInteger(payload.pr_number) || payload.pr_number < 1
         || typeof payload.head_sha !== "string" || !sha.test(payload.head_sha)) continue;
@@ -24,11 +25,39 @@ async function reconcileReviews({ board, companyId, routineId, repoName, prRevie
     const issue = await board(path);
     if (issue.id !== linkedIssueId || issue.companyId !== companyId || issue.originKind !== "routine_execution"
         || issue.originId !== routineId || issue.originRunId !== id || ["done", "cancelled"].includes(issue.status)) continue;
-    if (!(await board(`${path}/documents`)).some((doc) => doc.key === "audit")) continue;
+    const documents = await board(`${path}/documents`);
+    if (!documents.some((doc) => doc.key === "audit")) continue;
+    if (documents.some((doc) => doc.key === "audit-status")) {
+      await board(path, "PATCH", { status: "cancelled" });
+      continue;
+    }
+    const currentHead = async () => {
+      const observed = await prHead(payload.pr_number);
+      if (typeof observed !== "string" || !sha.test(observed)) throw new Error("Could not verify current PR head");
+      return observed;
+    };
+    const supersede = async (observed) => {
+      await board(`${path}/documents/audit-status`, "PUT", {
+        title: "Audit superseded",
+        format: "markdown",
+        body: `The audit for \`${payload.head_sha}\` is historical. The PR moved to \`${observed}\`; run a new exact-head audit.\n`,
+      });
+      await board(path, "PATCH", { status: "cancelled" });
+    };
+    const observed = await currentHead();
+    if (observed !== payload.head_sha) {
+      await supersede(observed);
+      continue;
+    }
     const reviews = await prReviews(payload.pr_number);
     if (!reviews.some((review) => review.user?.type === "User"
         && review.user.login?.toLowerCase() === reviewer.toLowerCase()
         && review.commit_id === payload.head_sha && review.submitted_at && submitted.has(review.state))) continue;
+    const latest = await currentHead();
+    if (latest !== payload.head_sha) {
+      await supersede(latest);
+      continue;
+    }
     await board(path, "PATCH", { status: "done" });
   }
 }
@@ -42,6 +71,7 @@ export async function runInboundDiscovery({
     throw new Error("An audit tick requires an always_enqueue Routine to keep PR heads separate");
   }
   const numbers = await listRequestedPrs();
+  if (!Array.isArray(numbers) || numbers.length >= searchLimit) throw new Error("Review search reached its result limit");
   const triggered = [];
   for (const pr_number of numbers) {
     if (!Number.isSafeInteger(pr_number) || pr_number < 1) continue;
@@ -72,7 +102,7 @@ export async function runInboundDiscovery({
     }
     triggered.push(row);
   }
-  if (prReviews) await reconcileReviews({ board, companyId, routineId, repoName, prReviews, reviewer });
+  if (prReviews) await reconcileReviews({ board, companyId, routineId, repoName, prHead, prReviews, reviewer });
   return triggered;
 }
 
@@ -112,7 +142,7 @@ async function main() {
   const gh = async (...args) => (await exec("gh", args, { timeout: 30_000 })).stdout;
   const listRequestedPrs = async () => {
     const out = await gh("search", "prs", "--review-requested", reviewLogin, "--state", "open",
-      "-R", repoName, "--json", "number", "--limit", "100");
+      "-R", repoName, "--json", "number", "--limit", String(searchLimit));
     return JSON.parse(out).map((row) => row.number);
   };
   const prHead = async (pr_number) => {

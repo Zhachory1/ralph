@@ -95,6 +95,9 @@ of duplicating it. With `--audit`, the same tick runs the exact-head audit and p
 the dossier in Paperclip. The host scheduler must run ticks serially. Nothing writes to GitHub.
 With `--reconcile` and a named reviewer, a submitted review on the exact audited head
 closes the Paperclip issue without editing the dossier.
+The native process-seat variant queues each head through the owning Routine and parks
+its dossier in the owner's backlog until a matching human review is reconciled.
+Scheduled dispatch is not enabled by this change.
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay

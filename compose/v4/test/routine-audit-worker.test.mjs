@@ -23,7 +23,7 @@ function fixture() {
       currentHead: async () => head,
       board: async (path, method, body) => {
         if (path === "routines/routine") return { id: "routine", companyId: "company" };
-        if (path === "routines/routine/runs") return [run];
+        if (path === "routines/routine/runs?limit=200") return [run];
         if (path === "issues/issue") return {
           id: "issue", companyId: "company", originKind: "routine_execution", originId: "routine", originRunId: "run",
         };

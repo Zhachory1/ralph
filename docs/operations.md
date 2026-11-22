@@ -133,10 +133,25 @@ Configure the host scheduler to run at most one invocation at a time. Each invoc
 audits serially and reports `audit_status` for each run. Failed audits leave the tick
 nonzero; rerunning reuses existing runs and dossiers. To close published dossiers after
 human review, append the reviewer's literal GitHub login and `--reconcile` to the command.
-This checks the most recent 100 Routine runs separately from current review requests,
+This checks Routine history separately from current review requests,
 so a review can be found after GitHub removes the request. Only submitted reviews by the
 named human on the dossier's exact head count. The dossier contents are left intact.
-No GitHub writes are made.
+No GitHub writes are made. Complete history requires the
+[Paperclip `before` run-history cursor](https://github.com/paperclipai/paperclip/pull/22577).
+A full-history traversal against an older server that ignores the cursor
+fails on a repeated page instead of silently omitting runs. A changed PR head marks
+an older dossier superseded before its issue is cancelled. GitHub's search is capped
+at 1,000 results; the worker fails if it reaches that limit. A push after the final
+head check can still race with closing the Paperclip issue.
+
+For native execution, configure a dedicated process seat to run
+`node compose/v4/routine-inbound-native.mjs ROUTINE_ID OWNER/REPO LOCAL_CLONE REVIEWER`.
+The seat needs `maxConcurrentRuns: 1`, an active `always_enqueue` Routine assigned to
+it, a read-only `GH_TOKEN`, and `RALPH_AUDIT_REPOS` for the dedicated clone. Paperclip
+provides the run identity and API credential. An operator may manually trigger discovery
+with payload `{"kind":"discovery"}`; a schedule uses Paperclip's own Routine trigger.
+Audit issues stay assigned in backlog until an exact-head review is found. Do not enable
+a live schedule until the Paperclip cursor patch and native scheduled canary are verified.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus

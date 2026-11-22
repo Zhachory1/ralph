@@ -90,6 +90,14 @@ test("skips a PR reporting a malformed head SHA", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("refuses a potentially truncated review search", async () => {
+  const { options, calls } = fixture();
+  options.listRequestedPrs = async () => Array.from({ length: 1000 }, (_, index) => index + 1);
+  options.prHead = async () => head1;
+  await assert.rejects(runInboundDiscovery(options), /search.*limit/i);
+  assert.deepEqual(calls, []);
+});
+
 test("rejects a Routine from another company", async () => {
   const { options, calls } = fixture();
   const board = options.board;
@@ -110,8 +118,12 @@ test("reconciles a published exact-head dossier even after the review request di
     triggerPayload: { repo: settings.repoName, pr_number: 7, head_sha: head1 } };
   const issue = { id: issueId, companyId: "company", originKind: "routine_execution",
     originId: "routine", originRunId: run.id, status: "todo" };
+  const newer = Array.from({ length: 200 }, (_, index) => ({
+    id: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`, source: "schedule",
+  }));
   options.board = async (route, method, body) => {
-    if (route === "routines/routine/runs?limit=100") return [run];
+    if (route === "routines/routine/runs?limit=200") return newer;
+    if (route === `routines/routine/runs?limit=200&before=${newer[199].id}`) return [run];
     if (route === `${path}/documents`) return [{ key: "audit" }];
     if (route !== path) return originalBoard(route, method, body);
     if (method === "PATCH") {
@@ -121,6 +133,7 @@ test("reconciles a published exact-head dossier even after the review request di
     return issue;
   };
   options.listRequestedPrs = async () => [];
+  options.prHead = async () => head1;
   const review = { id: 42, user: { login: "director", type: "User" }, state: "APPROVED",
     commit_id: head1, submitted_at: "2026-11-19T00:00:00Z" };
   options.reviewer = "Director";
@@ -136,4 +149,71 @@ test("reconciles a published exact-head dossier even after the review request di
   await runInboundDiscovery(options);
   await runInboundDiscovery(options);
   assert.deepEqual(calls, [["close", "done"]]);
+});
+
+test("a changed head supersedes its old dossier instead of closing it for an old review", async () => {
+  const { options, calls } = fixture();
+  const originalBoard = options.board;
+  const issueId = "38a76334-96d1-4746-97b1-7cfadfc068a7";
+  const path = `issues/${issueId}`;
+  const run = { id: "old-run", source: "manual", linkedIssueId: issueId,
+    triggerPayload: { repo: settings.repoName, pr_number: 7, head_sha: head1 } };
+  const issue = { id: issueId, companyId: "company", originKind: "routine_execution",
+    originId: "routine", originRunId: run.id, status: "backlog" };
+  options.board = async (route, method, body) => {
+    if (route === "routines/routine/runs?limit=200") return [run];
+    if (route === `${path}/documents`) return [{ key: "audit" }];
+    if (route === `${path}/documents/audit-status` && method === "PUT") {
+      calls.push(["superseded", body]);
+      return {};
+    }
+    if (route === path && method === "PATCH") {
+      calls.push(["close", body.status]);
+      return { ...issue, ...body };
+    }
+    if (route === path) return issue;
+    return originalBoard(route, method, body);
+  };
+  options.listRequestedPrs = async () => [];
+  options.prHead = async () => head2;
+  options.reviewer = "Director";
+  options.prReviews = async () => { throw new Error("a stale dossier must not be closed by review"); };
+  await runInboundDiscovery(options);
+  assert.equal(calls[0][0], "superseded");
+  assert.match(calls[0][1].body, new RegExp(head2));
+  assert.deepEqual(calls[1], ["close", "cancelled"]);
+});
+
+test("a head that changes while reading review is superseded, not closed", async () => {
+  const { options, calls } = fixture();
+  const originalBoard = options.board;
+  const issueId = "38a76334-96d1-4746-97b1-7cfadfc068a7";
+  const path = `issues/${issueId}`;
+  const run = { id: "old-run", source: "manual", linkedIssueId: issueId,
+    triggerPayload: { repo: settings.repoName, pr_number: 7, head_sha: head1 } };
+  const issue = { id: issueId, companyId: "company", originKind: "routine_execution",
+    originId: "routine", originRunId: run.id, status: "backlog" };
+  options.board = async (route, method, body) => {
+    if (route === "routines/routine/runs?limit=200") return [run];
+    if (route === `${path}/documents`) return [{ key: "audit" }];
+    if (route === `${path}/documents/audit-status` && method === "PUT") {
+      calls.push(["superseded", body]);
+      return {};
+    }
+    if (route === path && method === "PATCH") {
+      calls.push(["close", body.status]);
+      return { ...issue, ...body };
+    }
+    if (route === path) return issue;
+    return originalBoard(route, method, body);
+  };
+  let reads = 0;
+  options.listRequestedPrs = async () => [];
+  options.prHead = async () => (++reads === 1 ? head1 : head2);
+  options.reviewer = "Director";
+  options.prReviews = async () => [{ user: { type: "User", login: "Director" }, state: "APPROVED",
+    commit_id: head1, submitted_at: "2026-01-01T00:00:00Z" }];
+  await runInboundDiscovery(options);
+  assert.equal(calls[0][0], "superseded");
+  assert.deepEqual(calls[1], ["close", "cancelled"]);
 });
