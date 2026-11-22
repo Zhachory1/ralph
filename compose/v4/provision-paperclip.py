@@ -56,7 +56,10 @@ WORKFLOW_SEATS = (
     ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge. "
      + (Path(__file__).resolve().parents[2] / "profiles/librarian/SOUL.md").read_text()),
-    ("Comms", "general", "hermes_local", "Triage communications; external sends require Director approval."),
+    ("Comms", "general", "hermes_local", "Triage communications and validate replies. "
+     "Routine Chat replies may be sent automatically after Comms validation. "
+     "Ask the Director about important, questionable, or uncertain messages before sending. "
+     "Gmail and other external sends require Director approval. Keep the sending identity separate from the drafter."),
     ("Council Architecture", "general", "hermes_local",
      "Review architecture independently; explain support or dissent in a task comment."),
     ("Council Security", "general", "hermes_local",

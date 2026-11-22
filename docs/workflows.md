@@ -70,6 +70,8 @@ and unresolved gates create no assignment. This does not wire Hermes or Council 
 The opt-in Chat bridge verifies Google's token before forwarding human messages to the
 existing allowlisted, idempotent Routine intake. Offline checks use synthetic signed tokens
 and a disposable Paperclip board; they do not activate a live webhook or send.
+The v4.1 target has Comms validate routine Chat replies and ask the Director about
+important, questionable, or uncertain messages. That outbound path is not wired here.
 
 The first integrated slice connects `draftRfc`, the Council panel and `decideRequestRoute`
 end to end, as a library function and as a host CLI that reuses the Routine audit worker's
