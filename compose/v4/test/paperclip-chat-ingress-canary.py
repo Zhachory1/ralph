@@ -81,7 +81,7 @@ def check_ingress(container):
             "type": "MESSAGE", "space": {"name": "spaces/fixture"},
             "message": {"name": "spaces/fixture/messages/message-1",
                         "thread": {"name": "spaces/fixture/threads/thread-1"},
-                        "text": "Please help.", "sender": {"type": "HUMAN"}},
+                        "text": "Please help.", "sender": {"type": "HUMAN", "name": "users/123456789"}},
         }
 
         def send(payload, token):
@@ -102,10 +102,14 @@ def check_ingress(container):
         assert send(other_space, "fixture-valid") == 200
         malformed = {**event, "message": {**event["message"], "name": "not-a-message-name"}}
         assert send(malformed, "fixture-valid") == 400
+        bad_sender = {**event, "message": {**event["message"],
+                      "sender": {"type": "HUMAN", "name": "users/app"}}}
+        assert send(bad_sender, "fixture-valid") == 400
         assert board(f"routines/{routine['id']}/runs") == []
         assert send(event, "fixture-valid") == 200
         runs = board(f"routines/{routine['id']}/runs")
         assert len(runs) == 1 and runs[0]["source"] == "api"
+        assert runs[0]["triggerPayload"]["sender_name"] == "users/123456789"
         task = runs[0]["linkedIssueId"]
 
         def receipt():

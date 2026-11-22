@@ -87,6 +87,8 @@ def handle_request(*, authorization, body, audience, verify_token, dispatch):
     client_id = message.get("clientAssignedMessageId")
     if isinstance(client_id, str) and client_id.startswith("client-ralph-"):
         return 200
+    if not isinstance(sender.get("name"), str) or not sender["name"]:
+        return 400
     if not all(isinstance(value, str) and value for value in (
         space.get("name"), message.get("name"), message.get("text"),
     )):
@@ -99,7 +101,7 @@ def handle_request(*, authorization, body, audience, verify_token, dispatch):
     normalized_message = {
         "name": message["name"],
         "text": message["text"],
-        "sender": {"type": sender["type"]},
+        "sender": {"type": sender["type"], "name": sender["name"]},
     }
     if thread is not None:
         normalized_message["thread"] = thread["name"]

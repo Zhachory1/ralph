@@ -42,6 +42,13 @@ to the existing intake worker, which enforces the space allowlist and Routine
 idempotency. Bot events and the app's own replies are ignored. Invalid tokens
 are rejected; verification or board outages return a retryable failure.
 
+The Routine payload retains `message.sender.name` as `sender_name`. It accepts
+`users/<id>` with 1–128 ASCII letters, digits, underscores or hyphens; it rejects
+missing names, `users/app`, and email aliases. The OIDC token authenticates the Chat
+service, not the human sender; the sender name is metadata, not a Paperclip identity
+or Director approval. The HTTPS proxy and any direct worker caller remain trusted
+to pass the event without alteration.
+
 Set `PAPERCLIP_API_KEY` through the host's secret manager, not a command-line
 argument. The key inherits its issuing account's authority: use an account
 restricted to the intended company. With `google-auth` and `requests` installed:
@@ -59,10 +66,11 @@ chunked body; the bridge accepts at most 256 KiB. It never sends Chat messages. 
 exercise Google's verifier with synthetic keys and the board path with a mocked
 verifier; they do not prove a real Google connection or activate routing.
 
-Not yet implemented: Gmail history resolution, Chat sender attribution
-([#304](https://github.com/Zhachory1/ralph/issues/304)), Chat thread-to-issue
-continuity, a registered Chat webhook, or approved external sends. Do not
-activate live Chat routing until sender attribution and thread continuity exist.
+Not yet implemented: Gmail history resolution, a verified mapping of Chat senders
+to authorized Paperclip users ([#304](https://github.com/Zhachory1/ralph/issues/304)),
+Chat thread-to-issue continuity, a registered Chat webhook, or approved external
+sends. Do not activate live Chat routing until the identity mapping and thread
+continuity exist.
 
 Verify: `node --test compose/v4/test/comms-intake-worker.test.mjs` — offline,
 synthetic, no Docker, no live credentials, including one CLI boundary test

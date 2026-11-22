@@ -8,6 +8,7 @@ import sys
 import threading
 import types
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ def event():
             "name": "spaces/fixture/messages/message-1",
             "thread": {"name": "spaces/fixture/threads/thread-1"},
             "text": "Please help.",
-            "sender": {"type": "HUMAN"},
+            "sender": {"type": "HUMAN", "name": "users/123456789"},
             "createTime": "2026-01-01T00:00:00Z",
         },
     }
@@ -63,10 +64,63 @@ class ChatIngressTest(unittest.TestCase):
                 "name": "spaces/fixture/messages/message-1",
                 "thread": "spaces/fixture/threads/thread-1",
                 "text": "Please help.",
-                "sender": {"type": "HUMAN"},
+                "sender": {"type": "HUMAN", "name": "users/123456789"},
                 "createTime": "2026-01-01T00:00:00Z",
             },
         }])
+
+    def test_missing_sender_name_is_rejected_without_dispatch(self):
+        data = event()
+        del data["message"]["sender"]["name"]
+        self.assertEqual(self.handle(data), 400)
+        for name in (None, "", 123):
+            data = event()
+            data["message"]["sender"]["name"] = name
+            self.assertEqual(self.handle(data), 400)
+        self.assertEqual(self.sent, [])
+
+    def test_sender_reaches_routine_through_real_worker(self):
+        company = "22222222-2222-2222-2222-222222222222"
+        routine = "11111111-1111-1111-1111-111111111111"
+        payloads = []
+
+        class Board(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def reply(self, data):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(data).encode())
+
+            def do_GET(self):
+                self.reply({"id": routine, "companyId": company})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                payloads.append(body["payload"])
+                self.reply({"id": "run", "companyId": company, "routineId": routine, "source": "api",
+                            "idempotencyKey": body["idempotencyKey"], "status": "issue_created"})
+
+        server = HTTPServer(("127.0.0.1", 0), Board)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            dispatch = ingress.make_dispatch(f"http://127.0.0.1:{server.server_port}",
+                                            company, routine, "spaces/fixture", "fixture-token")
+            self.assertEqual(self.handle(dispatch=dispatch), 200)
+            other = event()
+            other["message"]["name"] = "spaces/fixture/messages/message-2"
+            other["message"]["sender"]["name"] = "users/987654321"
+            self.assertEqual(self.handle(other, dispatch=dispatch), 200)
+            invalid = event()
+            invalid["message"]["sender"]["name"] = "users/app"
+            self.assertEqual(self.handle(invalid, dispatch=dispatch), 400)
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
+        self.assertEqual([payload["sender_name"] for payload in payloads], ["users/123456789", "users/987654321"])
 
     def test_missing_or_invalid_authorization_never_dispatches(self):
         self.assertEqual(self.handle(authorization=""), 401)

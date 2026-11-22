@@ -31,7 +31,7 @@ claims = {"iss": "https://accounts.google.com", "aud": audience, "iat": now - 5,
           "exp": now + 300, "email": "chat@system.gserviceaccount.com", "email_verified": True}
 event = {"type": "MESSAGE", "space": {"name": "spaces/fixture"},
          "message": {"name": "spaces/fixture/messages/message-1", "text": "Hello",
-                     "sender": {"type": "HUMAN"}}}
+                     "sender": {"type": "HUMAN", "name": "users/123456789"}}}
 body = json.dumps(event).encode()
 sent = []
 

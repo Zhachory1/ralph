@@ -160,6 +160,7 @@ no Docker, no live Google credentials, and no webhook registered anywhere by thi
 For the opt-in Google Chat bridge, configuration and offline tests are in
 [comms-intake.md](1-projects/v4-architecture/comms-intake.md#authenticated-chat-bridge).
 The bridge listens on loopback only; no public ingress or live routing is created by setup.
+Chat events without a valid sender resource are rejected; sender metadata is not authorization.
 
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
 and Git to verify the approved Git search boundary, including replacement of the old search

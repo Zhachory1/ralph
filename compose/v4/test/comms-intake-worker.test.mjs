@@ -37,7 +37,7 @@ function chatEvent(overrides = {}) {
     kind: "chat", type: "MESSAGE", space: "spaces/demo",
     message: {
       name: "spaces/demo/messages/msg1", thread: "spaces/demo/threads/thread1",
-      text: "Please investigate the sample bug", sender: { type: "HUMAN" },
+      text: "Please investigate the sample bug", sender: { type: "HUMAN", name: "users/123456789" },
       createTime: "2026-11-19T00:00:00Z", ...overrides.message,
     },
     ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "message")),
@@ -83,10 +83,49 @@ test("an invalid Gmail event is refused with no trigger attempted", () => {
 
 test("a normalized Chat event derives its idempotency key from the message name alone", () => {
   const first = normalizeChatEvent(chatEvent());
-  const second = normalizeChatEvent(chatEvent({ message: { text: "A later edit of the same message" } }));
+  const second = normalizeChatEvent(chatEvent({ message: {
+    text: "A later edit of the same message", sender: { type: "HUMAN", name: "users/987654321" },
+  } }));
   assert.equal(first.idempotencyKey, second.idempotencyKey);
   assert.equal(first.idempotencyKey, chatIdempotencyKey("spaces/demo/messages/msg1"));
   assert.equal(first.payload.space, "spaces/demo");
+});
+
+test("Chat sender names survive in Routine payloads without becoming authority", async () => {
+  const requests = [];
+  const base = fixtureBoard();
+  const board = async (path, method, body) => {
+    if (method === "POST") requests.push(body.payload);
+    return base(path, method, body);
+  };
+  const first = normalizeChatEvent(chatEvent({
+    message: { sender: { type: "HUMAN", name: "users/123456789", isDirector: true } },
+  }));
+  const second = normalizeChatEvent(chatEvent({
+    message: { name: "spaces/demo/messages/msg2", sender: { type: "HUMAN", name: "users/987654321" } },
+  }));
+  await triggerCommsRoutine({ board, ...settings, normalized: first });
+  await triggerCommsRoutine({ board, ...settings, normalized: second });
+  assert.deepEqual(requests.map((payload) => payload.sender_name), ["users/123456789", "users/987654321"]);
+  assert.deepEqual(requests[0], {
+    channel: "chat", space: "spaces/demo", thread: "spaces/demo/threads/thread1",
+    message_name: "spaces/demo/messages/msg1", text: "Please investigate the sample bug",
+    sender_type: "HUMAN", sender_name: "users/123456789",
+  });
+});
+
+test("missing, malformed, or reserved Chat sender names are refused", () => {
+  for (const name of [undefined, null, 123, "", "users/app", "users/a@example.com", "users/123\n",
+    "users/123/other", `users/${"x".repeat(129)}`]) {
+    assert.throws(() => normalizeChatEvent(chatEvent({ message: { sender: { type: "HUMAN", name } } })),
+      /sender name/);
+  }
+});
+
+test("a sender identifier at the length limit is accepted", () => {
+  const name = `users/${"x".repeat(128)}`;
+  const normalized = normalizeChatEvent(chatEvent({ message: { sender: { type: "HUMAN", name } } }));
+  assert.equal(normalized.payload.sender_name, name);
 });
 
 test("a bot sender, Ralph's own reply, or an unsupported Chat event type is refused", () => {

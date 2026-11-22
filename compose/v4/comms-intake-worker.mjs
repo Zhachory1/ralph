@@ -4,8 +4,8 @@
 //
 // Trust contract: a local CLI, invoked synchronously by a bridge that has already
 // authenticated the event with Google (a verified Pub/Sub push subscription, or a
-// verified Chat webhook bearer token) -- neither exists in this repo yet, and this
-// is not a network listener. It adds no ingress auth of its own: a shared secret
+// verified Chat webhook bearer token). This worker is not a network listener.
+// It adds no ingress auth of its own: a shared secret
 // inside the event payload would be neither Google's auth nor a real boundary for a
 // call that is, by construction, already local and trusted -- only a secret worth
 // leaking. It enforces shape validation, a per-source allowlist, a Paperclip
@@ -24,6 +24,7 @@ const GMAIL_HISTORY_ID = /^[0-9]{1,20}$/;
 const SPACE = /^spaces\/[A-Za-z0-9_-]+$/;
 const MESSAGE_NAME = /^spaces\/[A-Za-z0-9_-]+\/messages\/[A-Za-z0-9_.-]+$/;
 const THREAD_NAME = /^spaces\/[A-Za-z0-9_-]+\/threads\/[A-Za-z0-9_.-]+$/;
+const USER_NAME = /^users\/[A-Za-z0-9_-]{1,128}$/;
 const MAX_ALLOWLIST = 16;
 const MAX_TEXT = 4000; // chat-route's own cap on untrusted body text
 const MAX_SUBJECT = 500;
@@ -122,6 +123,9 @@ export function normalizeChatEvent(raw) {
   if (!sender || typeof sender !== "object" || sender.type !== "HUMAN") {
     throw new Error("Chat message is not from a human sender");
   }
+  if (typeof sender.name !== "string" || sender.name === "users/app" || !USER_NAME.test(sender.name)) {
+    throw new Error("Invalid Chat sender name");
+  }
   if (typeof clientAssignedMessageId === "string" && clientAssignedMessageId.startsWith("client-ralph-")) {
     throw new Error("Chat message originated from Ralph's own reply");
   }
@@ -138,6 +142,7 @@ export function normalizeChatEvent(raw) {
       message_name: name,
       text,
       sender_type: sender.type,
+      sender_name: sender.name,
     },
   };
 }
