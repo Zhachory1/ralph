@@ -96,6 +96,10 @@ the dossier in Paperclip. The host scheduler must run ticks serially. Nothing wr
 With `--reconcile` and a named reviewer, a submitted review on the exact audited head
 closes the Paperclip issue without editing the dossier.
 
+The separate code-review components discover assigned, non-draft PRs across configured
+accounts and read an exact-head diff. They do not execute repository code or tests.
+They are not yet connected to a Paperclip queue or Reviewer.
+
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay
 unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight

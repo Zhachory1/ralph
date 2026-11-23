@@ -58,6 +58,9 @@ Git clone. Its canary uses the authenticated fixture and a temporary local Git r
 without GitHub credentials. The existing audit runner puts test and lint in separate
 network-disabled containers with no bind mounts.
 
+The separate code-review discovery and evidence components use read-only GitHub access.
+They do not run PR code or tests and are not connected to a live scheduler.
+
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;
 the issuing account's permissions bound that key. External HTTPS routing is not provisioned.
