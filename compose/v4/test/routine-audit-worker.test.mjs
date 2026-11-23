@@ -16,6 +16,7 @@ function fixture() {
     calls,
     options: {
       ...settings,
+      isEligible: async () => true,
       audit: async (input) => {
         calls.push(["audit", input]);
         return { tests_passed: true };

@@ -4,14 +4,16 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { auditPr } from "../../coding-harness/audit-pr.js";
 import { findRoutineRun } from "./routine-runs.mjs";
+import { createPrEligibility, parseAssignees } from "./github-pr-eligibility.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const repoSlug = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 export async function runRoutineAudit({
-  board, companyId, routineId, runId, repoPath, repoName, audit, currentHead, expected,
+  board, companyId, routineId, runId, repoPath, repoName, audit, currentHead, expected, isEligible,
 }) {
+  if (typeof isEligible !== "function") throw new Error("GitHub PR eligibility check is required");
   const routine = await board(`routines/${routineId}`);
   if (routine.id !== routineId || routine.companyId !== companyId) throw new Error("Unexpected Routine company");
   const run = await findRoutineRun(board, routineId, runId);
@@ -30,6 +32,7 @@ export async function runRoutineAudit({
     throw new Error("Unexpected linked Routine issue");
   }
   const { head_sha: head, pr_number: pr } = payload;
+  if (!await isEligible(pr)) return "ineligible";
   const documents = () => board(`${path}/documents`);
   const existing = await documents();
   if (existing.some((doc) => doc.key === "audit-status")) return "superseded";
@@ -37,6 +40,7 @@ export async function runRoutineAudit({
   if (typeof observed !== "string" || !sha.test(observed)) throw new Error("Could not verify current PR head");
   if (existing.some((doc) => doc.key === "audit")) {
     if (observed === head) return "already_published";
+    if (!await isEligible(pr)) return "ineligible";
     await board(`${path}/documents/audit-status`, "PUT", {
       title: "Audit superseded",
       format: "markdown",
@@ -46,6 +50,7 @@ export async function runRoutineAudit({
   }
   if (observed !== head) return "stale";
   const result = await audit({ repo_path: repoPath, pr_number: pr, head_sha: head });
+  if (!await isEligible(pr, head)) return "ineligible";
   if ((await documents()).some((doc) => doc.key === "audit")) return "already_published";
   if (await currentHead(pr) !== head) return "stale";
   const report = JSON.stringify(result, null, 2).split("\n").map((line) => `    ${line}`).join("\n");
@@ -65,6 +70,7 @@ async function main() {
   const token = process.env.PAPERCLIP_API_KEY;
   delete process.env.PAPERCLIP_API_KEY;
   if (!token) throw new Error("Set a temporary scoped PAPERCLIP_API_KEY");
+  const assignees = parseAssignees(process.env.RALPH_REVIEW_ASSIGNEES);
   const board = async (path, method = "GET", body) => {
     const response = await fetch(`${origin}/api/${path}`, {
       method,
@@ -76,8 +82,14 @@ async function main() {
     if (!response.ok) throw new Error(`Paperclip ${method} failed (${response.status})`);
     return response.json();
   };
+  const exec = promisify(execFile);
+  const isEligible = createPrEligibility({ assignees, readPr: async (pr) => JSON.parse(
+    (await exec("gh", ["pr", "view", String(pr), "-R", repoName, "--json", "state,isDraft,assignees,headRefOid"],
+      { timeout: 30_000 })).stdout,
+  ) });
   const currentHead = await auditCloneHead(repoName, repoPath);
-  console.log(await runRoutineAudit({ board, companyId, routineId, runId, repoPath, repoName, audit: auditPr, currentHead }));
+  console.log(await runRoutineAudit({ board, companyId, routineId, runId, repoPath, repoName,
+    audit: auditPr, currentHead, isEligible }));
 }
 
 export async function auditCloneHead(repoName, repoPath) {

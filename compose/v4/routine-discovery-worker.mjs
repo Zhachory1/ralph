@@ -1,4 +1,4 @@
-// Discover PRs requesting this account's review in one allowlisted repo and
+// Discover assigned, ready-for-review PRs in one allowlisted repo and
 // trigger a read-only, idempotent Paperclip Routine run per (repo, pr, head).
 // Reuses the Routine's own idempotencyKey dedup (compose/v4/test/paperclip-routine-canary.py)
 // instead of a new state store. With --audit, process each returned run serially.
@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { auditPr } from "../../coding-harness/audit-pr.js";
 import { auditCloneHead, runRoutineAudit } from "./routine-audit-worker.mjs";
 import { routineRunHistory } from "./routine-runs.mjs";
+import { createPrEligibility, listAssignedPrs, parseAssignees } from "./github-pr-eligibility.mjs";
 
 const sha = /^[a-f0-9]{40}$/;
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -16,11 +17,12 @@ const login = /^[\w.@-]+$/;
 const submitted = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
 const searchLimit = 1000;
 
-async function reconcileReviews({ board, companyId, routineId, repoName, prHead, prReviews, reviewer }) {
+async function reconcileReviews({ board, companyId, routineId, repoName, prHead, prReviews, reviewer, isEligible }) {
   for await (const { id, source, linkedIssueId, triggerPayload: payload } of routineRunHistory(board, routineId)) {
     if (source !== "manual" || typeof linkedIssueId !== "string" || !uuid.test(linkedIssueId)
         || payload?.repo !== repoName || !Number.isSafeInteger(payload.pr_number) || payload.pr_number < 1
         || typeof payload.head_sha !== "string" || !sha.test(payload.head_sha)) continue;
+    if (!await isEligible(payload.pr_number)) continue;
     const path = `issues/${linkedIssueId}`;
     const issue = await board(path);
     if (issue.id !== linkedIssueId || issue.companyId !== companyId || issue.originKind !== "routine_execution"
@@ -28,7 +30,7 @@ async function reconcileReviews({ board, companyId, routineId, repoName, prHead,
     const documents = await board(`${path}/documents`);
     if (!documents.some((doc) => doc.key === "audit")) continue;
     if (documents.some((doc) => doc.key === "audit-status")) {
-      await board(path, "PATCH", { status: "cancelled" });
+      if (await isEligible(payload.pr_number)) await board(path, "PATCH", { status: "cancelled" });
       continue;
     }
     const currentHead = async () => {
@@ -37,12 +39,13 @@ async function reconcileReviews({ board, companyId, routineId, repoName, prHead,
       return observed;
     };
     const supersede = async (observed) => {
+      if (!await isEligible(payload.pr_number)) return;
       await board(`${path}/documents/audit-status`, "PUT", {
         title: "Audit superseded",
         format: "markdown",
         body: `The audit for \`${payload.head_sha}\` is historical. The PR moved to \`${observed}\`; run a new exact-head audit.\n`,
       });
-      await board(path, "PATCH", { status: "cancelled" });
+      if (await isEligible(payload.pr_number)) await board(path, "PATCH", { status: "cancelled" });
     };
     const observed = await currentHead();
     if (observed !== payload.head_sha) {
@@ -58,13 +61,15 @@ async function reconcileReviews({ board, companyId, routineId, repoName, prHead,
       await supersede(latest);
       continue;
     }
+    if (!await isEligible(payload.pr_number, payload.head_sha)) continue;
     await board(path, "PATCH", { status: "done" });
   }
 }
 
 export async function runInboundDiscovery({
-  board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun, prReviews, reviewer,
+  board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun, prReviews, reviewer, isEligible, resumeRun,
 }) {
+  if (typeof isEligible !== "function") throw new Error("GitHub PR eligibility check is required");
   const routine = await board(`routines/${routineId}`);
   if (routine.id !== routineId || routine.companyId !== companyId) throw new Error("Unexpected Routine company");
   if (auditRun && routine.concurrencyPolicy !== "always_enqueue") {
@@ -86,12 +91,14 @@ export async function runInboundDiscovery({
       console.error(`  skip ${repoName}#${pr_number}: could not verify its head SHA`);
       continue;
     }
+    if (!await isEligible(pr_number, head_sha)) continue;
     const run = await board(`routines/${routineId}/run`, "POST", {
       source: "manual",
       idempotencyKey: `pr-${repoName.toLowerCase()}-${pr_number}-${head_sha}`,
       payload: { repo: repoName, pr_number, head_sha },
     });
     const row = { pr_number, head_sha, run_id: run.id, linked_issue_id: run.linkedIssueId };
+    if (resumeRun) await resumeRun(run, { pr_number, head_sha });
     if (auditRun) {
       try {
         row.audit_status = await auditRun(run.id, { pr_number, head_sha });
@@ -102,7 +109,7 @@ export async function runInboundDiscovery({
     }
     triggered.push(row);
   }
-  if (prReviews) await reconcileReviews({ board, companyId, routineId, repoName, prHead, prReviews, reviewer });
+  if (prReviews) await reconcileReviews({ board, companyId, routineId, repoName, prHead, prReviews, reviewer, isEligible });
   return triggered;
 }
 
@@ -127,6 +134,7 @@ async function main() {
   const token = process.env.PAPERCLIP_API_KEY;
   delete process.env.PAPERCLIP_API_KEY;
   if (!token) throw new Error("Set a temporary scoped PAPERCLIP_API_KEY");
+  const assignees = parseAssignees(process.env.RALPH_REVIEW_ASSIGNEES);
   const board = async (path, method = "GET", body) => {
     const response = await fetch(`${origin}/api/${path}`, {
       method,
@@ -140,23 +148,22 @@ async function main() {
   };
   const exec = promisify(execFile);
   const gh = async (...args) => (await exec("gh", args, { timeout: 30_000 })).stdout;
-  const listRequestedPrs = async () => {
-    const out = await gh("search", "prs", "--review-requested", reviewLogin, "--state", "open",
-      "-R", repoName, "--json", "number", "--limit", String(searchLimit));
-    return JSON.parse(out).map((row) => row.number);
-  };
+  const listRequestedPrs = () => listAssignedPrs(gh, repoName, assignees);
+  const isEligible = createPrEligibility({ assignees, readPr: async (pr) => JSON.parse(await gh(
+    "pr", "view", String(pr), "-R", repoName, "--json", "state,isDraft,assignees,headRefOid",
+  )) });
   const prHead = async (pr_number) => {
     const out = await gh("pr", "view", String(pr_number), "-R", repoName, "--json", "headRefOid");
     return JSON.parse(out).headRefOid;
   };
   const currentHead = repoPath && await auditCloneHead(repoName, repoPath);
   const auditRun = currentHead && ((runId, expected) => runRoutineAudit({
-    board, companyId, routineId, runId, repoName, repoPath, expected, audit: auditPr, currentHead,
+    board, companyId, routineId, runId, repoName, repoPath, expected, audit: auditPr, currentHead, isEligible,
   }));
   const prReviews = reconcile && (async (pr) => JSON.parse(await gh("api", "--paginate", "--slurp",
     `repos/${repoName}/pulls/${pr}/reviews?per_page=100`)).flat());
   const rows = await runInboundDiscovery({
-    board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun, prReviews, reviewer,
+    board, companyId, routineId, repoName, listRequestedPrs, prHead, auditRun, prReviews, reviewer, isEligible,
   });
   console.log(JSON.stringify(rows));
   if (rows.some((row) => row.audit_status === "failed")) process.exitCode = 1;

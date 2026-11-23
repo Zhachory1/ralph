@@ -89,7 +89,9 @@ To process one manual audit Routine run on a local sandbox board, trigger it wit
 `{"repo":"OWNER/REPO","pr_number":7,"head_sha":"<full lowercase SHA>"}`. Reuse the same
 idempotency key for the same PR and head. Set `RALPH_AUDIT_REPOS` to the trusted clone path
 and its pinned image/test/lint configuration. Set a temporary `PAPERCLIP_API_KEY` from
-an account that can access only the sandbox company. Then run:
+an account that can access only the sandbox company. Set `RALPH_REVIEW_ASSIGNEES`
+to the comma-separated GitHub logins allowed to trigger reviews, and provide read-only
+GitHub access. Then run:
 
 ```sh
 node compose/v4/routine-audit-worker.mjs http://127.0.0.1:PORT COMPANY_ID ROUTINE_ID RUN_ID OWNER/REPO LOCAL_CLONE
@@ -105,7 +107,7 @@ returns `superseded` and adds an **Audit superseded** document without editing t
 original dossier. The marker is permanent even if the PR later returns to the same SHA.
 Audit the new head with its own run. Nothing checks this on a schedule.
 
-To discover PRs requesting this account's review in one allowlisted repo and queue each
+To discover assigned, ready-for-review PRs in one allowlisted repo and queue each
 one's current head for the audit above, set `GH_TOKEN`/`gh auth login` for a read-only
 account (no write scope needed: this issues only `gh search prs` and `gh pr view`) and
 the same temporary scoped `PAPERCLIP_API_KEY`, then run:
@@ -115,8 +117,8 @@ node compose/v4/routine-discovery-worker.mjs http://127.0.0.1:PORT COMPANY_ID RO
 ```
 
 This is a one-tick command, not a scheduled poller: run it by hand and inspect its JSON
-output before wiring it to any timer. For each open PR in `OWNER/REPO` requesting
-`REVIEWER`'s review (`@me` by default), it reads the current head SHA and triggers a
+output before wiring it to any timer. For each open, non-draft PR in `OWNER/REPO`
+assigned to a configured login, it verifies the current assignees and head and triggers a
 manual Routine run with idempotency key `pr-<repo>-<number>-<head>` and the same payload shape
 `routine-audit-worker.mjs` expects. Paperclip's own idempotency key dedups a repeat
 discovery of the same (repo, PR, head): a second trigger returns the same run and linked
@@ -147,8 +149,10 @@ head check can still race with closing the Paperclip issue.
 For native execution, configure a dedicated process seat to run
 `node compose/v4/routine-inbound-native.mjs ROUTINE_ID OWNER/REPO LOCAL_CLONE REVIEWER`.
 The seat needs `maxConcurrentRuns: 1`, an active `always_enqueue` Routine assigned to
-it, a read-only `GH_TOKEN`, and `RALPH_AUDIT_REPOS` for the dedicated clone. Paperclip
-provides the run identity and API credential. An operator may manually trigger discovery
+it, a read-only `GH_TOKEN`, `RALPH_REVIEW_ASSIGNEES`, and `RALPH_AUDIT_REPOS` for the
+dedicated clone. The worker rechecks assignment and draft status before audit and before
+publishing. Ineligible work stays in backlog and resumes if it becomes eligible again.
+Paperclip provides the run identity and API credential. An operator may manually trigger discovery
 with payload `{"kind":"discovery"}`; a schedule uses Paperclip's own Routine trigger.
 Audit issues stay assigned in backlog until an exact-head review is found. Do not enable
 a live schedule until the Paperclip cursor patch and native scheduled canary are verified.

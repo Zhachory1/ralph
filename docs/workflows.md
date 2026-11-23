@@ -87,8 +87,8 @@ issue. A manual recheck marks an outdated dossier superseded in a separate issue
 without editing the historical report. This covers serial replay, not concurrent processing or atomic
 publication with a GitHub ref update. It does not schedule audits or submit GitHub reviews.
 
-The opt-in discovery worker reads open PRs requesting this account's review in one allowlisted
-repo (`gh search prs`, `gh pr view`; read-only) and triggers a manual Routine run per discovered
+The opt-in discovery worker reads open, non-draft PRs assigned to configured GitHub
+accounts in one allowlisted repo (`gh search prs`, `gh pr view`; read-only) and triggers a manual Routine run per discovered
 head, keyed `pr-<repo>-<number>-<head>`. It relies on the Routine's own idempotency key, not a new
 state store, so a repeat discovery of the same head reuses the same run and linked issue instead
 of duplicating it. With `--audit`, the same tick runs the exact-head audit and publishes
@@ -97,6 +97,7 @@ With `--reconcile` and a named reviewer, a submitted review on the exact audited
 closes the Paperclip issue without editing the dossier.
 The native process-seat variant queues each head through the owning Routine and parks
 its dossier in the owner's backlog until a matching human review is reconciled.
+It rechecks assignment and draft state before audit and before publishing the dossier.
 Scheduled dispatch is not enabled by this change.
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result

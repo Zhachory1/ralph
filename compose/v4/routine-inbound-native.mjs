@@ -6,6 +6,7 @@ import { auditPr } from "../../coding-harness/audit-pr.js";
 import { auditCloneHead, runRoutineAudit } from "./routine-audit-worker.mjs";
 import { runInboundDiscovery } from "./routine-discovery-worker.mjs";
 import { findRoutineRun } from "./routine-runs.mjs";
+import { createPrEligibility, listAssignedPrs, parseAssignees } from "./github-pr-eligibility.mjs";
 
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const sha = /^[a-f0-9]{40}$/;
@@ -14,7 +15,8 @@ const login = /^[a-z0-9-]+$/i;
 
 export async function runNativeInbound(options) {
   const { board, companyId, routineId, agentId, heartbeatRunId, repoName, repoPath,
-    listRequestedPrs, prHead, currentHead, audit, prReviews, reviewer } = options;
+    listRequestedPrs, prHead, currentHead, audit, prReviews, reviewer, isEligible } = options;
+  if (typeof isEligible !== "function") throw new Error("GitHub PR eligibility check is required");
   const agent = await board("agents/me");
   const heartbeat = await board(`heartbeat-runs/${heartbeatRunId}`);
   if (agent.id !== agentId || agent.companyId !== companyId || heartbeat.id !== heartbeatRunId
@@ -41,8 +43,24 @@ export async function runNativeInbound(options) {
   const operatorTick = run.source === "manual" && run.triggerPayload?.kind === "discovery"
     && !run.createdByRunId && typeof issue.createdByUserId === "string" && issue.createdByUserId.length > 0;
   if (run.source === "schedule" || operatorTick) {
+    const resumeRun = async (queued, expected) => {
+      if (!uuid.test(queued.id ?? "") || !uuid.test(queued.linkedIssueId ?? "")) {
+        throw new Error("Invalid queued Routine run");
+      }
+      const path = `issues/${queued.linkedIssueId}`;
+      const target = await board(path);
+      if (target.id !== queued.linkedIssueId || target.companyId !== companyId
+          || target.assigneeAgentId !== agentId || target.originKind !== "routine_execution"
+          || target.originId !== routineId || target.originRunId !== queued.id) {
+        throw new Error("Unexpected queued Routine issue");
+      }
+      if (target.status !== "backlog") return;
+      const documents = await board(`${path}/documents`);
+      if (documents.some((doc) => doc.key === "audit" || doc.key === "audit-status")) return;
+      if (await isEligible(expected.pr_number, expected.head_sha)) await board(path, "PATCH", { status: "todo" });
+    };
     const rows = await runInboundDiscovery({
-      board, companyId, routineId, repoName, listRequestedPrs, prHead, prReviews, reviewer,
+      board, companyId, routineId, repoName, listRequestedPrs, prHead, prReviews, reviewer, isEligible, resumeRun,
     });
     await board(`issues/${issue.id}`, "PATCH", { status: "done" });
     return { kind: "discovery", count: rows.length };
@@ -69,6 +87,10 @@ export async function runNativeInbound(options) {
       || (parentRun.source !== "schedule" && !operatorParent)) {
     throw new Error("Unexpected scheduled run origin");
   }
+  if (!await isEligible(payload.pr_number)) {
+    await board(`issues/${issue.id}`, "PATCH", { status: "backlog" });
+    return { kind: "audit", status: "ineligible" };
+  }
   if (issue.status === "blocked") {
     const documents = await board(`issues/${issue.id}/documents`);
     if (documents.some((doc) => doc.key === "audit-status")) {
@@ -81,9 +103,13 @@ export async function runNativeInbound(options) {
     }
   }
   const status = await runRoutineAudit({
-    board, companyId, routineId, runId: run.id, repoName, repoPath, audit, currentHead,
+    board, companyId, routineId, runId: run.id, repoName, repoPath, audit, currentHead, isEligible,
   });
   if (status === "stale" || status === "superseded") {
+    if (!await isEligible(payload.pr_number)) {
+      await board(`issues/${issue.id}`, "PATCH", { status: "backlog" });
+      return { kind: "audit", status: "ineligible" };
+    }
     await board(`issues/${issue.id}`, "PATCH", { status: "cancelled" });
   } else {
     await board(`issues/${issue.id}`, "PATCH", { status: "backlog" });
@@ -97,6 +123,7 @@ async function main() {
     PAPERCLIP_RUN_ID: heartbeatRunId, PAPERCLIP_API_KEY: token, GH_TOKEN: githubToken } = process.env;
   delete process.env.PAPERCLIP_API_KEY;
   delete process.env.PAPERCLIP_AGENT_PRIVATE_KEY;
+  const assignees = parseAssignees(process.env.RALPH_REVIEW_ASSIGNEES);
   if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(origin ?? "")
       || ![companyId, routineId, agentId, heartbeatRunId].every((id) => uuid.test(id ?? ""))
       || !repoSlug.test(repoName ?? "") || !repoPath?.startsWith("/") || !login.test(reviewer ?? "")
@@ -117,9 +144,11 @@ async function main() {
   };
   const exec = promisify(execFile);
   const gh = async (...args) => (await exec("gh", args, { timeout: 30_000 })).stdout;
-  const listRequestedPrs = async () => JSON.parse(await gh("search", "prs", "--review-requested", reviewer,
-    "--state", "open", "-R", repoName, "--json", "number", "--limit", "1000")).map((row) => row.number);
+  const listRequestedPrs = () => listAssignedPrs(gh, repoName, assignees);
   const prHead = async (pr) => JSON.parse(await gh("pr", "view", String(pr), "-R", repoName, "--json", "headRefOid")).headRefOid;
+  const isEligible = createPrEligibility({ assignees, readPr: async (pr) => JSON.parse(await gh(
+    "pr", "view", String(pr), "-R", repoName, "--json", "state,isDraft,assignees,headRefOid",
+  )) });
   const prReviews = async (pr) => JSON.parse(await gh("api", "--paginate", "--slurp",
     `repos/${repoName}/pulls/${pr}/reviews?per_page=100`)).flat();
   let headReader;
@@ -128,7 +157,7 @@ async function main() {
     return (await headReader)(pr);
   };
   const result = await runNativeInbound({ board, companyId, routineId, agentId, heartbeatRunId,
-    repoName, repoPath, reviewer, listRequestedPrs, prHead, prReviews, currentHead, audit: auditPr });
+    repoName, repoPath, reviewer, listRequestedPrs, prHead, prReviews, currentHead, audit: auditPr, isEligible });
   console.log(JSON.stringify(result));
 }
 

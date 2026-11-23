@@ -17,6 +17,7 @@ const head = "a".repeat(40);
 function fixture(source = "schedule") {
   const writes = [];
   const documents = [];
+  const queuedIssues = new Map();
   const issue = {
     id: issueId, companyId, assigneeAgentId: agentId, status: "in_progress",
     originKind: "routine_execution", originId: routineId, originRunId: routineRunId,
@@ -39,7 +40,15 @@ function fixture(source = "schedule") {
     if (path === `routines/${routineId}/runs?limit=200`) return source === "manual" ? [run, parentRun] : [run];
     if (path === `routines/${routineId}/run` && method === "POST") {
       writes.push([path, method, body]);
-      return { id: `new-${writes.length}`, linkedIssueId: `task-${writes.length}` };
+      const suffix = String(writes.length).padStart(12, "0");
+      const id = `aaaaaaaa-aaaa-4aaa-8aaa-${suffix}`;
+      const linkedIssueId = `bbbbbbbb-bbbb-4bbb-8bbb-${suffix}`;
+      queuedIssues.set(linkedIssueId, { id: linkedIssueId, companyId, assigneeAgentId: agentId,
+        status: "todo", originKind: "routine_execution", originId: routineId, originRunId: id });
+      return { id, linkedIssueId };
+    }
+    if (path.startsWith("issues/") && method === "GET" && queuedIssues.has(path.slice(7))) {
+      return queuedIssues.get(path.slice(7));
     }
     if (path === `issues/${parentIssueId}` && method === "GET") return parentIssue;
     if (path === `issues/${issueId}/documents` && method === "GET") return documents;
@@ -61,6 +70,7 @@ function fixture(source = "schedule") {
       board, companyId, routineId, agentId, heartbeatRunId, repoName, repoPath: "/fixture",
       listRequestedPrs: async () => [7, 8], prHead: async () => head,
       currentHead: async () => head, audit: async () => ({ tests_passed: true }),
+      isEligible: async () => true,
     },
   };
 }
@@ -73,6 +83,75 @@ test("a scheduled native run queues each exact head and completes its own tick",
   assert.deepEqual(queued.map(([, , body]) => body.idempotencyKey),
     [`pr-fixture/canary-7-${head}`, `pr-fixture/canary-8-${head}`]);
   assert.deepEqual(writes.at(-1), [`issues/${issueId}`, "PATCH", { status: "done" }]);
+});
+
+test("a scheduled tick does not queue an ineligible PR", async () => {
+  const f = fixture();
+  f.options.isEligible = async () => false;
+  assert.deepEqual(await runNativeInbound(f.options), { kind: "discovery", count: 0 });
+  assert.deepEqual(f.writes, [[`issues/${issueId}`, "PATCH", { status: "done" }]]);
+});
+
+test("an eligible parked audit is resumed without a new Routine run", async () => {
+  const f = fixture();
+  const parkedIssueId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const parkedRunId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const original = f.options.board;
+  const parked = { id: parkedIssueId, companyId, assigneeAgentId: agentId, status: "backlog",
+    originKind: "routine_execution", originId: routineId, originRunId: parkedRunId };
+  f.options.listRequestedPrs = async () => [7];
+  f.options.board = async (path, method = "GET", body) => {
+    if (path === `routines/${routineId}/run` && method === "POST") {
+      f.writes.push([path, method, body]);
+      return { id: parkedRunId, linkedIssueId: parkedIssueId };
+    }
+    if (path === `issues/${parkedIssueId}` && method === "GET") return parked;
+    if (path === `issues/${parkedIssueId}/documents` && method === "GET") return [];
+    if (path === `issues/${parkedIssueId}` && method === "PATCH") {
+      f.writes.push([path, method, body]);
+      return { ...parked, ...body };
+    }
+    return original(path, method, body);
+  };
+  await runNativeInbound(f.options);
+  assert.deepEqual(f.writes.slice(1), [
+    [`issues/${parkedIssueId}`, "PATCH", { status: "todo" }],
+    [`issues/${issueId}`, "PATCH", { status: "done" }],
+  ]);
+});
+
+test("a parked audit is not resumed if eligibility changes after discovery", async () => {
+  const f = fixture();
+  const parkedIssueId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const parkedRunId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const original = f.options.board;
+  const parked = { id: parkedIssueId, companyId, assigneeAgentId: agentId, status: "backlog",
+    originKind: "routine_execution", originId: routineId, originRunId: parkedRunId };
+  let checks = 0;
+  f.options.listRequestedPrs = async () => [7];
+  f.options.isEligible = async () => ++checks === 1;
+  f.options.board = async (path, method = "GET", body) => {
+    if (path === `routines/${routineId}/run` && method === "POST") {
+      f.writes.push([path, method, body]);
+      return { id: parkedRunId, linkedIssueId: parkedIssueId };
+    }
+    if (path === `issues/${parkedIssueId}` && method === "GET") return parked;
+    if (path === `issues/${parkedIssueId}/documents` && method === "GET") return [];
+    if (path === `issues/${parkedIssueId}` && method === "PATCH") {
+      f.writes.push([path, method, body]);
+      return { ...parked, ...body };
+    }
+    return original(path, method, body);
+  };
+  await runNativeInbound(f.options);
+  assert.deepEqual(f.writes.slice(1), [[`issues/${issueId}`, "PATCH", { status: "done" }]]);
+});
+
+test("native review requires an eligibility check", async () => {
+  const f = fixture();
+  delete f.options.isEligible;
+  await assert.rejects(runNativeInbound(f.options), /eligibility.*required/i);
+  assert.deepEqual(f.writes, []);
 });
 
 test("an operator can trigger one manual discovery tick", async () => {
@@ -100,10 +179,45 @@ test("a stale head is cancelled without creating a dossier", async () => {
   assert.deepEqual(f.writes, [[`issues/${issueId}`, "PATCH", { status: "cancelled" }]]);
 });
 
+test("a stale task becoming ineligible is parked rather than cancelled", async () => {
+  const f = fixture("manual");
+  let checks = 0;
+  f.options.isEligible = async () => ++checks <= 2;
+  f.options.currentHead = async () => "b".repeat(40);
+  assert.deepEqual(await runNativeInbound(f.options), { kind: "audit", status: "ineligible" });
+  assert.deepEqual(f.writes, [[`issues/${issueId}`, "PATCH", { status: "backlog" }]]);
+});
+
 test("an audit failure does not complete or publish the issue", async () => {
   const f = fixture("manual");
   f.options.audit = async () => { throw new Error("fixture audit failed"); };
   await assert.rejects(runNativeInbound(f.options), /fixture audit failed/);
+  assert.deepEqual(f.writes, []);
+});
+
+test("an ineligible PR is parked without starting its audit", async () => {
+  const f = fixture("manual");
+  f.options.isEligible = async () => false;
+  f.options.audit = async () => { throw new Error("audit must not start"); };
+  assert.deepEqual(await runNativeInbound(f.options), { kind: "audit", status: "ineligible" });
+  assert.deepEqual(f.writes, [[`issues/${issueId}`, "PATCH", { status: "backlog" }]]);
+});
+
+test("a PR becoming ineligible during audit gets no dossier", async () => {
+  const f = fixture("manual");
+  let checks = 0;
+  let audited = false;
+  f.options.isEligible = async () => ++checks <= 2;
+  f.options.audit = async () => { audited = true; return { tests_passed: true }; };
+  assert.deepEqual(await runNativeInbound(f.options), { kind: "audit", status: "ineligible" });
+  assert.equal(audited, true);
+  assert.deepEqual(f.writes, [[`issues/${issueId}`, "PATCH", { status: "backlog" }]]);
+});
+
+test("an eligibility lookup failure does not publish or complete work", async () => {
+  const f = fixture("manual");
+  f.options.isEligible = async () => { throw new Error("GitHub unavailable"); };
+  await assert.rejects(runNativeInbound(f.options), /GitHub unavailable/);
   assert.deepEqual(f.writes, []);
 });
 
