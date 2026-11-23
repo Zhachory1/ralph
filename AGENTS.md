@@ -37,6 +37,9 @@ Read [profiles/PRINCIPLES.md](profiles/PRINCIPLES.md) before working in this rep
 
 ## Conventions
 
+- **Pull requests are cheap.** Open focused PRs for review. Every PR must have fewer than 750
+  changed lines (additions plus deletions) and include tests. Never merge unless the user
+  explicitly tells you to. Use protected branches and scoped credentials to enforce that boundary.
 - **One concern per PR**, preferably under 400 changed lines. Don't split an indivisible working slice to hit the number.
 - **Create directories when the first real file lands in them.** The README's layout is a proposal; empty placeholder trees are scaffolding to match a diagram.
 - **Prefer deletion.** The design calls for reviewing the profile split once a year and asking, for each boundary, whether it still protects something or only adds handoffs. Apply that to code too.
