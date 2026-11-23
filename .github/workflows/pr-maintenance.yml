@@ -7,6 +7,8 @@ on:
       - "bootstrap/maintain-pr"
       - "compose/v4/pr-maintenance-dispatch.py"
       - "compose/v4/test/test_pr_maintenance_dispatch.py"
+      - "compose/v4/provision-paperclip.py"
+      - "compose/v4/test/test_provision_github_instructions.py"
       - "evals/test_maintain_pr.py"
 
 permissions:
@@ -18,4 +20,5 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: python3 compose/v4/test/test_pr_maintenance_dispatch.py
+      - run: python3 compose/v4/test/test_provision_github_instructions.py
       - run: python3 evals/test_maintain_pr.py

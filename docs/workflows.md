@@ -98,7 +98,11 @@ closes the Paperclip issue without editing the dossier.
 
 The PR-maintenance scanner checks open PRs authored by its configured accounts for new
 reviews, failed checks, and merge conflicts. It creates an OpenCode task for each changed
-feedback snapshot and waits for any active task on the same PR.
+feedback snapshot and waits for any active task on the same PR. The maintainer creates no
+commit or GitHub comment when there is no new actionable work.
+
+Before starting an automatic review, the review manager checks the reviewer's prior
+decisions. A prior approval skips the review unless a human explicitly requests another.
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay

@@ -46,6 +46,7 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(self.issues[0]["assigneeAgentId"], "maintainer")
         self.assertIn("example/project#7", self.issues[0]["description"])
         self.assertIn(f"@ {HEAD}", self.issues[0]["title"])
+        self.assertIn("no commit or GitHub comment", self.issues[0]["description"])
 
     def test_failed_ci_creates_task(self):
         self.snapshot["checks"] = [{"name": "tests"}]

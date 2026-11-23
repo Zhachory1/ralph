@@ -53,7 +53,11 @@ WORKFLOW_SEATS = (
      "Give the Librarian the RFC and destination in an ordinary-language handoff. "
      "Wait for the Librarian's result. Publish nothing yourself; "
      "never ask the Librarian to claim or duplicate an existing PR."),
-    ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers."),
+    ("Review Workflow Manager", "general", "hermes_local", "Own review outcomes and delegate checks to reviewers. "
+     "Before an automatic review, read the configured reviewer's previous reviews. If that reviewer has already "
+     "approved and has not since requested changes, complete the task without creating lens tasks. "
+     "A manual request for re-review overrides this. Interpret review comments naturally; a COMMENT recommending "
+     "approval counts for this skip, not as GitHub merge approval."),
     ("Librarian", "general", "hermes_local", "Propose housekeeping edits to shared approved knowledge. "
      + (Path(__file__).resolve().parents[2] / "profiles/librarian/SOUL.md").read_text()),
     ("Comms", "general", "hermes_local", "Triage communications; external sends require Director approval."),

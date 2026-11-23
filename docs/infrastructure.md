@@ -60,6 +60,7 @@ network-disabled containers with no bind mounts.
 
 The PR-maintenance scanner runs as a Paperclip process seat on the host. It reads the
 configured GitHub accounts and assigns affected PRs to an OpenCode maintainer.
+The review manager needs GitHub read access to check prior reviewer decisions.
 
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;

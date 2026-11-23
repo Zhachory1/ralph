@@ -150,6 +150,9 @@ members. Protect PR base and head branches and deny
 the maintainer bypass before enabling writes; GitHub credentials alone may permit merges
 and force-pushes.
 
+Give the review manager read access to prior GitHub reviews. Update existing manager
+instructions to skip an approved automatic review; roster reconciliation preserves them.
+
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
 `python3 compose/v4/test/paperclip-maintenance-canary.py` with the same cached image, to check

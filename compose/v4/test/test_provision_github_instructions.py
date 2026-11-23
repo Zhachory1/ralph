@@ -54,6 +54,12 @@ def existing_roster():
 
 
 class ProvisionGithubInstructionsTest(unittest.TestCase):
+    def test_review_manager_skips_approved_automatic_reviews_but_allows_manual_rechecks(self):
+        duty = next(duty for name, _role, _adapter, duty in WORKFLOW_SEATS if name == "Review Workflow Manager")
+        self.assertIn("already approved", duty)
+        self.assertIn("manual", duty)
+        self.assertIn("without creating lens tasks", duty)
+
     def test_new_swe_instructions_use_an_existing_gh_token(self):
         board = FakeBoard()
 
