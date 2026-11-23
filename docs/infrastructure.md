@@ -60,6 +60,8 @@ network-disabled containers with no bind mounts.
 The native inbound worker uses the owning Paperclip process seat and run credentials;
 its read-only GitHub token and audit configuration belong only to that seat. The worker
 requires explicit assignee logins and rejects draft or unassigned PRs.
+The separate cross-repository discovery component has no configured credentials or
+live scheduler; its caller supplies a read-only GitHub reader for each account.
 
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;

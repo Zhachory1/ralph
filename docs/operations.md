@@ -157,6 +157,13 @@ with payload `{"kind":"discovery"}`; a schedule uses Paperclip's own Routine tri
 Audit issues stay assigned in backlog until an exact-head review is found. Do not enable
 a live schedule until the Paperclip cursor patch and native scheduled canary are verified.
 
+`discoverReviewQueue` in `compose/v4/pr-review-queue.mjs` is a read-only component,
+not a scheduled worker. It needs a GitHub reader for each configured account and returns
+PR metadata to its caller. Search errors, incomplete results, or the 1,000-result limit
+fail the snapshot. Do not persist private PR data without an approved destination. A
+search snapshot is not atomic; a caller must recheck the current assignee, draft state,
+and head before dispatching work.
+
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
 `python3 compose/v4/test/paperclip-maintenance-canary.py` with the same cached image, to check

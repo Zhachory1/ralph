@@ -99,6 +99,9 @@ The native process-seat variant queues each head through the owning Routine and 
 its dossier in the owner's backlog until a matching human review is reconciled.
 It rechecks assignment and draft state before audit and before publishing the dossier.
 Scheduled dispatch is not enabled by this change.
+The cross-repository discovery component can classify eligible PR heads into authored
+and incoming lanes across configured accounts. It is not yet connected to a queue or
+reviewer, and it does not publish GitHub reviews.
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay
