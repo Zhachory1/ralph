@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { collectReviewEvidence } from "../pr-review-evidence.mjs";
 
 const repo = "fixture/project";
@@ -178,4 +179,46 @@ test("checks both paths of a renamed file", async () => {
   f.setComparison({ files: [{ filename: "new.js", previous_filename: "wrong.js", status: "renamed",
     additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new" }] });
   await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("refuses matching changes at different line numbers", async () => {
+  const f = fixture();
+  f.setPatch(diff.replace("@@ -1 +1 @@", "@@ -20 +20 @@"));
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("refuses mismatched missing-final-newline markers", async () => {
+  const f = fixture();
+  f.setComparison({ files: [{ filename: "example.js", status: "modified", additions: 1, deletions: 1,
+    patch: "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new" }] });
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("accepts a diff containing embedded line separators", async () => {
+  const f = fixture();
+  const patch = "@@ -1 +1 @@\n-old\rvalue\n+new\u2028value";
+  f.setComparison({ files: [{ filename: "example.js", status: "modified", additions: 1, deletions: 1, patch }] });
+  const raw = `diff --git a/example.js b/example.js\n--- a/example.js\n+++ b/example.js\n${patch}\n`;
+  f.setPatch(raw);
+  assert.equal((await collectReviewEvidence(f.options)).diff, raw);
+});
+
+test("parses paths outside the caller's repository subdirectory", async () => {
+  const f = fixture();
+  const previous = process.cwd();
+  process.chdir(fileURLToPath(new URL("..", import.meta.url)));
+  try {
+    assert.equal((await collectReviewEvidence(f.options)).diff, diff);
+  } finally {
+    process.chdir(previous);
+  }
+});
+
+test("accepts a complete pure rename", async () => {
+  const f = fixture();
+  const raw = "diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js\n";
+  f.setComparison({ files: [{ filename: "new.js", previous_filename: "old.js", status: "renamed",
+    additions: 0, deletions: 0 }] });
+  f.setPatch(raw);
+  assert.equal((await collectReviewEvidence(f.options)).diff, raw);
 });
