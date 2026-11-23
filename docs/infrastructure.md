@@ -46,6 +46,8 @@ non-root relay, not to Paperclip or the agents. The relay limits requests and li
 but it does not enforce per-agent access or isolate agents from the Paperclip server.
 Paperclip board keys inherit the approving account's permissions, not the company selected
 in the CLI prompt. Use a sandbox-only operator account to restrict the key's authority.
+An OpenCode seat can receive `GH_TOKEN` through its configured Paperclip secret reference.
+That token's issuing account and scopes determine its GitHub authority.
 
 The separate RFC canary uses the same built image in authenticated mode with disposable
 Director and operator accounts. It runs on container loopback only, with no live data,
@@ -69,6 +71,10 @@ does not mount credentials. None of these profiles is enabled by default.
 
 The v4 qmd canary uses a disposable config and index scoped to a clean Git worktree
 pinned to the approved commit. It does not start an MCP server or connect Hindsight.
+
+The optional v4 QMD service in `compose/v4/paperclip-knowledge.yml` joins an existing
+Paperclip network, keeps its index in a separate named volume, and publishes no host port.
+Network access is not a per-seat authorization boundary.
 
 The v4 qmd gateway canary (`compose/v4/bootstrap-qmd-gateway.sh`,
 `compose/v4/test/paperclip-qmd-gateway-canary.py`) grants a disposable `hermes_local`

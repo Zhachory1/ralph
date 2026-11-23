@@ -13,6 +13,8 @@ For a configured code PR the Developer resubmits the corrected head by moving th
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
 head needs another review. GitHub approval and merge remain separate human decisions.
+When the Developer already has `GH_TOKEN`, it uses that existing credential through its
+terminal for the assigned repository work instead of requesting another connection.
 
 The Feature Workflow Manager applies the same review-stage primitive to the Author's RFC
 issue, naming itself -- not a human -- the review participant, and verifies the returned
@@ -104,6 +106,9 @@ The v4 qmd canary finds an approved RFC using lexical search and replaces its se
 when the approved worktree advances. The separate draft and untracked run transcript stay
 unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight
 retention or production refresh.
+
+An optional QMD service can join the Paperclip network without recreating the board. Its
+index scope is an operator decision; a search result does not confer approval.
 
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
