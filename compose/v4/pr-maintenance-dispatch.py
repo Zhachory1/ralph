@@ -11,7 +11,10 @@ import urllib.request
 from pathlib import Path
 
 maintain = runpy.run_path(str(Path(__file__).resolve().parents[2] / "bootstrap/maintain-pr"))
-title_pattern = re.compile(r"^PR maintenance ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+ @ [a-f0-9]{64}$")
+title_pattern = re.compile(
+    r"^PR maintenance ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#[0-9]+ @ "
+    r"(?:[a-f0-9]{64}|[a-f0-9]{40} feedback [a-f0-9]{64})$"
+)
 sha_pattern = re.compile(r"^[a-f0-9]{40}$")
 
 
@@ -61,9 +64,9 @@ def dispatch_maintenance(*, board, company_id, maintainer_id, accounts, prs, rea
             if digest == "empty":
                 result.append({"repo": repo, "number": number, "status": "clean"})
                 continue
-            title = f"PR maintenance {key} @ {digest}"
+            title = f"PR maintenance {key} @ {pr['head']} feedback {digest}"
             completed = list_issues(board, company_id, assigneeAgentId=maintainer_id, status="done", q=digest)
-            if any(issue["title"] == title for issue in completed):
+            if any(issue["title"] in (title, f"PR maintenance {key} @ {digest}") for issue in completed):
                 result.append({"repo": repo, "number": number, "status": "existing"})
                 continue
             issue = board(f"companies/{company_id}/issues", "POST", {

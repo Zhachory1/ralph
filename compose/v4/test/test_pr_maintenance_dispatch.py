@@ -45,6 +45,7 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(self.scan()[0]["status"], "dispatched")
         self.assertEqual(self.issues[0]["assigneeAgentId"], "maintainer")
         self.assertIn("example/project#7", self.issues[0]["description"])
+        self.assertIn(f"@ {HEAD}", self.issues[0]["title"])
 
     def test_failed_ci_creates_task(self):
         self.snapshot["checks"] = [{"name": "tests"}]
@@ -61,6 +62,15 @@ class DispatchTests(unittest.TestCase):
     def test_same_feedback_does_not_start_another_session(self):
         self.snapshot["checks"] = [{"name": "tests"}]
         self.scan()
+        self.issues[0]["status"] = "done"
+        self.assertEqual(self.scan()[0]["status"], "existing")
+        self.assertEqual(len(self.issues), 1)
+
+    def test_existing_legacy_title_still_deduplicates(self):
+        self.snapshot["checks"] = [{"name": "tests"}]
+        self.scan()
+        digest = self.issues[0]["idempotencyKey"].rsplit(":", 1)[1]
+        self.issues[0]["title"] = f"PR maintenance example/project#7 @ {digest}"
         self.issues[0]["status"] = "done"
         self.assertEqual(self.scan()[0]["status"], "existing")
         self.assertEqual(len(self.issues), 1)
