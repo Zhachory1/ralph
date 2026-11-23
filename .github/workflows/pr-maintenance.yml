@@ -1,0 +1,21 @@
+name: PR maintenance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pr-maintenance.yml"
+      - "bootstrap/maintain-pr"
+      - "compose/v4/pr-maintenance-dispatch.py"
+      - "compose/v4/test/test_pr_maintenance_dispatch.py"
+      - "evals/test_maintain_pr.py"
+
+permissions:
+  contents: read
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: python3 compose/v4/test/test_pr_maintenance_dispatch.py
+      - run: python3 evals/test_maintain_pr.py

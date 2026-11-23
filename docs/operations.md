@@ -145,7 +145,8 @@ a Paperclip Routine with `skip_if_active`, `*/10 * * * *`, and one concurrent pr
 The OpenCode maintainer needs its own authorized access to the PR branches. The scanner
 uses Paperclip task idempotency and existing task records to avoid repeating unchanged
 feedback. Searches at GitHub's 1,000-result limit fail rather than silently truncating.
-PR tasks may be visible to company members. Protect PR base and head branches and deny
+GitHub search covers at most 4,000 repositories. PR tasks may be visible to company
+members. Protect PR base and head branches and deny
 the maintainer bypass before enabling writes; GitHub credentials alone may permit merges
 and force-pushes.
 
