@@ -42,13 +42,13 @@ function fixture(count = 1) {
         headRefOid: changedHead || (stale && reads >= 4) ? "c".repeat(40) : head, baseRefOid: base,
         author: { login: "outside" }, title: "Fixture change", body: "Fixture description" });
     }
-    if (args.includes("--header")) return `diff --git a/file b/file\n${patch}\n`;
+    if (args.includes("--header")) return `diff --git a/file b/file\n--- a/file\n+++ b/file\n${patch}\n`;
     if (args.some((arg) => arg.includes("/reviews?"))) return JSON.stringify([published ? [{
       user: { login: "fixture-human" }, state: "COMMENTED", commit_id: head,
       body: `<!-- ai-pr-automation head=${head} -->`,
     }] : []]);
     if (args[0] === "api") return JSON.stringify({ files: [
-      { filename: "file", additions: 1, deletions: 1, patch },
+      { filename: "file", status: "modified", additions: 1, deletions: 1, patch },
     ] });
     throw new Error("Unexpected GitHub call");
   };

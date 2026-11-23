@@ -5,13 +5,13 @@ import { collectReviewEvidence } from "../pr-review-evidence.mjs";
 const repo = "fixture/project";
 const head = "a".repeat(40);
 const base = "b".repeat(40);
-const diff = "diff --git a/example.js b/example.js\n@@ -1 +1 @@\n-old\n+new\n";
+const diff = "diff --git a/example.js b/example.js\n--- a/example.js\n+++ b/example.js\n@@ -1 +1 @@\n-old\n+new\n";
 
 function fixture() {
   const calls = [];
   let pr = { state: "OPEN", isDraft: false, assignees: [{ login: "fixture-bot" }],
     headRefOid: head, baseRefOid: base };
-  let comparison = { files: [{ filename: "example.js", additions: 1, deletions: 1,
+  let comparison = { files: [{ filename: "example.js", status: "modified", additions: 1, deletions: 1,
     patch: "@@ -1 +1 @@\n-old\n+new" }] };
   let patch = diff;
   return {
@@ -131,7 +131,51 @@ test("refuses a diff missing a patch from the comparison", async () => {
 
 test("accepts identical changes split into different GitHub hunks", async () => {
   const f = fixture();
-  const patch = "diff --git a/example.js b/example.js\n@@ -1 +0,0 @@\n-old\n@@ -1,0 +1 @@\n+new\n";
+  const patch = "diff --git a/example.js b/example.js\n--- a/example.js\n+++ b/example.js\n"
+    + "@@ -1 +0,0 @@\n-old\n@@ -1,0 +1 @@\n+new\n";
   f.setPatch(patch);
   assert.equal((await collectReviewEvidence(f.options)).diff, patch);
+});
+
+test("refuses matching changes attributed to a different file", async () => {
+  const f = fixture();
+  f.setPatch("diff --git a/wrong.js b/wrong.js\n--- a/wrong.js\n+++ b/wrong.js\n@@ -1 +1 @@\n-old\n+new\n");
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("refuses a hunk truncated after its final change", async () => {
+  const f = fixture();
+  f.setPatch("diff --git a/example.js b/example.js\n--- a/example.js\n+++ b/example.js\n@@ -1,2 +1,2 @@\n-old\n+new\n");
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("accepts a complete multi-file diff", async () => {
+  const f = fixture();
+  f.setComparison({ files: [
+    { filename: "example.js", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new" },
+    { filename: "other.js", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-before\n+after" },
+  ] });
+  const other = "diff --git a/other.js b/other.js\n--- a/other.js\n+++ b/other.js\n@@ -1 +1 @@\n-before\n+after\n";
+  f.setPatch(diff + other);
+  assert.equal((await collectReviewEvidence(f.options)).diff, diff + other);
+});
+
+test("refuses a diff with a different file status", async () => {
+  const f = fixture();
+  f.setComparison({ files: [{ filename: "example.js", status: "added", additions: 1, deletions: 1,
+    patch: "@@ -1 +1 @@\n-old\n+new" }] });
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("checks both paths of a renamed file", async () => {
+  const f = fixture();
+  const patch = "diff --git a/old.js b/new.js\nsimilarity index 50%\nrename from old.js\nrename to new.js\n"
+    + "--- a/old.js\n+++ b/new.js\n@@ -1 +1 @@\n-old\n+new\n";
+  f.setComparison({ files: [{ filename: "new.js", previous_filename: "old.js", status: "renamed",
+    additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new" }] });
+  f.setPatch(patch);
+  assert.equal((await collectReviewEvidence(f.options)).diff, patch);
+  f.setComparison({ files: [{ filename: "new.js", previous_filename: "wrong.js", status: "renamed",
+    additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new" }] });
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
 });

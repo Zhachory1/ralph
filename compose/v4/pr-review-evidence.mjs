@@ -1,4 +1,5 @@
 // Collect a read-only diff for one eligible, exact-head PR.
+import { spawnSync } from "node:child_process";
 import { createPrEligibility } from "./github-pr-eligibility.mjs";
 
 const repoSlug = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -41,13 +42,37 @@ export async function collectReviewEvidence({ repo, number, head, assignees, rea
   if (typeof diff !== "string" || Buffer.byteLength(diff) === 0 || Buffer.byteLength(diff) > maxDiffBytes) {
     throw new Error("PR diff is empty or exceeds the size limit");
   }
+  const stats = (reverse) => {
+    const result = spawnSync("git", ["apply", "--numstat", "-z", ...(reverse ? ["--reverse"] : []), "-"],
+      { input: diff, encoding: "utf8" });
+    if (result.status !== 0) throw new Error("Incomplete GitHub diff");
+    return result.stdout.split("\0").filter(Boolean).map((row) => {
+      const match = row.match(/^(\d+)\t(\d+)\t([\s\S]+)$/);
+      if (!match) throw new Error("Incomplete GitHub diff");
+      return { additions: Number(match[1]), deletions: Number(match[2]), path: match[3] };
+    });
+  };
+  const forward = stats(false);
+  const reverse = stats(true).reverse();
+  const sections = diff.split(/^diff --git /m).slice(1);
+  if (sections.length !== comparison.files.length || forward.length !== sections.length
+      || reverse.length !== sections.length) throw new Error("Incomplete GitHub diff");
   const changes = (text) => text.match(/^[+-].*$/gm) ?? [];
-  const expected = comparison.files.flatMap((file) => changes(file.patch));
-  const actual = diff.split(/^diff --git /m).slice(1).flatMap((file) => {
-    const start = file.indexOf("\n@@ ");
-    return start < 0 ? [] : changes(file.slice(start));
-  });
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Incomplete GitHub diff");
+  for (const [index, file] of comparison.files.entries()) {
+    const section = sections[index];
+    const start = section.indexOf("\n@@ ");
+    const status = /^new file mode /m.test(section) ? "added"
+      : /^deleted file mode /m.test(section) ? "removed"
+        : /^rename from /m.test(section) ? "renamed"
+          : /^copy from /m.test(section) ? "copied" : "modified";
+    if (start < 0 || forward[index].path !== file.filename
+        || reverse[index].path !== (file.previous_filename ?? file.filename)
+        || forward[index].additions !== file.additions || forward[index].deletions !== file.deletions
+        || (["added", "removed", "renamed", "copied", "modified"].includes(file.status) && file.status !== status)
+        || JSON.stringify(changes(section.slice(start))) !== JSON.stringify(changes(file.patch))) {
+      throw new Error("Incomplete GitHub diff");
+    }
+  }
   const status = await currentStatus();
   if (status) return { status };
   return { status: "ready", repo, number, head, base, diff };
