@@ -128,3 +128,10 @@ test("refuses a diff missing a patch from the comparison", async () => {
   f.setPatch("diff --git a/example.js b/example.js\n");
   await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
 });
+
+test("accepts identical changes split into different GitHub hunks", async () => {
+  const f = fixture();
+  const patch = "diff --git a/example.js b/example.js\n@@ -1 +0,0 @@\n-old\n@@ -1,0 +1 @@\n+new\n";
+  f.setPatch(patch);
+  assert.equal((await collectReviewEvidence(f.options)).diff, patch);
+});
