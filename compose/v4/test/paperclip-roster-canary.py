@@ -119,26 +119,35 @@ def check_roster(container):
     ceo_key = board(f"agents/{roster['Orchestrator']}/keys", {"name": "Disposable CEO"})["token"]
     for name in ("Review Workflow Manager", "Review Lens Generalist", "Review Lens Reliability",
                  "Review Lens MVP", "Review Lens Security", "Review Synthesis"):
+        seat_path = f"agents/{full[name]}"
+        seat = board(seat_path)
+        assert seat["status"] == "paused", (name, seat["status"])
         for replacement in ({"protectedAgent": {"blockAssignment": False}}, {}):
-            status, denied = bearer(container, ceo_key, f"agents/{full[name]}/permissions", method="PATCH", body={
+            status, denied = bearer(container, ceo_key, f"{seat_path}/permissions", method="PATCH", body={
                 "canCreateAgents": False, "canAssignTasks": False, "authorizationPolicy": replacement,
             })
             assert status == 403, (name, status, denied)
+        assert board(seat_path)["permissions"]["authorizationPolicy"]["protectedAgent"]["blockAssignment"] is True
         status, denied = bearer(container, key, f"{root}/issues", body={
-            "title": f"Blocked assignment to {name}", "status": "backlog", "assigneeAgentId": full[name],
+            "title": f"Paused assignment to {name}", "status": "backlog", "assigneeAgentId": full[name],
         })
-        assert status == 403, (name, status, denied)
-    lens = full["Review Lens Generalist"]
-    permission = {"canCreateAgents": False, "canAssignTasks": False,
-                  "authorizationPolicy": {"protectedAgent": {"blockAssignment": False}}}
-    board(f"agents/{lens}/permissions", permission, "PATCH")
-    status, assigned = bearer(container, key, f"{root}/issues", body={
-        "title": "Assignment after board release", "status": "backlog", "assigneeAgentId": lens,
-    })
-    assert status == 201 and assigned["assigneeAgentId"] == lens, (status, assigned)
-    permission["authorizationPolicy"]["protectedAgent"]["blockAssignment"] = True
-    board(f"agents/{lens}/permissions", permission, "PATCH")
-    print("PASS: agents cannot release or assign protected review seats; the board can release them", flush=True)
+        assert status == 409 and denied.get("details", {}).get("assigneeStatus") == "paused", (name, status, denied)
+
+    # A ready process fixture lets the request reach the policy check without resuming an unverified seat.
+    protected = review_actor("Fixture protected review seat", "done")["id"]
+    for blocked in (True, False, True):
+        board(f"agents/{protected}/permissions", {
+            "canCreateAgents": False, "canAssignTasks": False,
+            "authorizationPolicy": {"protectedAgent": {"blockAssignment": blocked}},
+        }, "PATCH")
+        status, result = bearer(container, key, f"{root}/issues", body={
+            "title": "Protected assignment fixture", "status": "backlog", "assigneeAgentId": protected,
+        })
+        if blocked:
+            assert status == 403 and "protected-agent policy" in result["error"], (status, result)
+        else:
+            assert status == 201 and result["assigneeAgentId"] == protected, (status, result)
+    print("PASS: review seats stay paused and protected; the board can release a ready fixture", flush=True)
 
     uncapped_company = board("companies", {"name": "Advisory fixture"})["id"]
     advisory_models = {name: "openai/fixture" for name in models}
