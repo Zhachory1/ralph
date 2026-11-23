@@ -190,6 +190,49 @@ class ApprovalSupersedesTests(unittest.TestCase):
         person = self.r(2, "COMMENTED", "maxkore")
         self.assertEqual("empty", maintain_pr.feedback_digest(self._snapshot([bot, person])))
 
+    def test_maintenance_scanner_can_include_new_comment_reviews(self):
+        review = self.r(1, "COMMENTED", "reviewer")
+
+        def fake_gh(*args):
+            if args[:2] == ("api", "graphql"):
+                return mock.Mock(returncode=0, stdout=json.dumps(
+                    {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}))
+            if args[0] == "api":
+                return mock.Mock(returncode=0, stdout=json.dumps([review]))
+            return mock.Mock(returncode=1, stdout="")
+
+        snapshot = maintain_pr.feedback_snapshot("a/b", 1, "author", include_submitted=True, gh_call=fake_gh)
+        self.assertEqual([1], [item["id"] for item in snapshot["reviews"]])
+
+    def test_maintenance_scanner_includes_an_approval_without_a_body(self):
+        review = self.r(1, "APPROVED", "reviewer")
+        review["body"] = None
+
+        def fake_gh(*args):
+            if args[:2] == ("api", "graphql"):
+                return mock.Mock(returncode=0, stdout=json.dumps(
+                    {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}))
+            if args[0] == "api":
+                return mock.Mock(returncode=0, stdout=json.dumps([review]))
+            return mock.Mock(returncode=1, stdout="")
+
+        snapshot = maintain_pr.feedback_snapshot("a/b", 1, "author", include_submitted=True, gh_call=fake_gh)
+        self.assertEqual([1], [item["id"] for item in snapshot["reviews"]])
+
+    def test_maintenance_scanner_includes_the_authors_own_submitted_review(self):
+        review = self.r(1, "COMMENTED", "author")
+
+        def fake_gh(*args):
+            if args[:2] == ("api", "graphql"):
+                return mock.Mock(returncode=0, stdout=json.dumps(
+                    {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}}))
+            if args[0] == "api":
+                return mock.Mock(returncode=0, stdout=json.dumps([review]))
+            return mock.Mock(returncode=1, stdout="")
+
+        snapshot = maintain_pr.feedback_snapshot("a/b", 1, "author", include_submitted=True, gh_call=fake_gh)
+        self.assertEqual([1], [item["id"] for item in snapshot["reviews"]])
+
 
 class OperationIdTests(unittest.TestCase):
     def test_deterministic(self):

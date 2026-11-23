@@ -120,13 +120,15 @@ def _comment_approval(review: dict) -> bool:
     return review.get("state") == "COMMENTED" and "Verdict: APPROVE" in body[:2000]
 
 
-def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
-    """The fleet's own shape, reproduced: external reviews with a body,
-    unresolved and not-outdated threads whose comments are external and have
-    a body, and failing checks. 'External' means not authored by the account
-    this runs as -- your own prior maintenance comments do not count as
-    feedback on themselves."""
-    reviews = gh("api", "--paginate", f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+def feedback_snapshot(repo: str, number: int, login: str, *, include_submitted=False, gh_call=None) -> dict | None:
+    """Return external reviews, unresolved threads, and failing checks.
+
+    By default only change requests with a body count; include_submitted
+    also includes submitted review summaries and approvals, including reviews
+    posted by the PR author. The author's ordinary comments are excluded.
+    """
+    gh_call = gh_call or gh
+    reviews = gh_call("api", "--paginate", f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     if reviews.returncode != 0:
         return None
     review_list = []
@@ -141,8 +143,8 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
             '} pageInfo{hasNextPage endCursor}}'
             '}}}')
     owner, name = repo.split("/", 1)
-    threads_result = gh("api", "graphql", "--paginate", "-F", f"owner={owner}",
-                        "-F", f"name={name}", "-F", f"number={number}", "-f", f"query={query}")
+    threads_result = gh_call("api", "graphql", "--paginate", "-F", f"owner={owner}",
+                            "-F", f"name={name}", "-F", f"number={number}", "-f", f"query={query}")
     if threads_result.returncode != 0:
         return None
     thread_nodes = []
@@ -152,7 +154,7 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
         except (KeyError, TypeError):
             continue
 
-    checks = gh("pr", "checks", str(number), "-R", repo, "--json", "name,bucket,state,link")
+    checks = gh_call("pr", "checks", str(number), "-R", repo, "--json", "name,bucket,state,link")
     if checks.returncode != 0:
         # gh exits 1 with empty output when a PR has no checks at all.
         if checks.stdout.strip():
@@ -187,11 +189,11 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     latest = {}
     for r in review_list:
         author = (r.get("user") or {}).get("login")
-        if (r.get("id") is not None and external(author)
+        if (r.get("id") is not None and isinstance(author, str) and (include_submitted or external(author))
                 and r.get("state") not in ("PENDING", "DISMISSED")):
             latest[author.lower()] = r
     snapshot_reviews = sorted(
-        ({"id": r["id"], "author": r["user"]["login"], "body": r["body"],
+        ({"id": r["id"], "author": r["user"]["login"], "body": r.get("body") or "",
           "submittedAt": r.get("submitted_at"), "bot": is_bot(r.get("user"))}
          # Only an explicit change request is feedback by itself. A COMMENTED
          # review is a summary -- bots post one on every push ("no issues
@@ -200,8 +202,9 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
          # every bot re-review a round, and every round's comment a re-review
          # (op3#17109: 12 rounds, the last ones "no code change needed").
          for r in latest.values()
-         if r.get("state") == "CHANGES_REQUESTED"
-         and isinstance(r.get("body"), str) and r["body"].strip()),
+         if (r.get("state") == "CHANGES_REQUESTED"
+             and isinstance(r.get("body"), str) and r["body"].strip())
+         or (include_submitted and r.get("state") in ("COMMENTED", "APPROVED", "CHANGES_REQUESTED"))),
         key=lambda x: str(x["id"]))
 
     snapshot_threads = []
@@ -233,7 +236,7 @@ def feedback_snapshot(repo: str, number: int, login: str) -> dict | None:
     return {"reviews": snapshot_reviews, "threads": snapshot_threads, "checks": snapshot_checks}
 
 
-def feedback_digest(snapshot: dict) -> str:
+def feedback_digest(snapshot: dict, *, distinguish_reviews=False) -> str:
     """Byte-identical algorithm to the fleet's feedback_snapshot(): hash each
     review body, each thread comment body, and each failing check, then hash
     the sorted list of those hashes. Kept exactly so a round this script
@@ -246,7 +249,7 @@ def feedback_digest(snapshot: dict) -> str:
     # A bot reposts the same finding under a new review or thread id on
     # every push, so its items are keyed by text alone: the same words are
     # the same feedback, and start no new round.
-    items = [["bot", digest(r["body"].encode())] if r.get("bot")
+    items = [["bot", digest(r["body"].encode())] if r.get("bot") and not distinguish_reviews
              else ["review", str(r["id"]), digest(r["body"].encode())]
              for r in snapshot["reviews"]]
     items += [["bot", digest(c["body"].encode())] if c.get("bot")

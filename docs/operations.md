@@ -138,6 +138,17 @@ so a review can be found after GitHub removes the request. Only submitted review
 named human on the dossier's exact head count. The dossier contents are left intact.
 No GitHub writes are made.
 
+For scheduled PR maintenance, configure a host-local Paperclip process seat with
+`python3 /path/to/compose/v4/pr-maintenance-dispatch.py MAINTAINER_ID ACCOUNT1 ACCOUNT2`.
+Use Python 3.10 or newer, give the seat access to the configured `gh` logins, and assign
+a Paperclip Routine with `skip_if_active`, `*/10 * * * *`, and one concurrent process run.
+The OpenCode maintainer needs its own authorized access to the PR branches. The scanner
+uses Paperclip task idempotency and existing task records to avoid repeating unchanged
+feedback. Searches at GitHub's 1,000-result limit fail rather than silently truncating.
+PR tasks may be visible to company members. Protect PR base and head branches and deny
+the maintainer bypass before enabling writes; GitHub credentials alone may permit merges
+and force-pushes.
+
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
 `python3 compose/v4/test/paperclip-maintenance-canary.py` with the same cached image, to check

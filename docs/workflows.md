@@ -96,6 +96,10 @@ the dossier in Paperclip. The host scheduler must run ticks serially. Nothing wr
 With `--reconcile` and a named reviewer, a submitted review on the exact audited head
 closes the Paperclip issue without editing the dossier.
 
+The PR-maintenance scanner checks open PRs authored by its configured accounts for new
+reviews, failed checks, and merge conflicts. It creates an OpenCode task for each changed
+feedback snapshot and waits for any active task on the same PR.
+
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay
 unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight
@@ -214,7 +218,7 @@ sequenceDiagram
 **Entry:** feedback on a PR authored by `RALPH_MAINTAIN_LOGIN`. **Exit:** pushed fix with threads resolved, or a hold for the owner. **Owner:** maintainer.
 
 - New maintenance cards are created on `maintain`; older rounds remain on `queues` and are not moved. Drain old rounds before cutting over.
-- Feedback is a `CHANGES_REQUESTED` review, an unresolved thread (human or bot), or a failing check at the current head. A COMMENTED summary alone is not feedback.
+- In the legacy Hermes loop, feedback is a `CHANGES_REQUESTED` review, an unresolved thread (human or bot), or a failing check at the current head. A COMMENTED summary alone is not feedback there.
 - One round per PR at a time. The maintainer pushes, replies in and resolves each thread it fixed, and posts one summary only if it pushed.
 - **Circuit breaker:** after 3 rounds with the same review feedback and only CI changing, the next round is held (blocked) and one Chat alert goes out.
 
