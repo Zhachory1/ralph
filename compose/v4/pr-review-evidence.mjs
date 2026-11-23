@@ -41,7 +41,13 @@ export async function collectReviewEvidence({ repo, number, head, assignees, rea
   if (typeof diff !== "string" || Buffer.byteLength(diff) === 0 || Buffer.byteLength(diff) > maxDiffBytes) {
     throw new Error("PR diff is empty or exceeds the size limit");
   }
-  if (comparison.files.some((file) => !diff.includes(file.patch))) throw new Error("Incomplete GitHub diff");
+  const changes = (text) => text.match(/^[+-].*$/gm) ?? [];
+  const expected = comparison.files.flatMap((file) => changes(file.patch));
+  const actual = diff.split(/^diff --git /m).slice(1).flatMap((file) => {
+    const start = file.indexOf("\n@@ ");
+    return start < 0 ? [] : changes(file.slice(start));
+  });
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Incomplete GitHub diff");
   const status = await currentStatus();
   if (status) return { status };
   return { status: "ready", repo, number, head, base, diff };
