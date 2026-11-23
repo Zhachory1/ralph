@@ -96,9 +96,11 @@ the dossier in Paperclip. The host scheduler must run ticks serially. Nothing wr
 With `--reconcile` and a named reviewer, a submitted review on the exact audited head
 closes the Paperclip issue without editing the dossier.
 
-The separate code-review components discover assigned, non-draft PRs across configured
-accounts and read an exact-head diff. They do not execute repository code or tests.
-They are not yet connected to a Paperclip queue or Reviewer.
+The code-review scanner discovers assigned, non-draft PRs across configured accounts and
+creates a private Paperclip manager task per exact head. The manager creates the selected
+lens tasks and a dependent synthesis, then waits for synthesis. On a later scan, the
+scanner publishes the synthesis as an automated GitHub review after rechecking eligibility.
+It does not run PR code or tests. Review-seat tool isolation remains open (#327).
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay

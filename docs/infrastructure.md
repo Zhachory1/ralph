@@ -58,8 +58,10 @@ Git clone. Its canary uses the authenticated fixture and a temporary local Git r
 without GitHub credentials. The existing audit runner puts test and lint in separate
 network-disabled containers with no bind mounts.
 
-The separate code-review discovery and evidence components use read-only GitHub access.
-They do not run PR code or tests and are not connected to a live scheduler.
+The code-review scanner runs as a Paperclip process seat on the host. It uses the host's
+configured GitHub accounts to discover PRs, creates private manager tasks, and publishes
+completed syntheses as automated comments. Its own code does not execute PR code or tests.
+Review-seat tool isolation is not enforced yet (#327).
 
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;

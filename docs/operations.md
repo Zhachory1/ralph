@@ -138,13 +138,20 @@ so a review can be found after GitHub removes the request. Only submitted review
 named human on the dossier's exact head count. The dossier contents are left intact.
 No GitHub writes are made.
 
-`discoverReviewQueue` and `collectReviewEvidence` are read-only components for a
-future code-review queue. They require per-account GitHub readers and do not run
-PR code or tests. Searches with incomplete results or 1,000 matches fail closed.
-Diff collection rejects comparisons at GitHub's 300-file limit, unreviewable patches,
-and diffs over 1 MiB. GitHub search and eligibility checks are not atomic; callers
-must recheck eligibility before handing off. Private PR data needs an approved
-storage destination. These components do not schedule work or dispatch a Reviewer.
+For the code-review flow, configure a host-local Paperclip process seat with the command
+`node /path/to/compose/v4/pr-review-dispatch.mjs MANAGER_ID SYNTHESIS_ID PUBLISHER ACCOUNT1 ACCOUNT2`.
+Give it access to both existing `gh` logins, and create a Paperclip Routine assigned to
+that seat with `skip_if_active` and a `*/10 * * * *` schedule. Keep its title and
+description static so overlapping ticks coalesce. Paperclip supplies the run token and
+task context; the worker uses that identity to create private review tasks and complete
+its own scan task. Store private PR evidence in Paperclip only with the owner's consent.
+
+The worker separates authored and incoming PRs, uses the native seven-day task
+idempotency key per head, and checks the GitHub review marker before dispatch and
+publication. A pending publication receipt after an unclear GitHub response requires
+human reconciliation. Searches at GitHub's 1,000-result limit, incomplete searches,
+300-file comparisons, and diffs over 1 MiB are held rather than truncated. This setup
+does not enforce no-shell isolation for review seats (#327) or merge PRs.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
