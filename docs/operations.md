@@ -142,16 +142,17 @@ For the code-review flow, configure a host-local Paperclip process seat with the
 `node /path/to/compose/v4/pr-review-dispatch.mjs MANAGER_ID SYNTHESIS_ID PUBLISHER ACCOUNT1 ACCOUNT2`.
 Give it access to both existing `gh` logins, and create a Paperclip Routine assigned to
 that seat with `skip_if_active` and a `*/10 * * * *` schedule. Keep its title and
-description static so overlapping ticks coalesce. Paperclip supplies the run token and
-task context; the worker uses that identity to create private review tasks and complete
-its own scan task. Store private PR evidence in Paperclip only with the owner's consent.
+description static, and set the seat's maximum concurrent runs to one. Paperclip supplies
+the run token and task context; the worker creates review tasks and completes its own scan
+task. Review tasks are visible to the company; store private PR evidence there only with the
+owner's consent.
 
 The worker separates authored and incoming PRs, uses the native seven-day task
-idempotency key per head, and checks the GitHub review marker before dispatch and
-publication. A pending publication receipt after an unclear GitHub response requires
-human reconciliation. Searches at GitHub's 1,000-result limit, incomplete searches,
-300-file comparisons, and diffs over 1 MiB are held rather than truncated. This setup
-does not enforce no-shell isolation for review seats (#327) or merge PRs.
+idempotency key per head, and checks the GitHub review marker before dispatch. Synthesis
+posts the review and checks for that marker if a response is unclear. An unconfirmed post
+needs human reconciliation. Searches at GitHub's 1,000-result limit, incomplete searches,
+300-file comparisons, and diffs over 1 MiB are held rather than truncated. This setup does
+not enforce no-shell isolation for review seats (#327) or merge PRs.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus

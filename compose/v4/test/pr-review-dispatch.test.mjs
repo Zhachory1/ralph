@@ -71,7 +71,8 @@ function fixture(count = 1) {
     }
     throw new Error(`Unexpected board call ${path}`);
   };
-  return { args: { board, companyId: "company", managerId: "manager", accounts, gh, publisher: "fixture-human" },
+  return { args: { board, companyId: "company", managerId: "manager", synthesisId: "synthesis", accounts, gh,
+    publisher: "fixture-human" },
     calls, active, completed, setStale() { stale = true; }, setChangedHead() { changedHead = true; },
     setPublished() { published = true; }, getScanUpdate() { return scanUpdate; } };
 }
@@ -86,11 +87,14 @@ test("creates a manager task containing exact-head evidence", async () => {
   assert.equal(f.calls[0].method, "POST");
   assert.equal(f.calls[0].body.idempotencyKey, `review:fixture/repo#1@${head}`);
   assert.equal(f.calls[0].body.assigneeAgentId, "manager");
-  assert.equal(f.calls[0].body.visibility, "private");
+  assert.equal(f.calls[0].body.visibility, "open");
   assert.equal(f.calls[0].body.parentId, null);
   assert.match(f.calls[0].body.description, /diff --git a\/file b\/file/);
   assert.match(f.calls[0].body.description, /Fixture description/);
   assert.match(f.calls[0].body.description, /block this task on synthesis/i);
+  assert.match(f.calls[0].body.description, /synthesis.*publish/i);
+  assert.match(f.calls[0].body.description, /ai-pr-automation head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.match(f.calls[0].body.description, /do not retry an ambiguous post/i);
 });
 
 test("does not dispatch when the PR head changes before handoff", async () => {
@@ -153,11 +157,9 @@ test("the scanner completes its own Routine task after handing off reviews", asy
   assert.match(f.getScanUpdate().comment, /1.*created/i);
 });
 
-test("publishes a completed manager task instead of creating another", async () => {
+test("does not publish completed reviews from the scanner", async () => {
   const f = fixture();
   f.completed.push({ id: "completed", title: `PR review fixture/repo#1 @ ${head}` });
-  f.args.publish = async (task) => task.id === "completed" ? "published" : "failed";
   const result = await runReviewDispatch(f.args);
-  assert.equal(result.incoming[0].status, "published");
-  assert.equal(f.calls.length, 0);
+  assert.equal(result.incoming[0].status, "existing");
 });
