@@ -141,6 +141,7 @@ No GitHub writes are made.
 `discoverReviewQueue` and `collectReviewEvidence` are read-only components for a
 future code-review queue. They require per-account GitHub readers and do not run
 PR code or tests. Searches with incomplete results or 1,000 matches fail closed.
+GitHub search covers at most 4,000 repositories, so discovery is best effort beyond that.
 Diff collection rejects comparisons at GitHub's 300-file limit, unreviewable patches,
 and diffs over 1 MiB. GitHub search and eligibility checks are not atomic; callers
 must recheck eligibility before handing off. Private PR data needs an approved
