@@ -32,6 +32,13 @@ class FakeBoard:
             return self.existing
         if path == f"{COMPANY_PATH}/budgets/overview":
             return {"policies": self.policies}
+        if path.startswith("agents/") and body is None:
+            agent_id = path.split("/")[1]
+            seat = next((agent for agent in self.existing if agent["id"] == agent_id), None)
+            if seat and "/instructions-bundle/file?" in path:
+                return {"content": seat["instructionsBundle"]["files"]["AGENTS.md"]}
+            if seat and path == f"agents/{agent_id}":
+                return {**seat, "access": {"taskAssignSource": "explicit_grant", "canAssignTasks": True}}
         if path.endswith("/budgets/policies") or path.endswith("/permissions"):
             return {}
         if path == f"{COMPANY_PATH}/agents" and body is not None:
@@ -55,6 +62,18 @@ def existing_roster():
             "runtimeConfig": {"heartbeat": {"enabled": False}},
             "instructionsBundle": {"files": {"AGENTS.md": f"Existing {name} instructions"}},
         })
+    return roster
+
+
+def roster_with_manager(instructions):
+    roster = existing_roster()
+    roster.append({
+        "id": "existing-manager", "name": "Feature Workflow Manager", "role": "general",
+        "adapterType": "opencode_local", "adapterConfig": OPENCODE,
+        "reportsTo": roster[0]["id"], "permissions": {"canCreateAgents": False},
+        "runtimeConfig": {"heartbeat": {"enabled": False}},
+        "instructionsBundle": {"files": {"AGENTS.md": instructions}},
+    })
     return roster
 
 
@@ -82,6 +101,9 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
         for name in judges:
             self.assertEqual("fixture/high", created[name]["adapterConfig"]["model"])
             self.assertIn("feedback is advisory", created[name]["instructionsBundle"]["files"]["AGENTS.md"])
+        manager = created["Feature Workflow Manager"]["instructionsBundle"]["files"]["AGENTS.md"]
+        self.assertIn("Council findings are advisory", manager)
+        self.assertNotIn("all three judges supported", manager)
         self.assertEqual({"model": "fixture/normal", "dangerouslySkipPermissions": False}, config)
         self.assertFalse(any("/budgets/" in path and body is not None for path, body, _method in board.calls))
 
@@ -92,6 +114,108 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
         )}
 
         with self.assertRaisesRegex(ValueError, "distinct provider families"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_routed_models_from_the_same_family_require_advisory_mode(self):
+        board = FakeBoard()
+        judges = {
+            "Council Architecture": "openai/gpt-6.2-sol",
+            "Council Security": "openrouter/openai/gpt-6.1-terra",
+            "Council Scope": "anthropic/claude-fixture",
+        }
+
+        with self.assertRaisesRegex(ValueError, "distinct provider families"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_unknown_gateway_cannot_claim_three_family_diversity(self):
+        board = FakeBoard()
+        judges = {
+            "Council Architecture": "gateway/openai/gpt-6.2-sol",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
+        }
+
+        with self.assertRaisesRegex(ValueError, "distinct provider families"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_provider_prefix_cannot_disguise_model_family(self):
+        board = FakeBoard()
+        judges = {
+            "Council Architecture": "openai/gpt-6.2-sol",
+            "Council Security": "anthropic/gpt-6.1-terra",
+            "Council Scope": "google/gemini-fixture",
+        }
+
+        with self.assertRaisesRegex(ValueError, "distinct provider families"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_unrecognized_openai_model_cannot_claim_a_known_family(self):
+        board = FakeBoard()
+        judges = {
+            "Council Architecture": "openai/o3unknown",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
+        }
+
+        with self.assertRaisesRegex(ValueError, "distinct provider families"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_existing_manager_requires_advisory_guidance_before_reconciliation(self):
+        board = FakeBoard(roster_with_manager("Require unanimous Council support."))
+        judges = {name: "openai/gpt-6.2-sol" for name in (
+            "Council Architecture", "Council Security", "Council Scope",
+        )}
+
+        with self.assertRaisesRegex(ValueError, "advisory"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges, advisory_council=True)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_reconciliation_preserves_manager_with_advisory_guidance(self):
+        board = FakeBoard(roster_with_manager(
+            "coordinate the advisory Council. " + PROVISIONER["ADVISORY_COUNCIL_GATE"]))
+        judges = {name: "openai/gpt-6.2-sol" for name in (
+            "Council Architecture", "Council Security", "Council Scope",
+        )}
+
+        roster = PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                           reconcile=True, judge_models=judges, advisory_council=True)
+
+        self.assertEqual("existing-manager", roster["Feature Workflow Manager"])
+        self.assertFalse(any(path.startswith("agents/existing-manager") and body is not None
+                             for path, body, _method in board.calls))
+
+    def test_reconciliation_rejects_conflicting_council_guidance(self):
+        instructions = PROVISIONER["ADVISORY_COUNCIL_GATE"] + PROVISIONER["COUNCIL_GATE"]
+        board = FakeBoard(roster_with_manager(instructions))
+        judges = {name: "openai/gpt-6.2-sol" for name in (
+            "Council Architecture", "Council Security", "Council Scope",
+        )}
+
+        with self.assertRaisesRegex(ValueError, "Council guidance"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
+                      reconcile=True, judge_models=judges, advisory_council=True)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_reconciliation_rejects_advisory_manager_in_nonadvisory_mode(self):
+        board = FakeBoard(roster_with_manager(PROVISIONER["ADVISORY_COUNCIL_GATE"]))
+        judges = {
+            "Council Architecture": "openai/gpt-fixture",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
+        }
+
+        with self.assertRaisesRegex(ValueError, "Council guidance"):
             PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, None, None,
                       reconcile=True, judge_models=judges)
         self.assertFalse(any(body is not None for _path, body, _method in board.calls))
@@ -109,9 +233,9 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
         existing[0]["adapterType"] = "hermes_local"
         board = FakeBoard(existing)
         judges = {
-            "Council Architecture": "first/model",
-            "Council Security": "second/model",
-            "Council Scope": "third/model",
+            "Council Architecture": "openai/gpt-fixture",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
         }
 
         with self.assertRaisesRegex(ValueError, "adapter"):
@@ -129,14 +253,54 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
         })
         board = FakeBoard(existing)
         judges = {
-            "Council Architecture": "first/model",
-            "Council Security": "second/model",
-            "Council Scope": "third/model",
+            "Council Architecture": "openai/gpt-fixture",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
         }
 
         with self.assertRaisesRegex(ValueError, "assignment block"):
             PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, 500, 100,
                       reconcile=True, judge_models=judges)
+        self.assertFalse(any(body is not None for _path, body, _method in board.calls))
+
+    def test_reconcile_preserves_explicitly_released_review_worker(self):
+        existing = existing_roster()
+        released = {
+            "id": "existing-lens", "name": "Review Lens Generalist", "role": "general",
+            "adapterType": "opencode_local", "adapterConfig": {"model": "fixture/previous"},
+            "reportsTo": existing[0]["id"],
+            "permissions": {"canCreateAgents": False, "authorizationPolicy": {
+                "protectedAgent": {"blockAssignment": False},
+            }},
+            "runtimeConfig": {"heartbeat": {"enabled": False}},
+        }
+        existing.append(released)
+        board = FakeBoard(existing)
+        judges = {
+            "Council Architecture": "openrouter/openai/gpt-6.2-sol",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
+        }
+
+        roster = PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, 500, 100,
+                           reconcile=True, judge_models=judges)
+
+        self.assertEqual("existing-lens", roster["Review Lens Generalist"])
+        self.assertEqual(released, board.existing[-1])
+        self.assertFalse(any(path.startswith("agents/existing-lens") and body is not None
+                             for path, body, _method in board.calls))
+
+    def test_reconcile_rejects_an_explicit_model_change(self):
+        board = FakeBoard(existing_roster())
+        judges = {
+            "Council Architecture": "openai/gpt-fixture",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
+        }
+
+        with self.assertRaisesRegex(ValueError, "Conflicting model"):
+            PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, 500, 100,
+                      reconcile=True, judge_models=judges, seat_models={"SWE": "fixture/different"})
         self.assertFalse(any(body is not None for _path, body, _method in board.calls))
 
     def test_partial_budget_and_unknown_seat_model_are_rejected(self):
@@ -164,9 +328,9 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
     def test_review_roster_keeps_specialist_lenses_and_synthesis(self):
         board = FakeBoard()
         judges = {
-            "Council Architecture": "first/model",
-            "Council Security": "second/model",
-            "Council Scope": "third/model",
+            "Council Architecture": "openai/gpt-fixture",
+            "Council Security": "anthropic/claude-fixture",
+            "Council Scope": "google/gemini-fixture",
         }
 
         PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, 500, 100,
@@ -180,7 +344,7 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
                      "Review Lens Reliability", "Review Lens MVP", "Review Lens Security", "Review Synthesis"):
             self.assertIn(name, created)
             self.assertEqual("opencode_local", created[name]["adapterType"])
-        for name in ("Review Lens Generalist", "Review Lens Reliability", "Review Lens MVP",
+        for name in ("Review Workflow Manager", "Review Lens Generalist", "Review Lens Reliability", "Review Lens MVP",
                      "Review Lens Security", "Review Synthesis"):
             self.assertTrue(created[name]["permissions"]["authorizationPolicy"]["protectedAgent"]["blockAssignment"])
         self.assertNotIn("authorizationPolicy", created["Reviewer"]["permissions"])
@@ -204,9 +368,9 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
         }
         board = FakeBoard(existing)
         judge_models = {
-            "Council Architecture": "anthropic/fixture",
-            "Council Security": "google/fixture",
-            "Council Scope": "openai/fixture",
+            "Council Architecture": "anthropic/claude-fixture",
+            "Council Security": "google/gemini-fixture",
+            "Council Scope": "openai/gpt-fixture",
         }
 
         PROVISION(board, COMPANY_ID, "Governance manifest", OPENCODE, 500, 100,

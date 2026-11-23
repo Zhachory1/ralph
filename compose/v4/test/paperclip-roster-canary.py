@@ -52,12 +52,14 @@ def check_roster(container):
         assert body is None, f"Unexpected reconciliation write: {method} {path}"
         return board(path)
 
-    models = {"Council Architecture": "anthropic/fixture", "Council Security": "google/fixture",
-              "Council Scope": "openai/fixture"}
-    def reconcile(client, adapter=config):
-        return provision(client, company, manifest, adapter, 500, 100, reconcile=True, judge_models=models)
+    models = {"Council Architecture": "anthropic/claude-fixture", "Council Security": "google/gemini-fixture",
+              "Council Scope": "openai/gpt-fixture"}
+    def reconcile(client, adapter=config, seat_models=None):
+        return provision(client, company, manifest, adapter, 500, 100, reconcile=True,
+                         judge_models=models, seat_models=seat_models)
 
     board(f"agents/{roster['Author']}", {"name": "RFC Author"}, "PATCH")
+    assert board(f"agents/{roster['Author']}/pause", {})["status"] == "paused"
     issue = board(f"{root}/issues", {"title": "Existing work", "status": "backlog"})
     full = reconcile(board)
     assert len(full) == 17 and all(full[k] == v for k, v in roster.items())
@@ -66,6 +68,7 @@ def check_roster(container):
     fixture["docker"]("restart", container)
     fixture["fixture"]["wait_for_health"](container, fixture["ORIGIN"] + "/api/health", "Paperclip", paperclip=True)
     assert reconcile(readonly) == full
+    assert board(f"agents/{roster['Author']}")["status"] == "paused"
     assert board(f"issues/{issue['id']}")["status"] == "backlog"
     for agent_id in full.values():
         instructions = board(f"agents/{agent_id}/instructions-bundle/file?path=AGENTS.md")["content"]
@@ -84,7 +87,7 @@ def check_roster(container):
         raise AssertionError("Missing explicit manager assignment grant was silently accepted")
     manager_grant(True)
     try:
-        reconcile(readonly, {"model": "fixture/different"})
+        reconcile(readonly, seat_models={"SWE": "fixture/different"})
     except ValueError as error:
         assert "model" in str(error)
     else:
@@ -113,6 +116,41 @@ def check_roster(container):
     reviewer = review_actor("Fixture reviewer", "done")
     stage = {"type": "review", "participants": [{"type": "agent", "agentId": reviewer["id"]}]}
     key = board(f"agents/{manager}/keys", {"name": "Disposable manager"})["token"]
+    ceo_key = board(f"agents/{roster['Orchestrator']}/keys", {"name": "Disposable CEO"})["token"]
+    for name in ("Review Workflow Manager", "Review Lens Generalist", "Review Lens Reliability",
+                 "Review Lens MVP", "Review Lens Security", "Review Synthesis"):
+        for replacement in ({"protectedAgent": {"blockAssignment": False}}, {}):
+            status, denied = bearer(container, ceo_key, f"agents/{full[name]}/permissions", method="PATCH", body={
+                "canCreateAgents": False, "canAssignTasks": False, "authorizationPolicy": replacement,
+            })
+            assert status == 403, (name, status, denied)
+        status, denied = bearer(container, key, f"{root}/issues", body={
+            "title": f"Blocked assignment to {name}", "status": "backlog", "assigneeAgentId": full[name],
+        })
+        assert status == 403, (name, status, denied)
+    lens = full["Review Lens Generalist"]
+    permission = {"canCreateAgents": False, "canAssignTasks": False,
+                  "authorizationPolicy": {"protectedAgent": {"blockAssignment": False}}}
+    board(f"agents/{lens}/permissions", permission, "PATCH")
+    status, assigned = bearer(container, key, f"{root}/issues", body={
+        "title": "Assignment after board release", "status": "backlog", "assigneeAgentId": lens,
+    })
+    assert status == 201 and assigned["assigneeAgentId"] == lens, (status, assigned)
+    permission["authorizationPolicy"]["protectedAgent"]["blockAssignment"] = True
+    board(f"agents/{lens}/permissions", permission, "PATCH")
+    print("PASS: agents cannot release or assign protected review seats; the board can release them", flush=True)
+
+    uncapped_company = board("companies", {"name": "Advisory fixture"})["id"]
+    advisory_models = {name: "openai/fixture" for name in models}
+    advisory = provision(board, uncapped_company, manifest, config, None, None, reconcile=True,
+                         judge_models=advisory_models, advisory_council=True)
+    policies = board(f"companies/{uncapped_company}/budgets/overview")["policies"]
+    assert not any(policy["isActive"] and policy["hardStopEnabled"] for policy in policies)
+    instructions = board(f"agents/{advisory['Feature Workflow Manager']}/instructions-bundle/file?path=AGENTS.md")["content"]
+    assert "Council findings are advisory" in instructions
+    assert "all three judges supported" not in instructions
+    print("PASS: same-family Council is advisory and creates no spend caps", flush=True)
+
     status, delegated = bearer(container, key, f"{root}/issues", body={
         "title": "Delegate fixture task", "status": "backlog", "parentId": issue["id"], "assigneeAgentId": recipient["id"],
         "executionPolicy": {"stages": [stage]},

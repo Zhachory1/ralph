@@ -18,6 +18,43 @@ LENS_GUIDANCE = (
     "severity, whether a change is required, file, line, evidence and suggestion. Do not run PR code "
     "or tests, publish reviews, or merge."
 )
+COUNCIL_GATE = (
+    "Before requesting confirmation, re-read the RFC and ensure it is the exact revision all three judges "
+    "supported; if it changed, obtain a new review. "
+)
+ADVISORY_COUNCIL_GATE = (
+    "Before requesting confirmation, verify the exact RFC revision reviewed by all three judges; "
+    "if it changed, obtain a new review. Council findings are advisory and do not establish model-family "
+    "diversity. Include dissent in the Director's decision; unanimity is not a prerequisite. "
+)
+
+
+def valid_model(model):
+    return isinstance(model, str) and bool(re.fullmatch(r"[^/\s]+/[^/\s]+(?:/[^/\s]+)*", model))
+
+
+def council_family(model):
+    parts = model.lower().split("/")
+    provider = parts[1] if parts[0] == "openrouter" and len(parts) >= 3 else parts[0]
+    provider_family = {
+        "openai": "openai", "azure": "openai", "azure-openai": "openai",
+        "anthropic": "anthropic", "google": "google", "xai": "xai",
+        "deepseek": "deepseek", "mistral": "mistral", "mistralai": "mistral",
+        "meta": "meta", "meta-llama": "meta",
+    }.get(provider)
+    name = parts[-1].split("#", 1)[0]
+    if name.startswith("gpt-") or re.match(r"^o(?:1|3|4)(?:-|$)", name):
+        model_family = "openai"
+    else:
+        model_family = next((family for family, prefixes in (
+            ("anthropic", ("claude-",)),
+            ("google", ("gemini-",)),
+            ("xai", ("grok-",)),
+            ("deepseek", ("deepseek-",)),
+            ("mistral", ("mistral-", "mixtral-", "codestral-")),
+            ("meta", ("llama-",)),
+        ) if name.startswith(prefixes)), None)
+    return model_family if model_family == provider_family else None
 
 SEATS = (
     ("Orchestrator", "ceo", "opencode_local", "Route requests and assign approved work."),
@@ -48,8 +85,7 @@ WORKFLOW_SEATS = (
      "If all judges already finished, read them before yielding. "
      "When creating a build issue, set executionPolicy.stages to a review stage with the independent Reviewer "
      "as agent participant. Verify the returned stage and that its Reviewer is not the Developer before dispatch. "
-     "Before requesting confirmation, re-read the RFC and ensure it is the exact revision all three judges "
-     "supported; if it changed, obtain a new review. Keep the open RFC confirmation issue assigned to yourself. "
+     + COUNCIL_GATE + "Keep the open RFC confirmation issue assigned to yourself. "
      "Request human_only confirmation addressed to the Director, targeting the exact document revision, "
      "with continuationPolicy wake_assignee_on_accept. Do not close or reassign the issue while waiting. "
      "On the acceptance wake, verify the authenticated acceptance, target and resolver. "
@@ -90,7 +126,8 @@ WORKFLOW_SEATS = (
 )
 ALIASES = {"Orchestrator": "Ralph Orchestrator", "Author": "RFC Author", "SWE": "OpenCode Developer", "SRE": "SRE Ops"}
 MANAGERS = {"Feature Workflow Manager", "Review Workflow Manager"}
-REVIEW_WORKERS = {
+REVIEW_SEATS = {
+    "Review Workflow Manager",
     "Review Lens Generalist", "Review Lens Reliability", "Review Lens MVP",
     "Review Lens Security", "Review Synthesis",
 }
@@ -103,15 +140,13 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents,
     if budgets_enabled and (
             type(company_cents) is not int or type(agent_cents) is not int or not 0 < agent_cents <= company_cents):
         raise ValueError("Set positive integer budgets in cents; company budget must cover one seat")
-    if not manifest.strip() or not re.fullmatch(r"[^/\s]+/[^/\s]+(?:/[^/\s]+)*", opencode.get("model", "")):
+    if not manifest.strip() or not valid_model(opencode.get("model")):
         raise ValueError("Provide a nonempty governance manifest and an explicit OpenCode provider/model")
     all_names = {name for name, *_ in SEATS + WORKFLOW_SEATS}
     if seat_models is None:
         seat_models = {}
     if not isinstance(seat_models, dict) or any(
-            name not in all_names or not isinstance(model, str)
-            or not re.fullmatch(r"[^/\s]+/[^/\s]+(?:/[^/\s]+)*", model)
-            for name, model in seat_models.items()):
+            name not in all_names or not valid_model(model) for name, model in seat_models.items()):
         raise ValueError("Configure valid provider/model IDs for known seats")
     existing = board(f"{company}/agents")
     if existing and not reconcile:
@@ -121,10 +156,10 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents,
     if reconcile:
         judges = {name for name, *_ in WORKFLOW_SEATS if name.startswith("Council ")}
         if not isinstance(judge_models, dict) or set(judge_models) != judges or not all(
-                isinstance(v, str) and re.fullmatch(r"[\w.-]+/[\w.-]+", v) for v in judge_models.values()
-        ):
+                valid_model(v) for v in judge_models.values()):
             raise ValueError("Configure three explicit Council models")
-        if not advisory_council and len({v.split("/")[0] for v in judge_models.values()}) != 3:
+        families = [council_family(model) for model in judge_models.values()]
+        if not advisory_council and (None in families or len(set(families)) != 3):
             raise ValueError("Configure Council models from distinct provider families, or use advisory mode")
         if any(name in seat_models and seat_models[name] != judge_models[name] for name in judges):
             raise ValueError("Council model conflicts with the seat model")
@@ -160,20 +195,28 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents,
                 or (not root and "Orchestrator" not in roster)
                 or seat["reportsTo"] != (None if root else roster["Orchestrator"])):
             raise ValueError(f"Conflicting seat identity, adapter or reporting line: {name}")
-        model = seat_models.get(name) or (judge_models or {}).get(name) or opencode["model"]
+        model = seat_models.get(name) or (judge_models or {}).get(name)
         if model and seat["adapterConfig"].get("model") != model:
             raise ValueError(f"Conflicting model for {name}; existing configuration preserved")
         if seat["permissions"].get("canCreateAgents") or seat["runtimeConfig"].get("heartbeat", {}).get("enabled"):
             raise ValueError(f"Conflicting hiring or heartbeat policy for {name}")
-        if name in REVIEW_WORKERS:
+        if name in REVIEW_SEATS:
             authorization = seat["permissions"].get("authorizationPolicy")
             protected = authorization.get("protectedAgent") if isinstance(authorization, dict) else None
-            if not isinstance(protected, dict) or protected.get("blockAssignment") is not True:
+            if not isinstance(protected, dict) or not isinstance(protected.get("blockAssignment"), bool):
                 raise ValueError(f"Missing review assignment block for {name}; existing configuration preserved")
         if name in MANAGERS:
             access = board(f"agents/{seat['id']}")["access"]
             if access.get("taskAssignSource") != "explicit_grant" or not access.get("canAssignTasks"):
                 raise ValueError(f"Missing explicit assignment grant for {name}; restore it on the board")
+        if name == "Feature Workflow Manager":
+            instructions = board(f"agents/{seat['id']}/instructions-bundle/file?path=AGENTS.md").get("content")
+            expected_gate = ADVISORY_COUNCIL_GATE if advisory_council else COUNCIL_GATE
+            other_gate = COUNCIL_GATE if advisory_council else ADVISORY_COUNCIL_GATE
+            if not isinstance(instructions, str) or expected_gate not in instructions or other_gate in instructions:
+                mode = "advisory" if advisory_council else "non-advisory"
+                raise ValueError(f"Existing Feature Workflow Manager's Council guidance conflicts with {mode} mode; "
+                                 "existing instructions preserved")
         roster[name] = seat["id"]
         budget("agent", seat["id"], agent_cents, apply=False)
 
@@ -185,8 +228,11 @@ def provision(board, company_id, manifest, opencode, company_cents, agent_cents,
         config = {**opencode, "model": seat_models.get(name) or (judge_models or {}).get(name) or opencode["model"]}
         if advisory_council and name in (judge_models or {}):
             duty += " Your feedback is advisory; do not claim independent model-family diversity."
+        if advisory_council and name == "Feature Workflow Manager":
+            duty = duty.replace("coordinate the independent Council", "coordinate the advisory Council")
+            duty = duty.replace(COUNCIL_GATE, ADVISORY_COUNCIL_GATE)
         permissions = {"canCreateAgents": False, "canCreateSkills": False}
-        if name in REVIEW_WORKERS:
+        if name in REVIEW_SEATS:
             permissions["authorizationPolicy"] = {"protectedAgent": {
                 "blockAssignment": True,
                 "blockReason": "Review containment must be verified before assignment.",
