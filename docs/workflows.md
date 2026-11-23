@@ -2,6 +2,9 @@
 
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
+The review roster includes generalist, reliability, MVP and security lenses, and synthesis.
+The manager chooses lite, default or deep review. Provisioning blocks assignment to these
+new seats; it does not connect them to a PR queue or restrict their tools.
 
 When the Feature Workflow Manager creates a build issue, it must set
 `executionPolicy.stages` to `[{"type":"review","participants":[{"type":"agent","agentId":"<reviewer-id>"}]}]`
@@ -12,7 +15,7 @@ For a configured code PR the Developer resubmits the corrected head by moving th
 `in_review`. Paperclip selects the independent Reviewer. Its `done` transition with
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
-head needs another review. GitHub approval and merge remain separate human decisions.
+head needs another review. This stage alone does not submit a GitHub review or authorize a merge.
 When the Developer already has `GH_TOKEN`, it uses that existing credential through its
 terminal for the assigned repository work instead of requesting another connection.
 
@@ -33,6 +36,7 @@ in their own task comments, in ordinary language. The Manager reads each attribu
 the current revision. If a conclusion is unclear or missing, it creates a backlog clarification
 task for that judge, links it as a blocker, and then starts it; no format checker is involved.
 Only unanimous support leads to a Director-only confirmation of the exact reviewed RFC revision.
+Same-family Council seats, when explicitly configured, are advisory and do not provide model diversity.
 The Manager rechecks the current revision before requesting it and reviews again if it changed.
 Paperclip records the authors and enforces the human gate; interpreting the comments is the
 Manager's responsibility.

@@ -33,13 +33,9 @@ def check_roster(container):
     seats = {seat["name"]: seat for seat in board(f"{root}/agents")}
     assert set(seats) == {"Orchestrator", "Author", "Reviewer", "SWE", "SRE"}
     for name, seat in seats.items():
-        coding = name in {"SWE", "SRE"}
         assert seat["id"] == roster[name]
-        assert seat["adapterType"] == ("opencode_local" if coding else "hermes_local")
-        if coding:
-            assert seat["adapterConfig"]["model"] == config["model"]
-        else:
-            assert seat["adapterConfig"]["hermesCommand"] == "/opt/hermes/bin/hermes"
+        assert seat["adapterType"] == "opencode_local"
+        assert seat["adapterConfig"]["model"] == config["model"]
         assert seat["reportsTo"] == (None if name == "Orchestrator" else roster["Orchestrator"])
         assert seat["runtimeConfig"]["heartbeat"]["enabled"] is False
         assert seat["permissions"]["canCreateAgents"] is False, name
@@ -64,7 +60,9 @@ def check_roster(container):
     board(f"agents/{roster['Author']}", {"name": "RFC Author"}, "PATCH")
     issue = board(f"{root}/issues", {"title": "Existing work", "status": "backlog"})
     full = reconcile(board)
-    assert len(full) == 12 and all(full[k] == v for k, v in roster.items())
+    assert len(full) == 17 and all(full[k] == v for k, v in roster.items())
+    assert {"Review Workflow Manager", "Review Lens Generalist", "Review Lens Reliability", "Review Lens MVP",
+            "Review Lens Security", "Review Synthesis"} <= set(full)
     fixture["docker"]("restart", container)
     fixture["fixture"]["wait_for_health"](container, fixture["ORIGIN"] + "/api/health", "Paperclip", paperclip=True)
     assert reconcile(readonly) == full

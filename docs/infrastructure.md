@@ -34,6 +34,8 @@ no Ralph-owned MCP server and does not start or replace any legacy stack. See th
 
 Use [roster reconciliation](operations.md#provision-the-paperclip-organization) after
 authenticated startup to add missing v4.1 seats to a populated company.
+The provisioner defines OpenCode seats, including the review lenses and synthesis.
+It does not migrate existing seats, enforce a no-shell review boundary, or start a queue.
 
 The [PostgreSQL deployment](operations.md#prepare-a-private-paperclip-target) layers
 `compose/v4/paperclip-postgres.yml` over that file. PostgreSQL 17 has its own named
