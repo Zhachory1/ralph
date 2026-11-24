@@ -34,9 +34,17 @@ function fixture() {
       const query = args.find((arg) => arg.startsWith("q="));
       const assignee = query.match(/assignee:([a-z0-9-]+)/)[1];
       searches.push({ viewer, assignee, args });
-      const items = rows[`${viewer}:${assignee}`] ?? [];
+      const range = query.match(/ created:(\S+)\.\.(\S+)/);
+      const sort = args.find((arg) => arg.startsWith("order="));
+      let items = rows[`${viewer}:${assignee}`] ?? [];
+      if (range) items = items.filter((row) => row.created_at >= range[1] && row.created_at <= range[2]);
+      if (sort) {
+        const ordered = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
+        return JSON.stringify({ total_count: items.length, incomplete_results: metadata.incomplete,
+          items: ordered.length ? [sort === "order=asc" ? ordered[0] : ordered.at(-1)] : [] });
+      }
       const pages = [];
-      for (let offset = 0; offset < Math.max(items.length, 1); offset += 100) {
+      for (let offset = 0; offset < Math.max(Math.min(items.length, 1000), 1); offset += 100) {
         pages.push({ total_count: items.length, incomplete_results: metadata.incomplete, items: items.slice(offset, offset + 100) });
       }
       return JSON.stringify(pages);
@@ -74,10 +82,72 @@ test("an inaccessible PR makes discovery fail instead of returning an incomplete
   await assert.rejects(discoverReviewQueue(f), /detail unavailable/i);
 });
 
-test("a full GitHub search fails rather than silently truncating the queue", async () => {
+function cappedFixture({ sameSecond = false } = {}) {
   const f = fixture();
-  f.rows["fixture-human:fixture-human"] = Array.from({ length: 1000 }, (_, index) => candidate("fixture/ours", index + 1));
+  for (const key of Object.keys(f.rows)) f.rows[key] = [];
+  f.rows["fixture-human:fixture-human"] = Array.from({ length: 1001 }, (_, index) => ({
+    ...candidate("fixture/many", index + 1),
+    created_at: `2026-11-23T00:00:0${sameSecond ? 0 : index % 3}Z`,
+  }));
+  for (let number = 1; number <= 1001; number++) {
+    f.prs[`fixture/many#${number}`] = { state: "OPEN", isDraft: false, headRefOid: heads[1],
+      assignees: [{ login: "fixture-human" }], author: { login: "outside" }, title: "Incoming" };
+  }
+  return f;
+}
+
+test("partitions a capped search to recover all results and deduplicates across viewers", async () => {
+  const f = cappedFixture();
+  f.rows["fixture-bot:fixture-human"] = [f.rows["fixture-human:fixture-human"][0]];
+  const queue = await discoverReviewQueue(f);
+  assert.equal(queue.incoming.length, 1001);
+  assert.equal(f.reads.length, 1001);
+  assert.ok(f.searches.some(({ args }) => args.some((arg) => arg.includes(" created:"))));
+});
+
+test("a single-second capped partition fails closed", async () => {
+  const f = cappedFixture({ sameSecond: true });
   await assert.rejects(discoverReviewQueue(f), /search.*limit/i);
+  assert.deepEqual(f.reads, []);
+});
+
+test("an old outlier does not exhaust partition requests for a dense search", async () => {
+  const f = cappedFixture();
+  const rows = f.rows["fixture-human:fixture-human"];
+  rows[0].created_at = "2008-04-10T00:00:00Z";
+  for (let i = 1; i < rows.length; i++) rows[i].created_at = `2026-11-23T00:00:0${i % 2}Z`;
+  assert.equal((await discoverReviewQueue(f)).incoming.length, 1001);
+  assert.equal(f.searches.filter(({ args }) => args.some((arg) => arg.includes(" created:"))).length, 2);
+});
+
+test("missing results or count drift in a partition fail before reading any PR", async () => {
+  for (const drift of [false, true]) {
+    const f = cappedFixture();
+    const original = f.gh;
+    f.gh = async (viewer, ...args) => {
+      const output = await original(viewer, ...args);
+      if (!args.some((arg) => arg.includes(" created:"))) return output;
+      const pages = JSON.parse(output);
+      pages.at(-1).items.pop();
+      if (drift) for (const page of pages) page.total_count -= 1;
+      return JSON.stringify(pages);
+    };
+    await assert.rejects(discoverReviewQueue(f), /incomplete.*search/i);
+    assert.deepEqual(f.reads, []);
+  }
+});
+
+test("rows outside a time partition fail closed even when counts match", async () => {
+  const f = cappedFixture();
+  const original = f.gh;
+  f.gh = async (viewer, ...args) => {
+    const output = await original(viewer, ...args);
+    if (!args.some((arg) => arg.includes(" created:"))) return output;
+    const pages = JSON.parse(output);
+    pages[0].items[0].created_at = "2026-11-22T00:00:00Z";
+    return JSON.stringify(pages);
+  };
+  await assert.rejects(discoverReviewQueue(f), /incomplete.*search/i);
   assert.deepEqual(f.reads, []);
 });
 

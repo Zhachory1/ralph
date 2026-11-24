@@ -3,6 +3,70 @@ import { createPrEligibility, parseAssignees } from "./github-pr-eligibility.mjs
 
 const repoSlug = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/;
 const repoUrl = /^https:\/\/api\.github\.com\/repos\/([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100})$/i;
+const searchLimit = 1000;
+
+function timestamp(second) {
+  return new Date(second * 1000).toISOString().replace(".000Z", "Z");
+}
+
+function createdSecond(row) {
+  const second = Date.parse(row?.created_at) / 1000;
+  if (!Number.isSafeInteger(second) || timestamp(second) !== row.created_at) {
+    throw new Error("Incomplete GitHub search: invalid creation time");
+  }
+  return second;
+}
+
+async function readAssignedSearch(gh, viewer, assignee) {
+  const query = `is:pr is:open draft:false assignee:${assignee}`;
+  let budget = 64;
+  async function readPages(start, end) {
+    if (budget-- === 0) throw new Error("Incomplete GitHub search: partition limit");
+    const qualifier = start === undefined ? "" : ` created:${timestamp(start)}..${timestamp(end)}`;
+    const pages = JSON.parse(await gh(viewer, "api", "--method", "GET", "--paginate", "--slurp", "search/issues",
+      "-f", `q=${query}${qualifier}`, "-F", "per_page=100"));
+    if (!Array.isArray(pages) || pages.length === 0) throw new Error("Incomplete GitHub search");
+    const total = pages[0]?.total_count;
+    if (!Number.isSafeInteger(total) || total < 0 || pages.some((page) => page?.incomplete_results !== false
+        || page.total_count !== total || !Array.isArray(page.items) || page.items.length > 100)) {
+      throw new Error("Incomplete GitHub search");
+    }
+    const rows = pages.flatMap((page) => page.items);
+    if (rows.length !== Math.min(total, searchLimit) || (start !== undefined && rows.some((row) => {
+      const created = createdSecond(row);
+      return created < start || created > end;
+    }))) throw new Error("Incomplete GitHub search");
+    return { total, rows };
+  }
+
+  const root = await readPages();
+  if (root.total < searchLimit) return root.rows;
+
+  async function boundary(order) {
+    const page = JSON.parse(await gh(viewer, "api", "--method", "GET", "search/issues",
+      "-f", `q=${query}`, "-f", "sort=created", "-f", `order=${order}`, "-F", "per_page=1"));
+    if (page?.incomplete_results !== false || page.total_count !== root.total
+        || !Array.isArray(page.items) || page.items.length !== 1) {
+      throw new Error("Incomplete GitHub search: could not verify creation bounds");
+    }
+    return createdSecond(page.items[0]);
+  }
+  async function split(start, end, { total, rows }) {
+    if (start >= end) throw new Error("GitHub search reached its result limit in a single second");
+    const sample = rows.map(createdSecond).sort((a, b) => a - b);
+    if (sample[0] < start || sample.at(-1) > end) throw new Error("Incomplete GitHub search: creation bounds drift");
+    // Split near the observed results rather than paging through years of empty time.
+    const mid = Math.min(sample[Math.floor(sample.length / 2)], end - 1);
+    const left = await readPages(start, mid);
+    const right = await readPages(mid + 1, end);
+    if (left.total + right.total !== total) throw new Error("Incomplete GitHub search: partition count drift");
+    return [
+      ...(left.total < searchLimit ? left.rows : await split(start, mid, left)),
+      ...(right.total < searchLimit ? right.rows : await split(mid + 1, end, right)),
+    ];
+  }
+  return split(await boundary("asc"), await boundary("desc"), root);
+}
 
 export async function discoverReviewQueue({ accounts, gh }) {
   const identities = parseAssignees(Array.isArray(accounts) ? accounts.join(",") : "");
@@ -16,15 +80,7 @@ export async function discoverReviewQueue({ accounts, gh }) {
   const candidates = new Map();
   for (const viewer of identities) {
     for (const assignee of identities) {
-      const pages = JSON.parse(await gh(viewer, "api", "--method", "GET", "--paginate", "--slurp", "search/issues",
-        "-f", `q=is:pr is:open draft:false assignee:${assignee}`, "-F", "per_page=100"));
-      if (!Array.isArray(pages) || pages.length === 0) throw new Error("Incomplete GitHub search");
-      const total = pages[0]?.total_count;
-      if (!Number.isSafeInteger(total) || total < 0 || total >= 1000) throw new Error("Review search reached its result limit");
-      if (pages.some((page) => page?.incomplete_results !== false || page.total_count !== total
-          || !Array.isArray(page.items) || page.items.length > 100)) throw new Error("Incomplete GitHub search");
-      const rows = pages.flatMap((page) => page.items);
-      if (rows.length !== total) throw new Error("Incomplete GitHub search");
+      const rows = await readAssignedSearch(gh, viewer, assignee);
       const seen = new Set();
       for (const row of rows) {
         const repo = typeof row?.repository_url === "string" ? row.repository_url.match(repoUrl)?.[1] : null;
