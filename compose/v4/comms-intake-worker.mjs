@@ -190,11 +190,21 @@ async function main() {
       "Usage: comms-intake-worker.mjs BOARD_ORIGIN COMPANY_ID ROUTINE_ID gmail|chat ALLOWLIST < normalized-event.json");
   }
   const allowlist = parseAllowlist(source, allowlistArg);
-  const event = JSON.parse(readFileSync(0, "utf8"));
-  const normalized = source === "gmail" ? normalizeGmailEvent(event) : normalizeChatEvent(event);
-  const allowed = source === "gmail"
-    ? isAllowedGmailSender(normalized.payload.from, allowlist)
-    : isAllowedChatSpace(normalized.payload.space, allowlist);
+  const input = readFileSync(0, "utf8");
+  let normalized;
+  let allowed;
+  try {
+    const event = JSON.parse(input);
+    normalized = source === "gmail" ? normalizeGmailEvent(event) : normalizeChatEvent(event);
+    allowed = source === "gmail"
+      ? isAllowedGmailSender(normalized.payload.from, allowlist)
+      : isAllowedChatSpace(normalized.payload.space, allowlist);
+  } catch (error) {
+    if (source !== "chat") throw error;
+    console.error("Invalid comms intake input");
+    process.exitCode = 2;
+    return;
+  }
   if (!allowed) {
     console.log(`refused: ${source} sender/space is not on the allowlist; no Routine triggered`);
     return;

@@ -2,6 +2,9 @@
 
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
+The review roster includes generalist, reliability, MVP and security lenses, and synthesis.
+The manager chooses lite, default or deep review. Provisioning blocks assignment to the
+new manager and review seats; it does not connect them to a PR queue or restrict their tools.
 
 When the Feature Workflow Manager creates a build issue, it must set
 `executionPolicy.stages` to `[{"type":"review","participants":[{"type":"agent","agentId":"<reviewer-id>"}]}]`
@@ -12,7 +15,11 @@ For a configured code PR the Developer resubmits the corrected head by moving th
 `in_review`. Paperclip selects the independent Reviewer. Its `done` transition with
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
-head needs another review. GitHub approval and merge remain separate human decisions.
+head needs another review. Technical acceptance in Paperclip does not submit a
+GitHub review. Ralph's separate code-review flow can approve PRs on GitHub;
+merge still requires explicit human authorization.
+When the Developer already has `GH_TOKEN`, it uses that existing credential through its
+terminal for the assigned repository work instead of requesting another connection.
 
 The Feature Workflow Manager applies the same review-stage primitive to the Author's RFC
 issue, naming itself -- not a human -- the review participant, and verifies the returned
@@ -30,7 +37,9 @@ are Done, including when task nesting is flattened. Judges put their conclusions
 in their own task comments, in ordinary language. The Manager reads each attributed comment for
 the current revision. If a conclusion is unclear or missing, it creates a backlog clarification
 task for that judge, links it as a blocker, and then starts it; no format checker is involved.
-Only unanimous support leads to a Director-only confirmation of the exact reviewed RFC revision.
+With three-family Council, only unanimous support leads to a Director-only confirmation.
+Same-family Council seats, when explicitly configured, are advisory: dissent is included in
+the Director's confirmation, but unanimity is not required and model diversity is not claimed.
 The Manager rechecks the current revision before requesting it and reviews again if it changed.
 Paperclip records the authors and enforces the human gate; interpreting the comments is the
 Manager's responsibility.
@@ -60,16 +69,18 @@ to the Director. Paperclip's native Done transition resumes a blocked downstream
 default even if the RFC changed from the Director-approved revision B to an unapproved C --
 that native release is not itself a revision or publication check, and most deployments do not
 need it to be. A deployment that wants Done to require the exact approved revision can opt into
-that stricter behavior with the canary's `--require-downstream-gate` flag. Publication safety
-is the separate, already-covered storage check: it re-reads the Director's accepted
-confirmation, fetches the immutable revision it names, commits B byte-for-byte to a disposable
-Git repository, refuses unapproved C, and verifies a retry leaves the same commit in place. It
-is not a live publisher.
+that stricter behavior with the canary's `--require-downstream-gate` flag. The canary separately
+tests a Git-storage check against the accepted revision in a disposable repository. That check
+is not a live publisher or a requirement on the Librarian.
 
 The offline routing canary uses scripted Hermes proposals and Council verdicts with real
 Paperclip confirmations and assignment records. Initiative approval is requested only after
 Council PASS and read back for the exact revision before assignment. Denials, stale evidence,
 and unresolved gates create no assignment. This does not wire Hermes or Council into live routing.
+
+The opt-in Chat bridge verifies Google's token before forwarding human messages to the
+existing allowlisted, idempotent Routine intake. Offline checks use synthetic signed tokens
+and a disposable Paperclip board; they do not activate a live webhook or send.
 
 The first integrated slice connects `draftRfc`, the Council panel and `decideRequestRoute`
 end to end, as a library function and as a host CLI that reuses the Routine audit worker's
@@ -96,10 +107,22 @@ the dossier in Paperclip. The host scheduler must run ticks serially. Nothing wr
 With `--reconcile` and a named reviewer, a submitted review on the exact audited head
 closes the Paperclip issue without editing the dossier.
 
+The code-review scanner discovers assigned, non-draft PRs across configured accounts and
+creates a Paperclip manager task per exact head. The manager creates the selected lens tasks
+and a dependent synthesis, then waits for synthesis. Once all selected lenses report,
+synthesis rechecks eligibility and posts a GitHub `APPROVE` on the exact reviewed head if
+there are no actionable findings and the configured publisher is not the PR author. It posts
+`COMMENT` for actionable findings and holds without posting if evidence is incomplete or the
+publisher would approve its own PR. Approval does not authorize a merge. Review-seat tool
+isolation remains open (#327).
+
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay
 unsearchable across the refresh. This checks the search boundary in a fixture, not Hindsight
 retention or production refresh.
+
+An optional QMD service can join the Paperclip network without recreating the board. Its
+index scope is an operator decision; a search result does not confer approval.
 
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve
@@ -289,12 +312,10 @@ Paperclip wakes the **current assignee**, not necessarily the agent that created
 card. The Feature Workflow Manager keeps the confirmation issue open and assigned
 to itself; the Director is the confirmation's addressee, not the issue assignee.
 The manager uses the acceptance wake to assign the Librarian one publication task
-keyed by confirmation ID. The Librarian verifies the decision, opens the docs PR
-with unchanged bytes, and records its own receipt. No polling job replays old
+keyed by confirmation ID. The Librarian uses the Manager's handoff, opens the docs
+PR, and returns its result without re-checking approval. No polling job replays old
 approvals. An issue with no agent assignee, or a closed issue, cannot provide
 this wake. A missing assignment or an operator-published PR is not a pass.
-The Librarian reads the source issue's native interactions and immutable document
-revision with its own run credentials; a missing or inaccessible receipt stops publication.
 
 - One pass, from a fresh checkout that is truth for every decision; the knowledge index only proposes candidates, because it can run up to an hour behind.
 - Promotes a document from `in review` to `approved` once its newest `prs:` entry has merged and none is still open (`draft` is never promoted). Fills the memory front matter it can derive (`kind` from the folder, `date` and `source` from the file name or first commit, `profile` from that commit's author when it maps to a `ralph-*` profile) and nothing else; what it cannot derive goes in the pull request body. Merges duplicate notes and marks superseded ones, only when a pair passes three gates (same `kind`, a shared concrete anchor, one sentence true of both with no "and"), at most five of each per run. Archives a `projects/` folder only when every document in it is `approved` or `superseded` and every issue those documents name is closed (a folder whose documents name no issue is never archived, and is listed in the pull request body instead). Rewrites path links to anything moved, and regenerates folder indexes, leaving the repository's root `README.md` and any `README.md` that carries an `id` or `status` alone.

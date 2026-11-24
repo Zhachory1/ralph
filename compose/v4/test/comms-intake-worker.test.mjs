@@ -18,7 +18,8 @@ function runWithStdin(command, args, { env, input }) {
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve({ stdout, stderr }) : reject(new Error(stderr || `exit ${code}`))));
+    child.on("close", (code) => (code === 0 ? resolve({ stdout, stderr })
+      : reject(Object.assign(new Error(stderr || `exit ${code}`), { exitCode: code }))));
     child.stdin.end(input);
   });
 }
@@ -197,4 +198,24 @@ test("the CLI trusts stdin, checks the allowlist, and dedupes a retriggered Gmai
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("the CLI distinguishes invalid input from a retryable board failure", async () => {
+  const worker = fileURLToPath(new URL("../comms-intake-worker.mjs", import.meta.url));
+  const args = [worker, "http://127.0.0.1:9", "22222222-2222-2222-2222-222222222222",
+    "11111111-1111-1111-1111-111111111111", "chat", "spaces/demo"];
+  const env = { PATH: process.env.PATH, PAPERCLIP_API_KEY: "fixture-token" };
+  const invalid = await runWithStdin("node", args, {
+    env, input: JSON.stringify(chatEvent({ message: { text: "x".repeat(4001) } })),
+  }).then(() => null, (error) => error);
+  assert.equal(invalid?.exitCode, 2);
+  const unavailable = await runWithStdin("node", args, {
+    env, input: JSON.stringify(chatEvent()),
+  }).then(() => null, (error) => error);
+  assert.equal(unavailable?.exitCode, 1);
+  const invalidGmail = await runWithStdin("node", [...args.slice(0, 4), "gmail", "example.com"], {
+    env, input: JSON.stringify(gmailEvent({ messageId: "invalid" })),
+  }).then(() => null, (error) => error);
+  assert.equal(invalidGmail?.exitCode, 1);
+  assert.match(invalidGmail.message, /Invalid Gmail messageId/);
 });
