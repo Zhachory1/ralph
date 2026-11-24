@@ -6,6 +6,7 @@ import { collectReviewEvidence } from "../pr-review-evidence.mjs";
 const repo = "fixture/project";
 const head = "a".repeat(40);
 const base = "b".repeat(40);
+const mergeBase = "c".repeat(40);
 const diff = "diff --git a/example.js b/example.js\n--- a/example.js\n+++ b/example.js\n@@ -1 +1 @@\n-old\n+new\n";
 
 function fixture() {
@@ -15,17 +16,25 @@ function fixture() {
   let comparison = { files: [{ filename: "example.js", status: "modified", additions: 1, deletions: 1,
     patch: "@@ -1 +1 @@\n-old\n+new" }] };
   let patch = diff;
+  const tree = (paths, mode = "100644") => paths.map((path) => ({ path, mode, sha: head, type: "blob" }));
+  const before = tree(["example.js", "other.js", "old.js"]);
+  let after = tree(["example.js", "other.js", "new.js"]);
   return {
     calls,
     setPr: (value) => { pr = value; },
     setComparison: (value) => { comparison = value; },
     setPatch: (value) => { patch = value; },
+    setMode: () => { after = tree(["example.js"], "100755"); },
     options: {
       repo, number: 7, head, assignees: ["fixture-bot", "fixture-human"],
       readPr: async () => pr,
       gh: async (...args) => {
         calls.push(args);
-        return args.includes("--header") ? patch : JSON.stringify(comparison);
+        if (args[1].includes("/git/trees/")) {
+          assert.match(args[1], new RegExp(`/git/trees/(${mergeBase}|${head})\\?recursive=1$`));
+          return JSON.stringify({ truncated: false, tree: args[1].includes(mergeBase) ? before : after });
+        }
+        return args.includes("--header") ? patch : JSON.stringify({ merge_base_commit: { sha: mergeBase }, ...comparison });
       },
     },
   };
@@ -37,6 +46,8 @@ test("collects the exact base and head diff without executing PR code", async ()
   assert.deepEqual(f.calls, [
     ["api", `repos/${repo}/compare/${base}...${head}`],
     ["api", "--header", "Accept: application/vnd.github.v3.diff", `repos/${repo}/compare/${base}...${head}`],
+    ["api", `repos/${repo}/git/trees/${mergeBase}?recursive=1`],
+    ["api", `repos/${repo}/git/trees/${head}?recursive=1`],
   ]);
 });
 
@@ -221,4 +232,36 @@ test("accepts a complete pure rename", async () => {
     additions: 0, deletions: 0 }] });
   f.setPatch(raw);
   assert.equal((await collectReviewEvidence(f.options)).diff, raw);
+});
+
+test("refuses altered context even when edit positions and content match", async () => {
+  const f = fixture();
+  f.setComparison({ files: [{ filename: "example.js", status: "modified", additions: 1, deletions: 1,
+    patch: "@@ -1,2 +1,2 @@\n-old\n+new\n real context" }] });
+  f.setPatch(diff.replace("@@ -1 +1 @@", "@@ -1,2 +1,2 @@") + " changed context\n");
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("accepts shorter raw context when all displayed lines are pinned", async () => {
+  const f = fixture();
+  f.setComparison({ files: [{ filename: "example.js", status: "modified", additions: 1, deletions: 1,
+    patch: "@@ -1,2 +1,2 @@\n-old\n+new\n real context" }] });
+  assert.equal((await collectReviewEvidence(f.options)).diff, diff);
+});
+
+test("accepts an exact mode-only change and refuses an altered mode", async () => {
+  const f = fixture();
+  const metadata = "diff --git a/example.js b/example.js\nold mode 100644\nnew mode 100755\n";
+  f.setMode();
+  f.setComparison({ files: [{ filename: "example.js", status: "modified", additions: 0, deletions: 0 }] });
+  f.setPatch(metadata);
+  assert.equal((await collectReviewEvidence(f.options)).diff, metadata);
+  f.setPatch(metadata.replace("new mode 100755", "new mode 120000"));
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
+});
+
+test("refuses a text diff that hides a mode change", async () => {
+  const f = fixture();
+  f.setMode();
+  await assert.rejects(collectReviewEvidence(f.options), /incomplete.*diff/i);
 });
