@@ -12,6 +12,7 @@ on:
       - "compose/v4/bootstrap-qmd-gateway.sh"
       - "compose/v4/paperclip-canary.yml"
       - "compose/v4/paperclip-handoff.patch"
+      - "compose/v4/paperclip-protected-assignment.patch"
       - "compose/v4/provision-paperclip.py"
       - "compose/v4/council-judge-worker.py"
       - "compose/v4/chat-ingress.py"
