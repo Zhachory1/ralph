@@ -19,7 +19,7 @@ class DispatchTests(unittest.TestCase):
     def setUp(self):
         self.issues = []
         self.pr = {"repo": "example/project", "number": 7, "author": "human",
-                   "head": HEAD, "base": BASE, "mergeable": "MERGEABLE"}
+                   "head": HEAD, "base": BASE, "mergeable": "MERGEABLE", "assignees": []}
         self.snapshot = {"reviews": [], "threads": [], "checks": []}
 
     def board(self, path, method="GET", body=None):
@@ -51,6 +51,21 @@ class DispatchTests(unittest.TestCase):
     def test_failed_ci_creates_task(self):
         self.snapshot["checks"] = [{"name": "tests"}]
         self.assertEqual(self.scan()[0]["status"], "dispatched")
+
+    def test_split_handoff_carries_only_configured_assignees(self):
+        self.pr["assignees"] = ["Human", "unrelated"]
+        self.snapshot["checks"] = [{"name": "tests"}]
+        self.assertEqual(self.scan()[0]["status"], "dispatched")
+        brief = self.issues[0]["description"]
+        self.assertIn("Keep the original assignment and assign Human on every split PR", brief)
+        self.assertNotIn("unrelated", brief)
+        self.assertIn("verify the assignees before marking it ready", brief)
+
+    def test_split_handoff_does_not_invent_an_assignee(self):
+        self.pr["assignees"] = ["unrelated"]
+        self.snapshot["checks"] = [{"name": "tests"}]
+        self.assertEqual(self.scan()[0]["status"], "dispatched")
+        self.assertIn("Do not invent a review assignment", self.issues[0]["description"])
 
     def test_merge_conflict_creates_task(self):
         self.pr["mergeable"] = "CONFLICTING"
@@ -131,11 +146,13 @@ class DiscoveryTests(unittest.TestCase):
                                                       "number": number}]}])
             else:
                 data = worker.json.dumps({"state": "OPEN", "author": {"login": account},
-                                          "headRefOid": HEAD, "baseRefOid": BASE, "mergeable": "MERGEABLE"})
+                                          "headRefOid": HEAD, "baseRefOid": BASE, "mergeable": "MERGEABLE",
+                                          "assignees": [{"login": "Human"}]})
             return SimpleNamespace(returncode=0, stdout=data)
 
         prs = worker.discover_prs(["human", "bot"], gh)
         self.assertEqual([(pr["author"], pr["number"]) for pr in prs], [("human", 1), ("bot", 2)])
+        self.assertEqual([pr["assignees"] for pr in prs], [["Human"], ["Human"]])
 
     def test_unreadable_pr_does_not_block_other_prs(self):
         def gh(account, *args):
@@ -150,7 +167,7 @@ class DiscoveryTests(unittest.TestCase):
             if args[2] == "1":
                 return SimpleNamespace(returncode=1, stdout="")
             data = {"state": "OPEN", "author": {"login": account}, "headRefOid": HEAD,
-                    "baseRefOid": BASE, "mergeable": "MERGEABLE"}
+                    "baseRefOid": BASE, "mergeable": "MERGEABLE", "assignees": []}
             return SimpleNamespace(returncode=0, stdout=worker.json.dumps(data))
 
         prs = worker.discover_prs(["human"], gh)

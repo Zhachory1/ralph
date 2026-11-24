@@ -101,6 +101,12 @@ reviews, failed checks, and merge conflicts. It creates an OpenCode task for eac
 feedback snapshot and waits for any active task on the same PR. The maintainer creates no
 commit or GitHub comment when there is no new actionable work.
 
+When fixes need multiple PRs, the maintenance task tells the maintainer to open
+linked drafts and carry the original PR's configured review assignees to each
+split PR. The maintainer verifies those GitHub assignments before marking a
+tested slice ready for the scheduled review queue. If the original has no
+configured assignee, the task does not nominate one.
+
 Before starting an automatic review, the review manager checks the reviewer's prior
 decisions. A prior approval skips the review unless a human explicitly requests another.
 
