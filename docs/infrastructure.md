@@ -25,6 +25,9 @@ also matches the original agent, so a different agent's handoff is not mistaken 
 The local patch also treats pending, wake-enabled interactions and unfinished visible blockers as
 durable review waits, and rechecks both before escalation. Resolved interactions, cards without
 a wake, and completed or hidden blockers do not suppress recovery.
+`compose/v4/paperclip-protected-assignment.patch` prevents agents from removing an existing
+assignment block and serializes permission updates with the current agent record. The board
+retains authority to release the block. This image patch does not update a separate host runtime.
 
 The standalone private preview (`compose/v4/paperclip-private.yml`) runs only the combined
 Paperclip/Hermes image with authenticated access, a loopback-only published port, a dedicated
@@ -34,6 +37,8 @@ no Ralph-owned MCP server and does not start or replace any legacy stack. See th
 
 Use [roster reconciliation](operations.md#provision-the-paperclip-organization) after
 authenticated startup to add missing v4.1 seats to a populated company.
+The provisioner defines OpenCode seats, including the review lenses and synthesis.
+It does not migrate existing seats, enforce a no-shell review boundary, or start a queue.
 
 The [PostgreSQL deployment](operations.md#prepare-a-private-paperclip-target) layers
 `compose/v4/paperclip-postgres.yml` over that file. PostgreSQL 17 has its own named

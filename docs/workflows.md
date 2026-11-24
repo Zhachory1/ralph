@@ -2,6 +2,9 @@
 
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
+The review roster includes generalist, reliability, MVP and security lenses, and synthesis.
+The manager chooses lite, default or deep review. Provisioning blocks assignment to the
+new manager and review seats; it does not connect them to a PR queue or restrict their tools.
 
 When the Feature Workflow Manager creates a build issue, it must set
 `executionPolicy.stages` to `[{"type":"review","participants":[{"type":"agent","agentId":"<reviewer-id>"}]}]`
@@ -34,7 +37,9 @@ are Done, including when task nesting is flattened. Judges put their conclusions
 in their own task comments, in ordinary language. The Manager reads each attributed comment for
 the current revision. If a conclusion is unclear or missing, it creates a backlog clarification
 task for that judge, links it as a blocker, and then starts it; no format checker is involved.
-Only unanimous support leads to a Director-only confirmation of the exact reviewed RFC revision.
+With three-family Council, only unanimous support leads to a Director-only confirmation.
+Same-family Council seats, when explicitly configured, are advisory: dissent is included in
+the Director's confirmation, but unanimity is not required and model diversity is not claimed.
 The Manager rechecks the current revision before requesting it and reviews again if it changed.
 Paperclip records the authors and enforces the human gate; interpreting the comments is the
 Manager's responsibility.
