@@ -47,7 +47,10 @@ function fixture(count = 1) {
       user: { login: "fixture-human" }, state: "COMMENTED", commit_id: head,
       body: `<!-- ai-pr-automation head=${head} -->`,
     }] : []]);
-    if (args[0] === "api") return JSON.stringify({ files: [
+    if (args.some((arg) => arg.includes("/git/trees/"))) {
+      return JSON.stringify({ truncated: false, tree: [{ path: "file", mode: "100644", sha: head, type: "blob" }] });
+    }
+    if (args[0] === "api") return JSON.stringify({ merge_base_commit: { sha: base }, files: [
       { filename: "file", status: "modified", additions: 1, deletions: 1, patch },
     ] });
     throw new Error("Unexpected GitHub call");
@@ -95,6 +98,18 @@ test("creates a manager task containing exact-head evidence", async () => {
   assert.match(f.calls[0].body.description, /synthesis.*publish/i);
   assert.match(f.calls[0].body.description, /ai-pr-automation head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
   assert.match(f.calls[0].body.description, /do not retry an ambiguous post/i);
+});
+
+test("hands synthesis a pinned verdict policy without turning incomplete or self-review into approval", async () => {
+  const f = fixture();
+  await runReviewDispatch(f.args);
+  const instructions = f.calls[0].body.description.split("\n\nPR title:")[0];
+  assert.match(instructions, /use APPROVE only after all selected lenses have reported and synthesis finds no actionable findings/i);
+  assert.match(instructions, /use COMMENT for actionable findings/i);
+  assert.match(instructions, /hold without posting if evidence is incomplete/i);
+  assert.match(instructions, /do not approve if the publisher authored the PR/i);
+  assert.ok(instructions.includes(`commit_id=${head}`));
+  assert.match(instructions, /verify the publisher identity, PR author, assignment, draft status, base and head/i);
 });
 
 test("does not dispatch when the PR head changes before handoff", async () => {

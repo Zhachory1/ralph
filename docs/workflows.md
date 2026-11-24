@@ -98,8 +98,9 @@ closes the Paperclip issue without editing the dossier.
 
 The code-review scanner discovers assigned, non-draft PRs across configured accounts and
 creates a Paperclip manager task per exact head. The manager creates the selected lens tasks
-and a dependent synthesis, then waits for synthesis. Synthesis posts an automated GitHub
-review after rechecking eligibility. Review-seat tool isolation remains open (#327).
+and a dependent synthesis, then waits for synthesis. After rechecking eligibility, synthesis
+approves a clean exact head under the configured independent account or comments with actionable
+findings. Approval does not merge the PR. Review-seat tool isolation remains open (#327).
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay
