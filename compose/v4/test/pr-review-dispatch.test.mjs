@@ -121,6 +121,23 @@ test("does not dispatch when the PR head changes before handoff", async () => {
   assert.equal(f.calls.length, 0);
 });
 
+test("a targeted run dispatches only the requested PR and exact head", async () => {
+  const f = fixture(3);
+  const gh = f.args.gh;
+  f.args.gh = (...args) => {
+    assert.ok(!args.includes("search/issues"), "targeted runs must not scan the queue");
+    if (args[1] === "pr") assert.equal(args[3], "2");
+    return gh(...args);
+  };
+  const target = "fixture/repo#2";
+  await assert.rejects(runReviewDispatch({ ...f.args, target: `${target}@${"c".repeat(40)}` }),
+    /no longer eligible at the requested head/);
+  assert.equal(f.calls.length, 0);
+  const result = await runReviewDispatch({ ...f.args, target: `${target}@${head}` });
+  assert.equal(result.incoming[0].status, "dispatched");
+  assert.deepEqual(f.calls.map(({ body }) => body.title), [`PR review ${target} @ ${head}`]);
+});
+
 test("reuses an active task instead of dispatching the same head again", async () => {
   const f = fixture();
   await runReviewDispatch(f.args);

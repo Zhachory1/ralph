@@ -8,6 +8,7 @@ import { discoverReviewQueue } from "./pr-review-queue.mjs";
 
 const uuid = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const reviewTitle = /^PR review ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([0-9]+) @ ([a-f0-9]{40})$/;
+const reviewTarget = /^([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100})#([1-9][0-9]*)@([a-f0-9]{40})$/;
 
 export function configuredAccountName(accounts, viewer) {
   const account = accounts.find((name) => name.trim().toLowerCase() === viewer.toLowerCase());
@@ -20,7 +21,31 @@ export function githubEnvironment(env) {
     "GH_CONFIG_DIR", "TMPDIR", "LANG"].filter((key) => env[key] !== undefined).map((key) => [key, env[key]]));
 }
 
-export async function runReviewDispatch({ board, companyId, managerId, synthesisId, accounts, publisher, gh }) {
+async function discoverTarget(target, identities, publisher, gh) {
+  const match = typeof target === "string" && target.match(reviewTarget);
+  if (!match || !Number.isSafeInteger(Number(match[2]))) throw new Error("Expected OWNER/REPO#NUMBER@HEAD");
+  const [, repo, number, head] = match;
+  const viewer = publisher.toLowerCase();
+  for (const identity of identities) {
+    if ((await gh(identity, "api", "user", "--jq", ".login")).trim().toLowerCase() !== identity) {
+      throw new Error("GitHub account credential mismatch");
+    }
+  }
+  const pr = JSON.parse(await gh(viewer, "pr", "view", number, "-R", repo,
+    "--json", "state,isDraft,assignees,headRefOid,author,title"));
+  const queue = { ours: [], incoming: [] };
+  if (!await createPrEligibility({ assignees: identities, readPr: async () => pr })(Number(number), head)) {
+    throw new Error("Target PR is no longer eligible at the requested head");
+  }
+  if (typeof pr.author?.login !== "string" || !pr.author.login || typeof pr.title !== "string") {
+    throw new Error("Invalid GitHub PR detail");
+  }
+  const lane = identities.includes(pr.author.login.toLowerCase()) ? "ours" : "incoming";
+  queue[lane].push({ repo, number: Number(number), head, title: pr.title });
+  return queue;
+}
+
+export async function runReviewDispatch({ board, companyId, managerId, synthesisId, accounts, publisher, gh, target }) {
   const identities = parseAssignees(Array.isArray(accounts) ? accounts.join(",") : "");
   if (!identities.includes(publisher?.toLowerCase())) throw new Error("Publisher must be a configured account");
   const active = new Map();
@@ -42,7 +67,8 @@ export async function runReviewDispatch({ board, companyId, managerId, synthesis
     if (!next || next === cursor) throw new Error("Could not paginate active review tasks");
     cursor = next;
   } while (true);
-  const queue = await discoverReviewQueue({ accounts: identities, gh });
+  const queue = target === undefined ? await discoverReviewQueue({ accounts: identities, gh })
+    : await discoverTarget(target, identities, publisher, gh);
   const result = { ours: [], incoming: [] };
   for (const lane of ["ours", "incoming"]) {
     for (const item of queue[lane]) {
@@ -125,7 +151,8 @@ export async function runReviewDispatch({ board, companyId, managerId, synthesis
           + `then block this task on synthesis. `
           + `Keep this task assigned to yourself; after synthesis finishes, read its result and complete this task. `
           + `Synthesis must publish the complete review with the ${publisher} account and the marker `
-          + `<!-- ai-pr-automation head=${item.head} -->. Use APPROVE only after all selected lenses have reported `
+          + `<!-- ai-pr-automation head=${item.head} -->. Label the body as an automated Ralph review. `
+          + `Use APPROVE only after all selected lenses have reported `
           + `and synthesis finds no actionable findings. Use COMMENT for actionable findings. `
           + `Hold without posting if evidence is incomplete. Do not approve if the publisher authored the PR; `
           + `hold a clean self-review for an independent reviewer. `
@@ -167,14 +194,16 @@ export async function runReviewTick(input) {
 }
 
 async function main() {
-  const [managerId, synthesisId, publisher, ...accounts] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const target = args[0] === "--target" ? args.splice(0, 2)[1] ?? "" : undefined;
+  const [managerId, synthesisId, publisher, ...accounts] = args;
   const origin = process.env.PAPERCLIP_API_URL;
   const companyId = process.env.PAPERCLIP_COMPANY_ID;
   const runId = process.env.PAPERCLIP_RUN_ID;
   const agentId = process.env.PAPERCLIP_AGENT_ID;
   if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(origin)
       || ![companyId, runId, agentId, managerId, synthesisId].every((id) => uuid.test(id)) || accounts.length < 2) {
-    throw new Error("Usage: pr-review-dispatch.mjs MANAGER_ID SYNTHESIS_ID PUBLISHER ACCOUNT ACCOUNT...");
+    throw new Error("Usage: pr-review-dispatch.mjs [--target OWNER/REPO#NUMBER@HEAD] MANAGER_ID SYNTHESIS_ID PUBLISHER ACCOUNT ACCOUNT...");
   }
   const token = process.env.PAPERCLIP_API_KEY;
   delete process.env.PAPERCLIP_API_KEY;
@@ -209,7 +238,7 @@ async function main() {
     return stdout;
   };
   console.log(JSON.stringify(await runReviewTick({
-    board, companyId, runId, agentId, managerId, synthesisId, accounts, publisher, gh,
+    board, companyId, runId, agentId, managerId, synthesisId, accounts, publisher, gh, target,
   })));
 }
 

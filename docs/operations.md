@@ -147,6 +147,10 @@ the run token and task context; the worker creates review tasks and completes it
 task. Review tasks are visible to the company; store private PR evidence there only with the
 owner's consent.
 
+For a one-off scan, prefix the seat's arguments with
+`--target 'OWNER/REPO#NUMBER@FULL_HEAD_SHA'` and trigger the Routine manually without
+enabling its recurring schedule. The PR still needs a configured assignee.
+
 The worker separates authored and incoming PRs, uses the native seven-day task
 idempotency key per head, and checks the GitHub review marker before dispatch. Synthesis uses
 the configured publisher to approve a fully reviewed, clean head or comment with actionable
