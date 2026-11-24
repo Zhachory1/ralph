@@ -1,7 +1,9 @@
 """Exercise Ralph roster provisioning against a disposable authenticated board."""
 
+import json
 import runpy
 import secrets
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +12,78 @@ TESTS = Path(__file__).resolve().parent
 fixture = runpy.run_path(str(TESTS / "paperclip-rfc-canary.py"))
 provisioning = runpy.run_path(str(TESTS.parent / "provision-paperclip.py"))
 provision = provisioning["provision"]
+
+WAKE_STATUSES = {"queued", "claimed", "coalesced", "skipped", "completed", "failed", "cancelled",
+                 "deferred_issue_execution"}
+RUN_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled", "timed_out", "interrupted"}
+
+
+def print_review_handoff_evidence(board, issue_path, state, developer_id, reviewer_id):
+    def read(suffix, expected_type):
+        try:
+            data = board(f"{issue_path}/{suffix}")
+            return data if isinstance(data, expected_type) else None
+        except (AssertionError, ValueError, OSError, subprocess.SubprocessError):
+            return None
+
+    def status(row, allowed):
+        value = row.get("status")
+        return value if isinstance(value, str) and value in allowed else "other"
+
+    def reassigned(row):
+        if row.get("action") != "issue.updated":
+            return False
+        assignee = ((row.get("details") or {}).get("changes") or {}).get("assigneeAgentId") or {}
+        return assignee.get("from") == developer_id and assignee.get("to") == reviewer_id
+
+    activity = read("activity?view=recent", list)
+    reassignment = next((row for row in activity or [] if reassigned(row)), None)
+    reassigned_at = (reassignment or {}).get("createdAt")
+    wakes = read("diagnostics/wakes", dict)
+    wake_events = (wakes or {}).get("events")
+    wake_history_truncated = (wakes or {}).get("truncated")
+    runs = read("runs?view=recent", list)
+    reviewer_runs = [row for row in runs or [] if row.get("agentId") == reviewer_id]
+    reviewer_run_starts = {row["runId"]: bool(row.get("startedAt")) for row in reviewer_runs if row.get("runId")}
+
+    def wake_evidence(row):
+        requested_at = row.get("requestedAt")
+        # Both endpoints serialize timestamps as UTC ISO strings. Timing alone does not prove causation.
+        return {
+            "status": status(row, WAKE_STATUSES),
+            "atOrAfterReassignment": (
+                requested_at >= reassigned_at if isinstance(requested_at, str) and isinstance(reassigned_at, str)
+                else None
+            ),
+            "linked": bool(row.get("runId")),
+            "claimed": bool(row.get("claimedAt")),
+            "linkedRecentRunStarted": reviewer_run_starts.get(row.get("runId")),
+        }
+
+    assignee = state.get("assigneeAgentId")
+    execution = state.get("executionState") or {}
+    evidence = {
+        "issueStatus": status(state, {"backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"}),
+        "assignee": ("reviewer" if assignee == reviewer_id else "developer" if assignee == developer_id else "other"),
+        "inReviewStage": execution.get("currentStageType") == "review",
+        "reviewerIsCurrentParticipant": (execution.get("currentParticipant") or {}).get("agentId") == reviewer_id,
+        "reviewerReassignmentInRecentActivity": reassignment is not None if activity is not None else None,
+        "wakeHistoryTruncated": wake_history_truncated if isinstance(wake_history_truncated, bool) else None,
+        "reviewerAssignmentWakes": [
+            wake_evidence(row) for row in wake_events
+            if row.get("kind") == "wake_request" and row.get("agentId") == reviewer_id
+            and row.get("source") == "assignment"
+        ][:4] if isinstance(wake_events, list) else None,
+        "recentReviewerRuns": [
+            {"status": status(row, RUN_STATUSES), "started": bool(row.get("startedAt"))}
+            for row in reviewer_runs
+        ] if runs is not None else None,
+        "developerCancellationInRecentRuns": any(
+            row.get("agentId") == developer_id and row.get("status") == "cancelled"
+            and row.get("errorCode") == "issue_reassigned" for row in runs
+        ) if runs is not None else None,
+    }
+    print("Roster review evidence:", json.dumps(evidence, sort_keys=True))
 
 
 def assert_orchestrator_handoffs(instructions):
@@ -152,9 +226,7 @@ def check_roster(container):
             break
         time.sleep(0.5)
     if (state.get("executionState") or {}).get("lastDecisionOutcome") != "approved":
-        for row in board(f"{issue_path}/runs")[:4]:
-            detail = board(f"heartbeat-runs/{row['runId']}")
-            print(detail["status"], detail.get("error"), (detail.get("stderrExcerpt") or "")[-500:])
+        print_review_handoff_evidence(board, issue_path, state, recipient["id"], reviewer["id"])
         raise AssertionError(state["status"])
     comments = board(f"{issue_path}/comments")
     actors = {c["authorAgentId"] for c in comments if c["body"].startswith("Technical disposition")}
