@@ -29,6 +29,10 @@ The patch also rechecks a paused Hermes disposition repair through the existing 
 It retains the original owner, episode, retry budget, and execution and workspace safety gates;
 uncertain process-adapter outcomes remain held for reconciliation.
 
+`compose/v4/paperclip-protected-assignment.patch` prevents agents from removing an existing
+assignment block and serializes permission updates with the current agent record. The board
+retains authority to release the block. This image patch does not update a separate host runtime.
+
 The standalone private preview (`compose/v4/paperclip-private.yml`) runs only the combined
 Paperclip/Hermes image with authenticated access, a loopback-only published port, a dedicated
 Compose bridge, and a named state volume. The bridge permits outbound traffic. It starts
@@ -37,6 +41,8 @@ no Ralph-owned MCP server and does not start or replace any legacy stack. See th
 
 Use [roster reconciliation](operations.md#provision-the-paperclip-organization) after
 authenticated startup to add missing v4.1 seats to a populated company.
+The provisioner defines OpenCode seats, including the review lenses and synthesis.
+It does not migrate existing seats, enforce a no-shell review boundary, or start a queue.
 
 The [PostgreSQL deployment](operations.md#prepare-a-private-paperclip-target) layers
 `compose/v4/paperclip-postgres.yml` over that file. PostgreSQL 17 has its own named
@@ -60,6 +66,10 @@ The manual Routine worker runs on the host against a localhost Paperclip board a
 Git clone. Its canary uses the authenticated fixture and a temporary local Git repository
 without GitHub credentials. The existing audit runner puts test and lint in separate
 network-disabled containers with no bind mounts.
+
+The code-review scanner runs as a Paperclip process seat on the host. It uses the host's
+configured GitHub accounts to discover PRs and creates manager tasks. The synthesis agent
+posts the review to GitHub. Review-seat tool isolation is not enforced yet (#327).
 
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;

@@ -1,0 +1,119 @@
+diff --git a/server/src/lib/agent-permissions.ts b/server/src/lib/agent-permissions.ts
+index dece59f1..c7f55bb1 100644
+--- a/server/src/lib/agent-permissions.ts
++++ b/server/src/lib/agent-permissions.ts
+@@ -39,6 +39,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
+     : null;
+ }
+
++export function isAssignmentBlocked(policy: unknown): boolean {
++  const record = asRecord(policy);
++  const protectedAgent = asRecord(record?.protectedAgent);
++  const assignmentPolicy = asRecord(record?.assignmentPolicy);
++  return protectedAgent?.blockAssignment === true ||
++    protectedAgent?.requiresApproval === true ||
++    assignmentPolicy?.protectedAgentRequiresApproval === true;
++}
++
+ /**
+  * Mirrors the agent-source low-trust markers consumed by
+  * resolveCoreTrustPreset: the low-trust review preset (top-level or inside
+diff --git a/server/src/routes/agents.ts b/server/src/routes/agents.ts
+index e95253f8..05cbcc62 100644
+--- a/server/src/routes/agents.ts
++++ b/server/src/routes/agents.ts
+@@ -5068,7 +5068,9 @@ export function agentRoutes(
+           at: new Date().toISOString(),
+         } }
+       : req.body;
+-    const agent = await svc.updatePermissions(id, permissionsPatch);
++    const agent = req.actor.type === "agent"
++      ? await svc.updatePermissions(id, permissionsPatch, { actorAgentId: req.actor.agentId })
++      : await svc.updatePermissions(id, permissionsPatch);
+     if (!agent) {
+       res.status(404).json({ error: "Agent not found" });
+       return;
+diff --git a/server/src/services/agents.ts b/server/src/services/agents.ts
+index 8c660e74..0ff7dc02 100644
+--- a/server/src/services/agents.ts
++++ b/server/src/services/agents.ts
+@@ -6,9 +6,9 @@ import type { Db } from "@paperclipai/db";
+ import { agents, agentConfigRevisions, agentApiKeys, heartbeatRuns } from "@paperclipai/db";
+ import { isUuidLike, normalizeAgentApiKeyScope, normalizeAgentUrlKey, type AgentApiKeyScope } from "@paperclipai/shared";
+
+-import { conflict, notFound, unprocessable } from "../errors.js";
++import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+
+-import { normalizeAgentPermissions } from "../lib/agent-permissions.js";
++import { isAssignmentBlocked, normalizeAgentPermissions } from "../lib/agent-permissions.js";
+
+ import {
+   agentRecordQueries,
+@@ -42,23 +42,28 @@ export function agentService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
+
+     getById,
+
+-    updatePermissions: async (id: string, permissions: Record<string, unknown> & { canCreateAgents: boolean }) => {
+-      const existing = await getById(id);
+-      if (!existing) return null;
+-      if (existing.status === "pending_approval") {
+-        throw conflict("Pending approval agent permissions cannot be changed before board approval", {
+-          code: "pending_approval_agent_config_frozen",
+-          agentId: id,
+-          fields: ["permissions"],
+-        });
+-      }
+-
++    updatePermissions: async (id: string, permissions: Record<string, unknown> & { canCreateAgents: boolean },
++      options?: { actorAgentId?: string | null }) => {
+       const updated = await db.transaction(async tx => {
+-        await notifyAttentionRetentionWork(tx, { companyId: existing.companyId });
++        const [current] = await tx.select().from(agents).where(eq(agents.id, id)).for("update");
++        if (!current) return null;
++        if (current.status === "pending_approval") {
++          throw conflict("Pending approval agent permissions cannot be changed before board approval", {
++            code: "pending_approval_agent_config_frozen",
++            agentId: id,
++            fields: ["permissions"],
++          });
++        }
++        if (options?.actorAgentId && permissions.authorizationPolicy !== undefined &&
++            isAssignmentBlocked(current.permissions?.authorizationPolicy) &&
++            !isAssignmentBlocked(permissions.authorizationPolicy)) {
++          throw forbidden("Only a board user can remove a protected agent assignment block");
++        }
++        await notifyAttentionRetentionWork(tx, { companyId: current.companyId });
+         return tx
+         .update(agents)
+         .set({
+-          permissions: normalizeAgentPermissions({ ...existing.permissions, ...permissions }, { role: existing.role }),
++          permissions: normalizeAgentPermissions({ ...current.permissions, ...permissions }, { role: current.role }),
+           updatedAt: new Date(),
+         })
+         .where(eq(agents.id, id))
+diff --git a/server/src/services/authorization.ts b/server/src/services/authorization.ts
+index deee9cab..a6064b9e 100644
+--- a/server/src/services/authorization.ts
++++ b/server/src/services/authorization.ts
+@@ -46,7 +46,7 @@ import {
+   type TrustPresetResolution,
+ } from "./trust-preset-resolver.js";
+ import { logger } from "../middleware/logger.js";
+-import { normalizeAgentPermissions } from "../lib/agent-permissions.js";
++import { isAssignmentBlocked, normalizeAgentPermissions } from "../lib/agent-permissions.js";
+ import { grantsForHumanRole, normalizeHumanRole } from "./company-member-roles.js";
+ import { isRunPhaseActive, measureRunPhase, type ExecutionPhase } from "./execution-preparation-timing.js";
+
+@@ -360,11 +360,7 @@ function evaluateAuthorizationPolicyForAssignment(
+   // `requiresApproval` and `protectedAgentRequiresApproval` are legacy aliases.
+   // They never had an approval workflow behind them, so preserve their hard-block
+   // behavior without continuing to promise an approval step that does not exist.
+-  const blockAssignment =
+-    readBoolean(protectedAgent?.blockAssignment) === true ||
+-    readBoolean(protectedAgent?.requiresApproval) === true ||
+-    readBoolean(assignmentPolicy?.protectedAgentRequiresApproval) === true;
+-  if (blockAssignment) {
++  if (isAssignmentBlocked(policy)) {
+     return {
+       kind: "blocked",
+       explanation:

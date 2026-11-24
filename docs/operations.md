@@ -17,7 +17,8 @@ After caching the two pinned images in `compose/v4/paperclip-canary.Dockerfile`,
 repository root. The build context is `compose/v4` (not stdin), so the Dockerfile can apply
 `compose/v4/paperclip-handoff.patch` -- vendored from upstream Paperclip PR #18510, see
 [infrastructure.md](infrastructure.md) -- and rebuild the patched server before the image is
-tagged; `paperclip-canary.Dockerfile.dockerignore` keeps everything else in `compose/v4` out of
+tagged; it also applies the protected-assignment patch. `paperclip-canary.Dockerfile.dockerignore`
+keeps everything else in `compose/v4` out of
 that context. The server rebuild needs more than 2.6 GiB of available Docker memory; use a
 separate build host if a running board leaves insufficient headroom:
 
@@ -137,6 +138,29 @@ This checks the most recent 100 Routine runs separately from current review requ
 so a review can be found after GitHub removes the request. Only submitted reviews by the
 named human on the dossier's exact head count. The dossier contents are left intact.
 No GitHub writes are made.
+
+For the code-review flow, configure a host-local Paperclip process seat with the command
+`node /path/to/compose/v4/pr-review-dispatch.mjs MANAGER_ID SYNTHESIS_ID PUBLISHER ACCOUNT1 ACCOUNT2`.
+Give it access to both existing `gh` logins, and create a Paperclip Routine assigned to
+that seat with `skip_if_active` and a `*/10 * * * *` schedule. Keep its title and
+description static, and set the seat's maximum concurrent runs to one. Paperclip supplies
+the run token and task context; the worker creates review tasks and completes its own scan
+task. Review tasks are visible to the company; store private PR evidence there only with the
+owner's consent.
+
+For a one-off scan, prefix the seat's arguments with
+`--target 'OWNER/REPO#NUMBER@FULL_HEAD_SHA'` and trigger the Routine manually without
+enabling its recurring schedule. The PR still needs a configured assignee.
+
+The worker separates authored and incoming PRs, uses the native seven-day task
+idempotency key per head, and checks the GitHub review marker before dispatch. Synthesis uses
+the configured publisher to approve a fully reviewed, clean head or comment with actionable
+findings. Incomplete reviews and clean self-reviews are held without posting. Synthesis
+verifies the exact-head review receipt; an unconfirmed post needs human reconciliation.
+Searches at GitHub's 1,000-result limit, incomplete searches,
+300-file comparisons, and diffs over 1 MiB are held rather than truncated. GitHub search
+covers at most 4,000 repositories, so discovery is best effort beyond that. This setup does
+not enforce no-shell isolation for review seats (#327) or merge PRs.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
@@ -376,15 +400,17 @@ handle any writes made after the switch before rolling back.
 Create an empty company on the target and mint a temporary key from its administrator.
 Export it as `PAPERCLIP_API_KEY`. Supply your governance Markdown and an OpenCode adapter
 JSON file containing an explicit `model`, plus any `OPENCODE_CONFIG_CONTENT` overrides.
-Do not put provider keys in that file. Set budgets in integer cents:
+Do not put provider keys in that file:
 
 ```sh
 python3 compose/v4/provision-paperclip.py "$PAPERCLIP_PUBLIC_URL" "$COMPANY_ID" \
-  "$MANIFEST_FILE" "$OPENCODE_ADAPTER_FILE" --company-cents 1000 --agent-cents 200
+  "$MANIFEST_FILE" "$OPENCODE_ADAPTER_FILE" --no-spend-caps
 ```
 
-The command creates five seats, installs the shared instructions, and configures monthly
-budgets with 80% warnings and hard stops. The orchestrator retains Paperclip's built-in
+The command creates five OpenCode seats and installs the shared instructions. Choose
+`--no-spend-caps` or supply both `--company-cents` and `--agent-cents`; monthly budgets
+use 80% warnings and hard stops. Existing active caps are not removed.
+The orchestrator retains Paperclip's built-in
 CEO task assignment authority but cannot hire agents. The command does not schedule tasks or add GitHub, provider,
 or deploy credentials. Use protected branches and scoped connections before enabling work;
 instructions alone cannot enforce the human merge/deploy boundary. Revoke the temporary
@@ -394,8 +420,14 @@ retrying: this command does not overwrite or reconcile existing seats.
 For v4.1 startup, run the same command **serially** after the board is ready, with
 `--reconcile "$COUNCIL_MODELS_FILE"`. The JSON object maps `Council Architecture`,
 `Council Security`, and `Council Scope` to explicit `provider/model` IDs from three
-distinct families. Use the same governance manifest, budgets and SWE model on restart.
-This mode adds the Feature and Review Workflow Managers, Librarian, Comms and Council;
+distinct families. To use same-family models as advisory perspectives, also pass
+`--advisory-council`; this does not provide model-family diversity. An optional
+`--seat-models "$SEAT_MODELS_FILE"` JSON object maps individual seat names to their
+`provider/model` IDs. Use the same governance manifest, budgets and models on restart.
+Non-advisory mode recognizes known direct and OpenRouter model families; an unknown
+gateway or mismatched provider/model is held rather than counted as a distinct family.
+This mode adds the Feature and Review Workflow Managers, review lenses, synthesis,
+Librarian, Comms and Council;
 Comms reports to the human Director. The managers receive native task-assignment permission.
 It recognizes the pilot's `Ralph Orchestrator`, `RFC Author`, `OpenCode Developer` and
 `SRE Ops` names. Other seats, instructions, paused states and credentials are preserved.
@@ -403,6 +435,18 @@ Resolve reported identity, model, budget, hiring, heartbeat or reporting conflic
 the board before retrying. A matched manager must have an explicit `tasks:assign`
 grant; an implicit membership default is not sufficient. Existing instructions and grants are not rewritten. This
 provisions seat definitions; the adapter credentials and dispatch checks are separate.
+Only Review Synthesis may publish a review, and only for a dispatch-issued task with
+an authorized publisher. Existing synthesis seats need this guidance before live dispatch.
+It does not migrate existing seats or make the review workers safe to dispatch.
+New Review Workflow Manager, lens and synthesis seats have an assignment block. After
+verifying containment, an administrator can explicitly set `blockAssignment` to `false`.
+This block is not a no-shell policy. Reconciliation preserves an explicit `true` or `false`
+value and refuses seats with no explicit value; a `false` value is not proof of containment.
+The preview image prevents agent-initiated removal of the block. A separate host runtime
+needs the same fix before this restriction is trusted.
+Existing Council instructions are not rewritten; verify their advisory status before use.
+Reconciliation checks the existing Feature Workflow Manager's instructions against the
+selected Council mode and reports conflicts instead of rewriting them.
 If an OpenCode seat already has `GH_TOKEN`, it can use that credential through its terminal
 without requesting a separate GitHub connection. Configure the credential separately; the
 provisioner does not create it or rewrite existing seat instructions.

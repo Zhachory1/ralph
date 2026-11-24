@@ -9,6 +9,7 @@ on:
       - "compose/v4/paperclip-canary.Dockerfile"
       - "compose/v4/paperclip-canary.Dockerfile.dockerignore"
       - "compose/v4/paperclip-handoff.patch"
+      - "compose/v4/paperclip-protected-assignment.patch"
       - "compose/v4/provision-paperclip.py"
       - "compose/v4/council-judge-worker.py"
       - "compose/v4/chat-ingress.py"
