@@ -35,7 +35,22 @@ class QmdCanaryTests(unittest.TestCase):
         content = json.dumps({"error": "Could not query coppermeadow in approved/1-projects/fixture/rfc.md"})
         reply = {"role": "tool", "tool_call_id": "qmd_query", "content": content}
         delta, finish = MODEL["qmd_turn"]({"terminal", "mcp__qmd__query"}, [reply])
-        self.assertEqual((delta["content"], finish), ("QMD_RETRIEVAL_FAILED", "stop"))
+        self.assertEqual((delta["content"], finish), ("QMD_RETRIEVAL_FAILED:tool_error", "stop"))
+
+    def test_retrieval_diagnostics_report_shape_without_echoing_payload(self):
+        for payload, reason in (
+            ({"result": "coppermeadow approved/1-projects/fixture/rfc.md"}, "text_result"),
+            ({"result": {"results": []}}, "object_result"),
+            ({"structuredContent": {"results": []}}, "unexpected_hit_count"),
+            ({"structuredContent": {"results": [{"file": "unapproved.md"}]}}, "unexpected_hit_file"),
+            ({"structuredContent": {"results": [
+                {"file": "approved/1-projects/fixture/rfc.md", "snippet": "different term"},
+            ]}}, "missing_hit_term"),
+        ):
+            with self.subTest(reason=reason):
+                reply = {"role": "tool", "tool_call_id": "qmd_query", "content": json.dumps(payload)}
+                delta, finish = MODEL["qmd_turn"]({"terminal", "mcp__qmd__query"}, [reply])
+                self.assertEqual((delta["content"], finish), (f"QMD_RETRIEVAL_FAILED:{reason}", "stop"))
 
     def test_unexpected_tool_surface_is_not_a_negative_pass(self):
         for names in (set(), {"terminal", "tool_search"}, {"terminal", "mcp__qmd__get"}):

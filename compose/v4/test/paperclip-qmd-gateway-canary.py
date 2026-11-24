@@ -23,6 +23,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import secrets
 import select
 import subprocess
@@ -304,7 +305,7 @@ def run_canary():
                 pc.RUN_SECONDS = 120
                 run = pc.wait_for_run(container, issue["id"], terminal_only["id"])
                 output = run.get("stdoutExcerpt") or ""
-                assert "QMD_TOOL_NOT_ADVERTISED" in output, f"Unexpected terminal-only tool surface: {output[-2000:]}"
+                assert "QMD_TOOL_NOT_ADVERTISED" in output, "Unexpected terminal-only tool surface"
                 agent = pc.api(container, f"companies/{company['id']}/agents", {
                     "name": "Qmd Gateway Canary Seat",
                     "adapterType": "hermes_local",
@@ -322,10 +323,11 @@ def run_canary():
                 assert issue["id"] != terminal_issue_id and issue["assigneeAgentId"] == agent["id"]
                 run = pc.wait_for_run(container, issue["id"], agent["id"])
                 output = run.get("stdoutExcerpt") or ""
-                assert "QMD_RESULT:" in output, f"Agent did not call qmd: {output[-2000:]}"
+                failure = re.search(r"\bQMD_RETRIEVAL_FAILED:([a-z_]{1,32})\b", output)
+                assert "QMD_RESULT:" in output, f"Configured seat did not retrieve qmd: {failure[1] if failure else 'no_result'}"
                 reply = output.split("QMD_RESULT:", 1)[1]
                 assert APPROVED in reply and "1-projects/fixture/rfc.md" in reply, \
-                    f"Agent did not retrieve the approved document: {reply[-2000:]}"
+                    "Agent did not retrieve the approved document"
                 assert DRAFT not in reply and LOG not in reply
                 print("PASS: configured seat retrieved qmd content; no qmd tool advertised to the terminal-only seat")
             finally:

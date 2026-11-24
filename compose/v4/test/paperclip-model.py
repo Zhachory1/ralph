@@ -26,18 +26,28 @@ QMD_FIXTURE_TERM = "coppermeadow"
 QMD_FIXTURE_FILE = "approved/1-projects/fixture/rfc.md"
 
 
-def qmd_found_approved_document(content):
+def qmd_retrieval_failure(content):
     try:
         payload = json.loads(content)
-        if "error" in payload:
-            return False
-        hits = payload["structuredContent"]["results"]
-        if not isinstance(hits, list) or len(hits) != 1 or hits[0]["file"] != QMD_FIXTURE_FILE:
-            return False
-        snippet = hits[0]["snippet"]
-        return isinstance(snippet, str) and QMD_FIXTURE_TERM in snippet
-    except (KeyError, TypeError, ValueError):
-        return False
+    except (TypeError, ValueError):
+        return "invalid_json"
+    if not isinstance(payload, dict):
+        return "invalid_envelope"
+    if "error" in payload:
+        return "tool_error"
+    structured = payload.get("structuredContent")
+    if not isinstance(structured, dict):
+        result = payload.get("result")
+        return "text_result" if isinstance(result, str) else "object_result" if isinstance(result, dict) else "missing_structure"
+    hits = structured.get("results")
+    if not isinstance(hits, list) or len(hits) != 1:
+        return "unexpected_hit_count"
+    if not isinstance(hits[0], dict) or hits[0].get("file") != QMD_FIXTURE_FILE:
+        return "unexpected_hit_file"
+    snippet = hits[0].get("snippet")
+    if not isinstance(snippet, str) or QMD_FIXTURE_TERM not in snippet:
+        return "missing_hit_term"
+    return None
 
 
 def qmd_turn(names, tail):
@@ -50,8 +60,9 @@ def qmd_turn(names, tail):
     for message in tail:
         if message["role"] == "tool" and message.get("tool_call_id") == "qmd_query":
             content = message.get("content")
-            if not qmd_found_approved_document(content):
-                return {"role": "assistant", "content": "QMD_RETRIEVAL_FAILED"}, "stop"
+            failure = qmd_retrieval_failure(content)
+            if failure:
+                return {"role": "assistant", "content": f"QMD_RETRIEVAL_FAILED:{failure}"}, "stop"
             return {"role": "assistant", "content": "QMD_RESULT: " + content}, "stop"
     query = {"searches": [{"type": "lex", "query": QMD_FIXTURE_TERM}],
              "collections": ["approved"], "rerank": False}
