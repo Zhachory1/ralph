@@ -348,6 +348,9 @@ class ProvisionGithubInstructionsTest(unittest.TestCase):
                      "Review Lens Security", "Review Synthesis"):
             self.assertTrue(created[name]["permissions"]["authorizationPolicy"]["protectedAgent"]["blockAssignment"])
         self.assertNotIn("authorizationPolicy", created["Reviewer"]["permissions"])
+        synthesis = created["Review Synthesis"]["instructionsBundle"]["files"]["AGENTS.md"]
+        self.assertIn("publish only for a dispatch-issued review task", synthesis)
+        self.assertIn("Never merge", synthesis)
 
     def test_new_swe_instructions_use_an_existing_gh_token(self):
         board = FakeBoard()

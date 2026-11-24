@@ -435,6 +435,8 @@ Resolve reported identity, model, budget, hiring, heartbeat or reporting conflic
 the board before retrying. A matched manager must have an explicit `tasks:assign`
 grant; an implicit membership default is not sufficient. Existing instructions and grants are not rewritten. This
 provisions seat definitions; the adapter credentials and dispatch checks are separate.
+Only Review Synthesis may publish a review, and only for a dispatch-issued task with
+an authorized publisher. Existing synthesis seats need this guidance before live dispatch.
 It does not migrate existing seats or make the review workers safe to dispatch.
 New Review Workflow Manager, lens and synthesis seats have an assignment block. After
 verifying containment, an administrator can explicitly set `blockAssignment` to `false`.
