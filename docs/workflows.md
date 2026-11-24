@@ -2,6 +2,9 @@
 
 The [v4.1 roster](operations.md#provision-the-paperclip-organization) includes distinct
 Feature and Review Workflow Managers. Provisioning seats issues no work assignments.
+The review roster includes generalist, reliability, MVP and security lenses, and synthesis.
+The manager chooses lite, default or deep review. Provisioning blocks assignment to the
+new manager and review seats; it does not connect them to a PR queue or restrict their tools.
 
 When the Feature Workflow Manager creates a build issue, it must set
 `executionPolicy.stages` to `[{"type":"review","participants":[{"type":"agent","agentId":"<reviewer-id>"}]}]`
@@ -12,7 +15,9 @@ For a configured code PR the Developer resubmits the corrected head by moving th
 `in_review`. Paperclip selects the independent Reviewer. Its `done` transition with
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
-head needs another review. GitHub approval and merge remain separate human decisions.
+head needs another review. Technical acceptance in Paperclip does not submit a
+GitHub review. Ralph's separate code-review flow can approve PRs on GitHub;
+merge still requires explicit human authorization.
 When the Developer already has `GH_TOKEN`, it uses that existing credential through its
 terminal for the assigned repository work instead of requesting another connection.
 
@@ -32,7 +37,9 @@ are Done, including when task nesting is flattened. Judges put their conclusions
 in their own task comments, in ordinary language. The Manager reads each attributed comment for
 the current revision. If a conclusion is unclear or missing, it creates a backlog clarification
 task for that judge, links it as a blocker, and then starts it; no format checker is involved.
-Only unanimous support leads to a Director-only confirmation of the exact reviewed RFC revision.
+With three-family Council, only unanimous support leads to a Director-only confirmation.
+Same-family Council seats, when explicitly configured, are advisory: dissent is included in
+the Director's confirmation, but unanimity is not required and model diversity is not claimed.
 The Manager rechecks the current revision before requesting it and reviews again if it changed.
 Paperclip records the authors and enforces the human gate; interpreting the comments is the
 Manager's responsibility.
@@ -96,9 +103,14 @@ the dossier in Paperclip. The host scheduler must run ticks serially. Nothing wr
 With `--reconcile` and a named reviewer, a submitted review on the exact audited head
 closes the Paperclip issue without editing the dossier.
 
-The separate code-review components discover assigned, non-draft PRs across configured
-accounts and read an exact-head diff. They do not execute repository code or tests.
-They are not yet connected to a Paperclip queue or Reviewer.
+The code-review scanner discovers assigned, non-draft PRs across configured accounts and
+creates a Paperclip manager task per exact head. The manager creates the selected lens tasks
+and a dependent synthesis, then waits for synthesis. Once all selected lenses report,
+synthesis rechecks eligibility and posts a GitHub `APPROVE` on the exact reviewed head if
+there are no actionable findings and the configured publisher is not the PR author. It posts
+`COMMENT` for actionable findings and holds without posting if evidence is incomplete or the
+publisher would approve its own PR. Approval does not authorize a merge. Review-seat tool
+isolation remains open (#327).
 
 The v4 qmd canary finds an approved RFC using lexical search and replaces its search result
 when the approved worktree advances. The separate draft and untracked run transcript stay
