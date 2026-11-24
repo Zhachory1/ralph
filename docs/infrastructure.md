@@ -63,6 +63,10 @@ Git clone. Its canary uses the authenticated fixture and a temporary local Git r
 without GitHub credentials. The existing audit runner puts test and lint in separate
 network-disabled containers with no bind mounts.
 
+The code-review scanner runs as a Paperclip process seat on the host. It uses the host's
+configured GitHub accounts to discover PRs and creates manager tasks. The synthesis agent
+posts the review to GitHub. Review-seat tool isolation is not enforced yet (#327).
+
 The opt-in Chat ingress bridge listens on host loopback and verifies Google Chat's OIDC
 token before invoking the existing Routine intake worker. It holds a Paperclip board key;
 the issuing account's permissions bound that key. External HTTPS routing is not provisioned.
