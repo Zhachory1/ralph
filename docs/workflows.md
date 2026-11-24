@@ -37,6 +37,10 @@ The Manager rechecks the current revision before requesting it and reviews again
 Paperclip records the authors and enforces the human gate; interpreting the comments is the
 Manager's responsibility.
 
+When a Hermes disposition-repair run is interrupted by an agent pause, native resume can
+continue its existing recovery episode after the stopped execution is verified. The remaining
+retry budget and backoff still apply; an uncertain process outcome is not automatically replayed.
+
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
 The Paperclip canary checks whether a board assignment wakes `hermes_local`, which uses its
