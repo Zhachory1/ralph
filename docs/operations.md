@@ -157,8 +157,10 @@ idempotency key per head, and checks the GitHub review marker before dispatch. S
 the configured publisher to approve a fully reviewed, clean head or comment with actionable
 findings. Incomplete reviews and clean self-reviews are held without posting. Synthesis
 verifies the exact-head review receipt; an unconfirmed post needs human reconciliation.
-Searches at GitHub's 1,000-result limit, incomplete searches,
-300-file comparisons, and diffs over 1 MiB are held rather than truncated. GitHub search
+Searches over GitHub's 1,000-result limit are split into creation-time ranges. If the
+range counts disagree or a complete partition cannot be read, the scan fails without
+dispatching a partial queue. Incomplete searches, 300-file comparisons, and diffs over
+1 MiB are held rather than truncated. GitHub search
 covers at most 4,000 repositories, so discovery is best effort beyond that. This setup does
 not enforce no-shell isolation for review seats (#327) or merge PRs.
 

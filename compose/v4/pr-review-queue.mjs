@@ -40,7 +40,7 @@ async function readAssignedSearch(gh, viewer, assignee) {
   }
 
   const root = await readPages();
-  if (root.total < searchLimit) return root.rows;
+  if (root.total <= searchLimit) return root.rows;
 
   async function boundary(order) {
     const page = JSON.parse(await gh(viewer, "api", "--method", "GET", "search/issues",
@@ -61,8 +61,8 @@ async function readAssignedSearch(gh, viewer, assignee) {
     const right = await readPages(mid + 1, end);
     if (left.total + right.total !== total) throw new Error("Incomplete GitHub search: partition count drift");
     return [
-      ...(left.total < searchLimit ? left.rows : await split(start, mid, left)),
-      ...(right.total < searchLimit ? right.rows : await split(mid + 1, end, right)),
+      ...(left.total <= searchLimit ? left.rows : await split(start, mid, left)),
+      ...(right.total <= searchLimit ? right.rows : await split(mid + 1, end, right)),
     ];
   }
   return split(await boundary("asc"), await boundary("desc"), root);

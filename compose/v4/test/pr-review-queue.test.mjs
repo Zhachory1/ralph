@@ -111,6 +111,13 @@ test("a single-second capped partition fails closed", async () => {
   assert.deepEqual(f.reads, []);
 });
 
+test("accepts a complete 1,000-result search even when all PRs share one second", async () => {
+  const f = cappedFixture({ sameSecond: true });
+  f.rows["fixture-human:fixture-human"].pop();
+  assert.equal((await discoverReviewQueue(f)).incoming.length, 1000);
+  assert.ok(!f.searches.some(({ args }) => args.some((arg) => arg.includes(" created:"))));
+});
+
 test("an old outlier does not exhaust partition requests for a dense search", async () => {
   const f = cappedFixture();
   const rows = f.rows["fixture-human:fixture-human"];
