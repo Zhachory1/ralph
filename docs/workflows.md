@@ -13,6 +13,8 @@ For a configured code PR the Developer resubmits the corrected head by moving th
 the SHA and review comment records technical acceptance; `todo` with a comment
 returns changes to the Developer. Findings alone do not resolve a stage. A new PR
 head needs another review. GitHub approval and merge remain separate human decisions.
+When the Developer already has `GH_TOKEN`, it uses that existing credential through its
+terminal for the assigned repository work instead of requesting another connection.
 
 The Feature Workflow Manager applies the same review-stage primitive to the Author's RFC
 issue, naming itself -- not a human -- the review participant, and verifies the returned
@@ -65,6 +67,10 @@ Paperclip confirmations and assignment records. Initiative approval is requested
 Council PASS and read back for the exact revision before assignment. Denials, stale evidence,
 and unresolved gates create no assignment. This does not wire Hermes or Council into live routing.
 
+The opt-in Chat bridge verifies Google's token before forwarding human messages to the
+existing allowlisted, idempotent Routine intake. Offline checks use synthetic signed tokens
+and a disposable Paperclip board; they do not activate a live webhook or send.
+
 The first integrated slice connects `draftRfc`, the Council panel and `decideRequestRoute`
 end to end, as a library function and as a host CLI that reuses the Routine audit worker's
 loopback-origin, board-API-bearer-token convention. It drafts an RFC, runs the real
@@ -96,6 +102,9 @@ unsearchable across the refresh. This checks the search boundary in a fixture, n
 retention or production refresh.
 The gateway canary also dispatches a synthetic-model Hermes seat that retrieves the approved
 content through its configured qmd MCP tool. It does not prove isolation between seats.
+
+An optional QMD service can join the Paperclip network without recreating the board. Its
+index scope is an operator decision; a search result does not confer approval.
 
 The standalone v4 Council panel reads `profiles/council/rubric-v1.md` and returns three validated
 verdicts and a decision. It is not connected to a board or an approval gate; it does not approve

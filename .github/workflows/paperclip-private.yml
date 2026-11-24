@@ -14,6 +14,8 @@ on:
       - "compose/v4/paperclip-handoff.patch"
       - "compose/v4/provision-paperclip.py"
       - "compose/v4/council-judge-worker.py"
+      - "compose/v4/chat-ingress.py"
+      - "compose/v4/comms-intake-worker.mjs"
       - "compose/v4/test/paperclip-private-canary.py"
       - "compose/v4/test/paperclip-canary.py"
       - "compose/v4/test/paperclip-model.py"
@@ -25,6 +27,10 @@ on:
       - "compose/v4/test/paperclip-rfc-review-stage-canary.py"
       - "compose/v4/test/paperclip-wakeup-canary.py"
       - "compose/v4/test/paperclip-board-key-canary.py"
+      - "compose/v4/test/test-chat-ingress.py"
+      - "compose/v4/test/comms-intake-worker.test.mjs"
+      - "compose/v4/test/paperclip-chat-ingress-canary.py"
+      - "compose/v4/test/paperclip-chat-oidc-canary.py"
       - "profiles/PRINCIPLES.md"
       - "profiles/council/rubric-v1.md"
       - "profiles/librarian/SOUL.md"
@@ -57,6 +63,12 @@ jobs:
           python3 compose/v4/test/paperclip-wakeup-canary.py
           python3 compose/v4/test/paperclip-council-comments-canary.py
           python3 compose/v4/test/paperclip-roster-canary.py
+          python3 compose/v4/test/paperclip-chat-ingress-canary.py
+          python3 compose/v4/test/paperclip-chat-oidc-canary.py
+      - name: Verify Chat ingress boundaries
+        run: |
+          python3 compose/v4/test/test-chat-ingress.py
+          node --test compose/v4/test/comms-intake-worker.test.mjs
       - name: Verify standalone host boundary
         run: |
           node --test --test-concurrency=1 compose/v4/test/council-judge.test.mjs \

@@ -157,6 +157,10 @@ throughout, including one test that spawns the real
 `compose/v4/comms-intake-worker.mjs` CLI against a loopback-only in-process stand-in —
 no Docker, no live Google credentials, and no webhook registered anywhere by this.
 
+For the opt-in Google Chat bridge, configuration and offline tests are in
+[comms-intake.md](1-projects/v4-architecture/comms-intake.md#authenticated-chat-bridge).
+The bridge listens on loopback only; no public ingress or live routing is created by setup.
+
 Run `python3 compose/v4/test/qmd-approved-canary.py --qmd /path/to/qmd` with qmd 2.8.3
 and Git to verify the approved Git search boundary, including replacement of the old search
 result after a refresh to a second approved revision. The probe uses lexical search only;
@@ -253,6 +257,35 @@ approved content. Separate, time-bounded MCP probes exclude the draft and transi
 verify refresh to a second approved revision. Tool visibility does not prove authorization or
 filesystem isolation between seats. This does not enable Hindsight or touch a live target.
 The container and volume are removed on exit.
+
+### Add QMD to an existing Paperclip network
+
+Cache the pinned `ralph-knowledge-qmd:2.8.3` image, then set `PAPERCLIP_NETWORK` to the
+existing board network. Start only the QMD service; this does not recreate Paperclip:
+
+```sh
+PAPERCLIP_NETWORK=EXISTING_NETWORK docker compose -p PROJECT \
+  -f compose/v4/paperclip-knowledge.yml up -d --no-deps --no-build --pull never knowledge
+```
+
+The service exposes MCP only on the Docker network and stores its data in a named volume.
+Use one QMD service per Paperclip network; the service name `knowledge` is its network alias.
+Any seat that can reach that network may query it. The default approved-only snapshot
+procedure remains above. If the Director explicitly chooses a whole-repository index,
+drafts and unmarked files become searchable; retrieval does not approve their contents.
+Create a clean detached worktree inside the QMD volume, apply the same symlink and submodule
+checks as above, and add the worktree root as the collection path:
+
+```sh
+PAPERCLIP_NETWORK=EXISTING_NETWORK docker compose -p PROJECT \
+  -f compose/v4/paperclip-knowledge.yml exec knowledge \
+  qmd collection add /var/lib/ralph-knowledge/snapshot --name docs --mask '**/*.md'
+```
+
+Register `http://knowledge:8181/mcp` in the intended seat's Hermes home with `hermes mcp add`
+and include `qmd` in explicit toolsets. This service does not need the in-process
+`bootstrap-qmd-gateway.sh` installation. The snapshot does not advance automatically.
+Initial lexical indexing does not build vectors; `qmd embed` downloads a local model.
 
 ### Paperclip cold restore drill
 
@@ -373,6 +406,9 @@ Resolve reported identity, model, budget, hiring, heartbeat or reporting conflic
 the board before retrying. A matched manager must have an explicit `tasks:assign`
 grant; an implicit membership default is not sufficient. Existing instructions and grants are not rewritten. This
 provisions seat definitions; the adapter credentials and dispatch checks are separate.
+If an OpenCode seat already has `GH_TOKEN`, it can use that credential through its terminal
+without requesting a separate GitHub connection. Configure the credential separately; the
+provisioner does not create it or rewrite existing seat instructions.
 When the Feature Manager's Paperclip MCP tools are explicitly allowlisted, include the native
 `paperclipListComments` tool so it can read judges' task comments under its own run identity.
 
