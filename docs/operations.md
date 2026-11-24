@@ -138,14 +138,28 @@ so a review can be found after GitHub removes the request. Only submitted review
 named human on the dossier's exact head count. The dossier contents are left intact.
 No GitHub writes are made.
 
-`discoverReviewQueue` and `collectReviewEvidence` are read-only components for a
-future code-review queue. They require per-account GitHub readers and do not run
-PR code or tests. Searches with incomplete results or 1,000 matches fail closed.
-GitHub search covers at most 4,000 repositories, so discovery is best effort beyond that.
-Diff collection rejects comparisons at GitHub's 300-file limit, unreviewable patches,
-and diffs over 1 MiB. GitHub search and eligibility checks are not atomic; callers
-must recheck eligibility before handing off. Private PR data needs an approved
-storage destination. These components do not schedule work or dispatch a Reviewer.
+For the code-review flow, configure a host-local Paperclip process seat with the command
+`node /path/to/compose/v4/pr-review-dispatch.mjs MANAGER_ID SYNTHESIS_ID PUBLISHER ACCOUNT1 ACCOUNT2`.
+Give it access to both existing `gh` logins, and create a Paperclip Routine assigned to
+that seat with `skip_if_active` and a `*/10 * * * *` schedule. Keep its title and
+description static, and set the seat's maximum concurrent runs to one. Paperclip supplies
+the run token and task context; the worker creates review tasks and completes its own scan
+task. Review tasks are visible to the company; store private PR evidence there only with the
+owner's consent.
+
+For a one-off scan, prefix the seat's arguments with
+`--target 'OWNER/REPO#NUMBER@FULL_HEAD_SHA'` and trigger the Routine manually without
+enabling its recurring schedule. The PR still needs a configured assignee.
+
+The worker separates authored and incoming PRs, uses the native seven-day task
+idempotency key per head, and checks the GitHub review marker before dispatch. Synthesis uses
+the configured publisher to approve a fully reviewed, clean head or comment with actionable
+findings. Incomplete reviews and clean self-reviews are held without posting. Synthesis
+verifies the exact-head review receipt; an unconfirmed post needs human reconciliation.
+Searches at GitHub's 1,000-result limit, incomplete searches,
+300-file comparisons, and diffs over 1 MiB are held rather than truncated. GitHub search
+covers at most 4,000 repositories, so discovery is best effort beyond that. This setup does
+not enforce no-shell isolation for review seats (#327) or merge PRs.
 
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
