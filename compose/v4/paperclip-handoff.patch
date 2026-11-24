@@ -1339,269 +1339,26 @@
            result.interactionSkipped += 1;
            continue;
          }
-diff --git a/server/src/modules/run-dispatch/adapters/postgres.ts b/server/src/modules/run-dispatch/adapters/postgres.ts
-index 3a4806d..b14fae2 100644
---- a/server/src/modules/run-dispatch/adapters/postgres.ts
-+++ b/server/src/modules/run-dispatch/adapters/postgres.ts
-@@ -13,3 +13,3 @@ import { notifyScheduledRetryCancellation } from "../../../services/scheduled-re
- import { readClaimedNativeStopRecovery } from "../../../services/native-runtime/native-cancellation-request.js";
--import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
-+import { hasConversationContinuationPolicy, historicalAdapterType } from "../../../services/conversation-continuation.js";
- import { recordedUserStop, userStopBoundaryAt } from "../../../services/run-cancellation.js";
-@@ -304,1 +304,46 @@ export function createPostgresRunDispatchAdapter(
-+  async function pausedRepairActionIsCurrent(
-+    dbOrTx: Db,
-+    input: Pick<LoadGateFactsInput, "runId" | "companyId" | "agentId" | "contextSnapshot">,
-+    issueId: string,
-+    lock: boolean,
-+  ) {
-+    const context = input.contextSnapshot;
-+    const predecessorId = readNonEmptyString(context.pausedDispositionRepairRunId);
-+    if (!predecessorId) return true;
-+    const actionId = readNonEmptyString(context.recoveryActionId);
-+    if (!actionId) return false;
-+    const actionQuery = dbOrTx.select().from(issueRecoveryActions).where(and(
-+      eq(issueRecoveryActions.id, actionId), eq(issueRecoveryActions.companyId, input.companyId),
-+      eq(issueRecoveryActions.sourceIssueId, issueId),
-+    )).limit(1);
-+    const [action] = await (lock ? actionQuery.for("update") : actionQuery);
-+    const episode = legacyDispositionEpisode({ id: input.runId, contextSnapshot: context });
-+    const policy = parseObject(action?.wakePolicy);
-+    if (!action || action.status !== "active" || action.ownerType !== "agent" ||
-+        action.ownerAgentId !== input.agentId || action.returnOwnerAgentId !== input.agentId ||
-+        action.fingerprint !== context.dispositionRepairFingerprint ||
-+        action.fingerprint !== legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id) ||
-+        action.attemptCount !== episode.attempt || action.maxAttempts !== episode.maxAttempts ||
-+        policy.scheduledRunId !== input.runId || policy.retryAgentId !== input.agentId ||
-+        policy.attempt !== episode.attempt || policy.maxAttempts !== episode.maxAttempts) return false;
-+    const [predecessor] = await dbOrTx.select().from(heartbeatRuns).where(and(
-+      eq(heartbeatRuns.id, predecessorId), eq(heartbeatRuns.companyId, input.companyId),
-+    )).limit(1);
-+    if (!predecessor) return false;
-+    const previous = parseObject(predecessor.contextSnapshot);
-+    const previousResult = parseObject(predecessor.resultJson);
-+    const previousEpisode = legacyDispositionEpisode(predecessor);
-+    return predecessor.status === "cancelled" && predecessor.errorCode === "agent_paused" &&
-+      predecessor.runtimeMode === "legacy" && predecessor.agentId === input.agentId &&
-+      previous.issueId === issueId && previous.recoveryActionId === action.id &&
-+      previous.dispositionRepairSourceRunId === context.dispositionRepairSourceRunId &&
-+      previous.dispositionRepairFingerprint === action.fingerprint &&
-+      previousEpisode.id === episode.id && previousEpisode.attempt + 1 === episode.attempt &&
-+      previousEpisode.maxAttempts === episode.maxAttempts &&
-+      previousResult.cancelledByActorType !== "user" && previousResult.cancelledByActorType !== "board" &&
-+      parseObject(previousResult.executionCancellation).state === "acknowledged" &&
-+      hasConversationContinuationPolicy(previousResult) &&
-+      await historicalAdapterType(dbOrTx, predecessor) === "hermes_local";
-+  }
-+
-   async function loadGateFacts(
-@@ -459,3 +504,4 @@ export function createPostgresRunDispatchAdapter(
-           && legacyDispositionEpisode(source).id === episode.id
--          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts);
-+          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts)
-+          && await pausedRepairActionIsCurrent(dbOrTx, input, issueId, Boolean(tx));
-         currentFingerprint = legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id);
-@@ -1242,2 +1288,16 @@ export function createPostgresRunDispatchAdapter(
-     if (!issueId) return { issueId: null, facts: null, executionBlocker: null, decision: { stale: false as const } };
-+    if (readNonEmptyString(contextSnapshot.pausedDispositionRepairRunId)) {
-+      const current = await loadGateFacts({
-+        runId: run.id, companyId: run.companyId, agentId: run.agentId, contextSnapshot,
-+        responsibleUserId: run.responsibleUserId, conversationContinuation: false,
-+        scheduledRetryReason: run.scheduledRetryReason, wakeupRequestId: run.wakeupRequestId,
-+      }, now, tx, publications);
-+      if (!current.agentFound || !decideScheduledRetryGate(current.facts, now).allowed) {
-+        return { issueId, facts: null, executionBlocker: null, decision: { stale: true as const,
-+          errorCode: "issue_disposition_repair_superseded" as const,
-+          reason: "The paused disposition repair is no longer eligible.",
-+          details: { issueId, recoveryActionId: contextSnapshot.recoveryActionId },
-+        } };
-+      }
-+    }
-     if (typeof contextSnapshot.workspaceReconstructionActionId === "string") {
-diff --git a/server/src/modules/run-dispatch/domain/policy.ts b/server/src/modules/run-dispatch/domain/policy.ts
-index 59d9552..8e9460d 100644
---- a/server/src/modules/run-dispatch/domain/policy.ts
-+++ b/server/src/modules/run-dispatch/domain/policy.ts
-@@ -111,2 +111,3 @@ export type QueuedRunStalenessErrorCode =
-   | "issue_waiting_for_response"
-+  | "issue_disposition_repair_superseded"
-   | "execution_reconciliation_required"
-diff --git a/server/src/services/agent-lifecycle.ts b/server/src/services/agent-lifecycle.ts
-index f24dc30..3dacf00 100644
---- a/server/src/services/agent-lifecycle.ts
-+++ b/server/src/services/agent-lifecycle.ts
-@@ -68,2 +68,5 @@ export function createAgentLifecycleEffects(_hooks: BudgetServiceHooks = {}): li
-       if (!isAgentStatusInvokable(before) && isAgentStatusInvokable(after)) {
-+        if (before === "paused") {
-+          await notifyDeliveryWork(tx, DELIVERY_QUEUES.activeRecoveryActions, JSON.stringify({ companyId }));
-+        }
-         await notifyNativeResponsePresentation(tx, { companyId, agentId });
-diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
-index 5fe898c..474d154 100644
---- a/server/src/services/heartbeat.ts
-+++ b/server/src/services/heartbeat.ts
-@@ -2929,2 +2929,3 @@ export function heartbeatService(
-           typeof context.workspaceReconstructionActionId === "string" ||
-+          typeof context.pausedDispositionRepairRunId === "string" ||
-           ["native_safe_replacement", "native_provider_overloaded"].includes(run.scheduledRetryReason ?? "")));
-diff --git a/server/src/services/recovery/service.ts b/server/src/services/recovery/service.ts
-index a31c52b..2b43635 100644
---- a/server/src/services/recovery/service.ts
-+++ b/server/src/services/recovery/service.ts
-@@ -22,2 +22,4 @@ import { readLegacyDispositionSource } from "./legacy-disposition-read.js";
- import { hasPendingWakeInteraction } from "./pending-wake-interaction.js";
-+import { getExecutionBlocker } from "../execution-blocker.js";
-+import { hasConversationContinuationPolicy, historicalAdapterType } from "../conversation-continuation.js";
- import { isAgentAwaitingSetup } from "../../modules/agent-lifecycle/index.js";
-@@ -3187,2 +3189,4 @@ export function recoveryService(
-     legacyEpisode?: LegacyDispositionEpisode;
-+    pausedDispositionRepairRunId?: string;
-+    pausedWakePolicy?: Record<string, unknown>;
-   }) {
-@@ -3216,2 +3219,5 @@ export function recoveryService(
-         } : {}),
-+        ...(input.pausedDispositionRepairRunId ? {
-+          pausedDispositionRepairRunId: input.pausedDispositionRepairRunId,
-+        } : {}),
-         bypassContinuationSummaryPark: true,
-@@ -3341,2 +3347,6 @@ export function recoveryService(
-         attemptCount: input.attempt,
-+        ...(input.pausedDispositionRepairRunId && input.legacyEpisode ? {
-+          maxAttempts: sql`case when ${issueRecoveryActions.maxAttempts} is null then null
-+            else least(${issueRecoveryActions.maxAttempts}, ${input.legacyEpisode.maxAttempts}) end`,
-+        } : {}),
-         wakePolicy: {
-@@ -3364,2 +3375,9 @@ export function recoveryService(
-           eq(issueRecoveryActions.fingerprint, input.fingerprint),
-+          input.pausedDispositionRepairRunId ? and(
-+            eq(issueRecoveryActions.ownerAgentId, agentId),
-+            eq(issueRecoveryActions.returnOwnerAgentId, agentId),
-+            eq(issueRecoveryActions.attemptCount, input.attempt - 1),
-+            gte(issueRecoveryActions.maxAttempts, input.attempt),
-+            sql`${issueRecoveryActions.wakePolicy} = ${JSON.stringify(input.pausedWakePolicy ?? {})}::jsonb`,
-+          ) : undefined,
-           sql`${issueRecoveryActions.attemptCount} <= ${input.attempt}`,
-@@ -3601,4 +3619,70 @@ export function recoveryService(
-         );
--        const outcome = await reconcileDispositionRepair(issue, latestRun, {
-+        let sourceRun: LatestIssueRun = latestRun;
-+        let pausedEpisode: LegacyDispositionEpisode | undefined;
-+        let expectedLatestRunId: string | undefined;
-+        if (latestRun?.status === "cancelled" && latestRun.errorCode === "agent_paused") {
-+          const context = parseObject(latestRun.contextSnapshot);
-+          const resultJson = parseObject(latestRun.resultJson);
-+          const episode = legacyDispositionEpisode(latestRun);
-+          const sourceId = readNonEmptyString(context.dispositionRepairSourceRunId);
-+          const retryAt = Date.parse(readNonEmptyString(wakePolicy.retryAt) ?? "");
-+          const adapterType = await historicalAdapterType(db, latestRun);
-+          if (
-+            action.status !== "active" || action.ownerType !== "agent" ||
-+            !action.ownerAgentId || action.ownerAgentId !== issue.assigneeAgentId ||
-+            action.returnOwnerAgentId !== action.ownerAgentId || latestRun.agentId !== action.ownerAgentId ||
-+            latestRun.runtimeMode !== "legacy" ||
-+            (latestRun.issueId && latestRun.issueId !== issue.id) ||
-+            (latestRun.nativeIssueId && latestRun.nativeIssueId !== issue.id) ||
-+            readNonEmptyString(context.issueId) !== issue.id ||
-+            (readNonEmptyString(context.taskId) && readNonEmptyString(context.taskId) !== issue.id) ||
-+            readNonEmptyString(context.recoveryActionId) !== action.id ||
-+            readNonEmptyString(context.wakeReason) !== ISSUE_DISPOSITION_REPAIR_RETRY_REASON ||
-+            readNonEmptyString(context.retryReason) !== ISSUE_DISPOSITION_REPAIR_RETRY_REASON ||
-+            readNonEmptyString(context.dispositionRepairFingerprint) !== action.fingerprint ||
-+            asNumber(context.dispositionRepairAttempt, -1) !== episode.attempt ||
-+            asNumber(context.dispositionRepairMaxAttempts, -1) !== episode.maxAttempts ||
-+            readNonEmptyString(wakePolicy.scheduledRunId) !== latestRun.id ||
-+            readNonEmptyString(wakePolicy.retryAgentId) !== action.ownerAgentId ||
-+            action.attemptCount !== episode.attempt ||
-+            action.maxAttempts === null || action.maxAttempts < episode.maxAttempts ||
-+            episode.attempt < 1 || episode.attempt >= episode.maxAttempts ||
-+            asNumber(wakePolicy.attempt, -1) !== episode.attempt ||
-+            asNumber(wakePolicy.maxAttempts, -1) !== episode.maxAttempts ||
-+            action.fingerprint !== legacyDispositionFingerprint(issue.companyId, issue.id, action.ownerAgentId, episode.id) ||
-+            !sourceId || !Number.isFinite(retryAt) || retryAt > Date.now() ||
-+            adapterType !== "hermes_local" ||
-+            !hasConversationContinuationPolicy(resultJson) ||
-+            parseObject(resultJson.executionCancellation).state !== "acknowledged" ||
-+            isOperatorCancelledRun(latestRun, action.ownerAgentId) ||
-+            await legacyExecutionNeedsReconciliationWithEvidence(db, latestRun) ||
-+            await getExecutionBlocker(db, issue.companyId, issue.id)
-+          ) {
-+            result.skipped += 1;
-+            continue;
-+          }
-+          const [source] = await db.select().from(heartbeatRuns).where(and(
-+            eq(heartbeatRuns.companyId, issue.companyId), eq(heartbeatRuns.id, sourceId),
-+          )).limit(1);
-+          const sourceContext = parseObject(source?.contextSnapshot);
-+          if (
-+            !source || source.status !== "succeeded" || source.agentId !== action.ownerAgentId ||
-+            readNonEmptyString(sourceContext.issueId) !== issue.id ||
-+            (source.issueId && source.issueId !== issue.id) ||
-+            (source.nativeIssueId && source.nativeIssueId !== issue.id) ||
-+            legacyDispositionEpisode(source).id !== episode.id
-+          ) {
-+            result.skipped += 1;
-+            continue;
-+          }
-+          sourceRun = source;
-+          pausedEpisode = episode;
-+          expectedLatestRunId = latestRun.id;
-+        }
-+        const outcome = await reconcileDispositionRepair(issue, sourceRun, {
-           historicalAttemptCount: persistedAttempt,
-+          legacyEpisode: pausedEpisode,
-+          expectedLatestRunId,
-+          expectedActionId: pausedEpisode ? action.id : undefined,
-+          expectedWakePolicy: pausedEpisode ? wakePolicy : undefined,
-         });
-@@ -3835,2 +3915,13 @@ export function recoveryService(
-     if (!issue) return "missing_issue";
-+    if (readNonEmptyString(context.pausedDispositionRepairRunId)) {
-+      const action = await recoveryActionsSvc.getActiveForIssue(run.companyId, issue.id);
-+      const policy = parseObject(action?.wakePolicy);
-+      if (!action || action.id !== readNonEmptyString(context.recoveryActionId) ||
-+          action.status !== "active" || action.ownerType !== "agent" || action.ownerAgentId !== run.agentId ||
-+          action.returnOwnerAgentId !== run.agentId || action.fingerprint !== context.dispositionRepairFingerprint ||
-+          action.attemptCount !== episode.attempt || action.maxAttempts !== episode.maxAttempts ||
-+          policy.scheduledRunId !== run.id || policy.retryAgentId !== run.agentId) {
-+        return "paused_repair_action_changed";
-+      }
-+    }
-     const state = await collectDispositionRepairSourceState(db, { issue, excludeRunId: run.id, excludeWakeupRequestId: run.wakeupRequestId ?? undefined });
-@@ -3858,3 +3949,4 @@ export function recoveryService(
-     latestRun: LatestIssueRun,
--    options: { historicalAttemptCount?: number; legacyEpisode?: LegacyDispositionEpisode } = {},
-+    options: { historicalAttemptCount?: number; legacyEpisode?: LegacyDispositionEpisode;
-+      expectedLatestRunId?: string; expectedActionId?: string; expectedWakePolicy?: Record<string, unknown> } = {},
-   ): Promise<"queued" | "escalated" | "covered" | "skipped"> {
-@@ -3890,3 +3982,5 @@ export function recoveryService(
-       if (!latestRun) return "skipped";
--      const decision = await decidePersistedLegacyContinuation(current, latestRun.id, state, episode);
-+      const decision = await decidePersistedLegacyContinuation(
-+        current, latestRun.id, state, episode, options.expectedLatestRunId,
-+      );
-       if (decision.kind === "skip") return "skipped";
-@@ -3918,2 +4012,3 @@ export function recoveryService(
-     );
-+    if (options.expectedActionId && activeRepairAction?.id !== options.expectedActionId) return "skipped";
-     // Budget admission may wait behind another recovery worker. Read the
-@@ -3976,3 +4071,3 @@ export function recoveryService(
-     const nextAttempt = sameFingerprintAttempt + 1;
--    const action = await ensureDispositionRepairAction({
-+    const action = options.expectedActionId ? activeRepairAction! : await ensureDispositionRepairAction({
-       issue: current,
-@@ -3990,4 +4089,6 @@ export function recoveryService(
-       legacyEpisode: episode,
-+      pausedDispositionRepairRunId: options.expectedLatestRunId,
-+      pausedWakePolicy: options.expectedWakePolicy,
-     });
--    if (!scheduled && episode) {
-+    if (!scheduled && episode && !options.expectedActionId) {
-       // Admission can reject a stale snapshot under the issue lock. An empty
+diff --git a/server/src/__tests__/heartbeat-handoff-execution-wait.test.ts b/server/src/__tests__/heartbeat-handoff-execution-wait.test.ts
+index 59d406d0..525f861c 100644
+--- a/server/src/__tests__/heartbeat-handoff-execution-wait.test.ts
++++ b/server/src/__tests__/heartbeat-handoff-execution-wait.test.ts
+@@ -411,3 +411,3 @@ describe.skipIf(!support.supported)("handoff execution waits", () => {
+     const [wake] = await f.requests();
+-    const payload = { ...wake.payload, interruptedRunId: f.run.id };
++    const payload: Record<string, unknown> = { ...wake.payload, interruptedRunId: f.run.id };
+     delete payload._paperclipExecutionHandoff;
+@@ -443,3 +443,3 @@ describe.skipIf(!support.supported)("handoff execution waits", () => {
+     const [wake] = await f.requests();
+-    const payload = { ...wake.payload, interruptedRunId: f.run.id };
++    const payload: Record<string, unknown> = { ...wake.payload, interruptedRunId: f.run.id };
+     delete payload._paperclipExecutionHandoff;
 diff --git a/server/src/__tests__/heartbeat-process-recovery.test.ts b/server/src/__tests__/heartbeat-process-recovery.test.ts
-index 3b1d5d4..26788d2 100644
+index 3b1d5d45..315b9e70 100644
 --- a/server/src/__tests__/heartbeat-process-recovery.test.ts
 +++ b/server/src/__tests__/heartbeat-process-recovery.test.ts
-@@ -8012,1 +8012,204 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
+@@ -8011,2 +8011,288 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
+ 
 +  async function seedPausedDispositionRepair() {
 +    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
 +      status: "in_progress", runStatus: "succeeded",
@@ -1662,7 +1419,7 @@ index 3b1d5d4..26788d2 100644
 +  });
 +
 +  it.each([
-+    "paused", "budget", "operator_stop", "user_cancel", "unacknowledged", "non_hermes",
++    "paused", "budget", "operator_stop", "user_cancel", "unacknowledged", "non_hermes", "adapter_reconfigured",
 +    "unsafe_workspace", "live_owner", "different_source", "failed_source", "different_episode",
 +    "reassigned", "changed_issue", "different_owner", "future_retry", "exhausted", "lower_action_cap", "newer_run",
 +    "concurrent_run",
@@ -1680,6 +1437,9 @@ index 3b1d5d4..26788d2 100644
 +    if (scenario === "user_cancel") await updateRun({ resultJson: { ...resultJson, cancelledByActorType: "user" } });
 +    if (scenario === "unacknowledged") await updateRun({ resultJson: { ...resultJson, executionCancellation: { state: "requested" } } });
 +    if (scenario === "non_hermes") await updateRun({ runnerProfileJson: { adapterDispatch: { adapterType: "process" } } });
++    if (scenario === "adapter_reconfigured") {
++      await db.update(agents).set({ adapterType: "process" }).where(eq(agents.id, agentId));
++    }
 +    if (scenario === "unsafe_workspace") await updateRun({ resultJson: { ...resultJson, workspaceRestoreFailure: "restore_unsafe_archive" } });
 +    if (scenario === "live_owner") await updateRun({ processPid: process.pid });
 +    if (scenario === "different_source") await updateRun({ contextSnapshot: { ...context, dispositionRepairSourceRunId: randomUUID() } });
@@ -1715,6 +1475,16 @@ index 3b1d5d4..26788d2 100644
 +    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(0);
 +    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
 +    expect(action?.fingerprint).toBe(fingerprint);
++    if (scenario === "exhausted" || scenario === "lower_action_cap") {
++      expect(action).toMatchObject({ status: "active", ownerType: "board" });
++      await recovery.reconcileActiveRecoveryActions({ companyId });
++      const escalations = await db.select().from(issueRecoveryActions).where(and(
++        eq(issueRecoveryActions.sourceIssueId, issueId),
++        eq(issueRecoveryActions.status, "active"),
++        eq(issueRecoveryActions.ownerType, "board"),
++      ));
++      expect(escalations).toHaveLength(1);
++    }
 +  });
 +
 +  it("reserves one paused repair retry under concurrent recovery sweeps", async () => {
@@ -1728,6 +1498,46 @@ index 3b1d5d4..26788d2 100644
 +    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(1);
 +    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
 +    expect(action).toMatchObject({ status: "active", attemptCount: 2, maxAttempts: 2 });
++  });
++
++  it("does not promote a paused repair after its owner changes adapters", async () => {
++    const { companyId, agentId } = await seedPausedDispositionRepair();
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await recovery.reconcileActiveRecoveryActions({ companyId });
++    const scheduled = (await selectRecoveryRunsByAgent(agentId))
++      .find((run) => run.scheduledRetryReason === "issue_disposition_repair")!;
++    expect(scheduled).toBeDefined();
++    await db.update(agents).set({ adapterType: "process" }).where(eq(agents.id, agentId));
++    const promoted = await heartbeatService(db).promoteDueScheduledRetries(
++      new Date(scheduled.scheduledRetryAt!.getTime() + 1),
++    );
++    expect(promoted.runIds).not.toContain(scheduled.id);
++  });
++
++  it("preserves a paused repair reservation through a bounded infrastructure retry", async () => {
++    const { companyId, agentId, actionId } = await seedPausedDispositionRepair();
++    const recovery = recoveryService(db, { enqueueWakeup: vi.fn() });
++    await recovery.reconcileActiveRecoveryActions({ companyId });
++    const scheduled = (await selectRecoveryRunsByAgent(agentId))
++      .find((run) => run.scheduledRetryReason === "issue_disposition_repair")!;
++    const now = new Date(scheduled.scheduledRetryAt!.getTime() + 1);
++    expect((await heartbeatService(db).promoteDueScheduledRetries(now)).runIds).toContain(scheduled.id);
++    await db.update(heartbeatRuns).set({
++      status: "failed", finishedAt: now, errorCode: "adapter_failed",
++      resultJson: { executionRecovery: { kind: "bootstrap", providerWorkStarted: false } },
++    }).where(eq(heartbeatRuns.id, scheduled.id));
++    await db.update(agentWakeupRequests).set({ status: "failed", finishedAt: now })
++      .where(eq(agentWakeupRequests.id, scheduled.wakeupRequestId!));
++    const retry = await heartbeatService(db).scheduleBoundedRetry(scheduled.id, {
++      now, retryReason: "transient_failure", maxAttempts: 2, delayMs: 1000,
++    });
++    expect(retry).toMatchObject({ outcome: "scheduled", attempt: 1 });
++    if (retry.outcome !== "scheduled") throw Error("Expected a bounded retry");
++    expect(await recovery.legacyRepairDispatchBlock(retry.run.id)).toBeNull();
++    expect((await heartbeatService(db).promoteDueScheduledRetries(new Date(retry.run.scheduledRetryAt!.getTime() + 1)))
++      .runIds).toContain(retry.run.id);
++    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
++    expect(action).toMatchObject({ attemptCount: 2, wakePolicy: { scheduledRunId: scheduled.id } });
 +  });
 +
 +  it("does not dispatch a paused repair after its recovery action is resolved", async () => {
@@ -1769,8 +1579,31 @@ index 3b1d5d4..26788d2 100644
 +    expect(dispatch).not.toHaveBeenCalled();
 +  });
 +
-+  it("does not overwrite a paused repair policy changed while scheduling", async () => {
-+    const { companyId, agentId, actionId, repairId } = await seedPausedDispositionRepair();
++  it.each(["hermes_local", "process"])("hands a paused repair only to a claimed Hermes adapter (%s)", async (adapterType) => {
++    const { companyId, agentId, issueId } = await seedPausedDispositionRepair();
++    await recoveryService(db, { enqueueWakeup: vi.fn() }).reconcileActiveRecoveryActions({ companyId });
++    const scheduled = (await selectRecoveryRunsByAgent(agentId))
++      .find((run) => run.scheduledRetryReason === "issue_disposition_repair")!;
++    const now = new Date(scheduled.scheduledRetryAt!.getTime() + 1);
++    expect((await heartbeatService(db).promoteDueScheduledRetries(now)).runIds).toContain(scheduled.id);
++    await db.update(heartbeatRuns).set({
++      status: "running", runnerProfileJson: { adapterDispatch: { adapterType } },
++    }).where(eq(heartbeatRuns.id, scheduled.id));
++    await db.update(issues).set({ executionRunId: scheduled.id }).where(eq(issues.id, issueId));
++    const { reserveRunBudget } = await import("../services/budget-reservations.js");
++    const reservation = await reserveRunBudget(db, companyId, scheduled.id, null);
++    const { createPostgresRunDispatchAdapter } = await import("../modules/run-dispatch/adapters/postgres.js");
++    const dispatch = vi.fn(async () => undefined);
++    const outcome = await createPostgresRunDispatchAdapter(db).dispatchResolvedInteractionIfCurrent({
++      companyId, runId: scheduled.id, reservationId: reservation.id, expectedStatus: "running",
++      enforceContinuationOwnership: true, now, dispatch,
++    });
++    expect(outcome.dispatched).toBe(adapterType === "hermes_local");
++    expect(dispatch).toHaveBeenCalledTimes(adapterType === "hermes_local" ? 1 : 0);
++  });
++
++  it.each(["policy", "predecessor"])("does not reserve a paused repair after a concurrent %s change", async (change) => {
++    const { companyId, agentId, issueId, actionId, repairId } = await seedPausedDispositionRepair();
 +    let locked!: () => void;
 +    let release!: () => void;
 +    const lockReady = new Promise<void>((resolve) => { locked = resolve; });
@@ -1782,7 +1615,14 @@ index 3b1d5d4..26788d2 100644
 +    const locker = db.transaction(async (tx) => {
 +      lockerPid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0].pid);
 +      await tx.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId)).for("update");
-+      await tx.update(issueRecoveryActions).set({ wakePolicy: policy }).where(eq(issueRecoveryActions.id, actionId));
++      if (change === "policy") {
++        await tx.update(issueRecoveryActions).set({ wakePolicy: policy }).where(eq(issueRecoveryActions.id, actionId));
++      } else {
++        await tx.insert(heartbeatRuns).values({
++          companyId, agentId, status: "succeeded", invocationSource: "automation",
++          contextSnapshot: { issueId, taskId: issueId },
++        });
++      }
 +      locked();
 +      await releaseLock;
 +    });
@@ -1800,17 +1640,213 @@ index 3b1d5d4..26788d2 100644
 +      await Promise.all([locker, sweep]);
 +    }
 +    const [action] = await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.id, actionId));
-+    expect(action).toMatchObject({ attemptCount: 1, wakePolicy: policy });
++    expect(action).toMatchObject({ attemptCount: 1, ...(change === "policy" ? { wakePolicy: policy } : {}) });
 +    const runs = await selectRecoveryRunsByAgent(agentId);
 +    expect(runs.filter((run) => run.scheduledRetryReason === "issue_disposition_repair")).toHaveLength(0);
 +  });
 +
    it("reschedules an expired persisted disposition repair without duplicating the retry", async () => {
+diff --git a/server/src/modules/run-dispatch/adapters/postgres.ts b/server/src/modules/run-dispatch/adapters/postgres.ts
+index 3a4806de..f199ab45 100644
+--- a/server/src/modules/run-dispatch/adapters/postgres.ts
++++ b/server/src/modules/run-dispatch/adapters/postgres.ts
+@@ -13,3 +13,4 @@ import { notifyScheduledRetryCancellation } from "../../../services/scheduled-re
+ import { readClaimedNativeStopRecovery } from "../../../services/native-runtime/native-cancellation-request.js";
+-import { hasConversationContinuationPolicy } from "../../../services/conversation-continuation.js";
++import { claimedAdapterType, hasConversationContinuationPolicy, historicalAdapterType } from "../../../services/conversation-continuation.js";
++import { pausedRepairOwnsReservation } from "../../../services/recovery/legacy-disposition-read.js";
+ import { recordedUserStop, userStopBoundaryAt } from "../../../services/run-cancellation.js";
+@@ -303,2 +304,48 @@ export function createPostgresRunDispatchAdapter(
+ 
++  async function pausedRepairActionIsCurrent(
++    dbOrTx: Db,
++    input: Pick<LoadGateFactsInput, "runId" | "companyId" | "agentId" | "contextSnapshot">,
++    issueId: string,
++    lock: boolean,
++  ) {
++    const context = input.contextSnapshot;
++    const predecessorId = readNonEmptyString(context.pausedDispositionRepairRunId);
++    if (!predecessorId) return true;
++    const actionId = readNonEmptyString(context.recoveryActionId);
++    if (!actionId) return false;
++    const actionQuery = dbOrTx.select().from(issueRecoveryActions).where(and(
++      eq(issueRecoveryActions.id, actionId), eq(issueRecoveryActions.companyId, input.companyId),
++      eq(issueRecoveryActions.sourceIssueId, issueId),
++    )).limit(1);
++    const [action] = await (lock ? actionQuery.for("update") : actionQuery);
++    const episode = legacyDispositionEpisode({ id: input.runId, contextSnapshot: context });
++    const policy = parseObject(action?.wakePolicy);
++    if (!action || action.status !== "active" || action.ownerType !== "agent" ||
++        action.ownerAgentId !== input.agentId || action.returnOwnerAgentId !== input.agentId ||
++        action.fingerprint !== context.dispositionRepairFingerprint ||
++        action.fingerprint !== legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id) ||
++        action.attemptCount !== episode.attempt || action.maxAttempts !== episode.maxAttempts ||
++        policy.retryAgentId !== input.agentId ||
++        !await pausedRepairOwnsReservation(dbOrTx, { ...input, issueId, context }, policy.scheduledRunId) ||
++        policy.attempt !== episode.attempt || policy.maxAttempts !== episode.maxAttempts) return false;
++    const [predecessor] = await dbOrTx.select().from(heartbeatRuns).where(and(
++      eq(heartbeatRuns.id, predecessorId), eq(heartbeatRuns.companyId, input.companyId),
++    )).limit(1);
++    if (!predecessor) return false;
++    const previous = parseObject(predecessor.contextSnapshot);
++    const previousResult = parseObject(predecessor.resultJson);
++    const previousEpisode = legacyDispositionEpisode(predecessor);
++    return predecessor.status === "cancelled" && predecessor.errorCode === "agent_paused" &&
++      predecessor.runtimeMode === "legacy" && predecessor.agentId === input.agentId &&
++      previous.issueId === issueId && previous.recoveryActionId === action.id &&
++      previous.dispositionRepairSourceRunId === context.dispositionRepairSourceRunId &&
++      previous.dispositionRepairFingerprint === action.fingerprint &&
++      previousEpisode.id === episode.id && previousEpisode.attempt + 1 === episode.attempt &&
++      previousEpisode.maxAttempts === episode.maxAttempts &&
++      previousResult.cancelledByActorType !== "user" && previousResult.cancelledByActorType !== "board" &&
++      parseObject(previousResult.executionCancellation).state === "acknowledged" &&
++      hasConversationContinuationPolicy(previousResult) &&
++      await historicalAdapterType(dbOrTx, predecessor) === "hermes_local";
++  }
++
+   async function loadGateFacts(
+@@ -332,3 +379,4 @@ export function createPostgresRunDispatchAdapter(
+     const issueId = readNonEmptyString(input.contextSnapshot.issueId);
+-    const retryReasonKind = classifyRetryReasonKind(retryReason);
++    const retryReasonKind = readNonEmptyString(input.contextSnapshot.pausedDispositionRepairRunId)
++      ? "disposition_repair" : classifyRetryReasonKind(retryReason);
+ 
+@@ -459,3 +507,5 @@ export function createPostgresRunDispatchAdapter(
+           && legacyDispositionEpisode(source).id === episode.id
+-          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts);
++          && episode.attempt >= 1 && episode.attempt <= episode.maxAttempts)
++          && (!readNonEmptyString(input.contextSnapshot.pausedDispositionRepairRunId) || agent.adapterType === "hermes_local")
++          && await pausedRepairActionIsCurrent(dbOrTx, input, issueId, Boolean(tx));
+         currentFingerprint = legacyDispositionFingerprint(input.companyId, issueId, input.agentId, episode.id);
+@@ -1242,2 +1292,16 @@ export function createPostgresRunDispatchAdapter(
+     if (!issueId) return { issueId: null, facts: null, executionBlocker: null, decision: { stale: false as const } };
++    if (readNonEmptyString(contextSnapshot.pausedDispositionRepairRunId)) {
++      const current = await loadGateFacts({
++        runId: run.id, companyId: run.companyId, agentId: run.agentId, contextSnapshot,
++        responsibleUserId: run.responsibleUserId, conversationContinuation: false,
++        scheduledRetryReason: run.scheduledRetryReason, wakeupRequestId: run.wakeupRequestId,
++      }, now, tx, publications);
++      if (!current.agentFound || !decideScheduledRetryGate(current.facts, now).allowed) {
++        return { issueId, facts: null, executionBlocker: null, decision: { stale: true as const,
++          errorCode: "issue_disposition_repair_superseded" as const,
++          reason: "The paused disposition repair is no longer eligible.",
++          details: { issueId, recoveryActionId: contextSnapshot.recoveryActionId },
++        } };
++      }
++    }
+     if (typeof contextSnapshot.workspaceReconstructionActionId === "string") {
+@@ -1481,3 +1545,3 @@ export function createPostgresRunDispatchAdapter(
+ 
+-      const [scope] = await tx.select({ companyStatus: companies.status, agentStatus: agents.status,
++      const [scope] = await tx.select({ companyStatus: companies.status, agentStatus: agents.status, adapterType: agents.adapterType,
+         lifecycleState: agents.lifecycleState, reservationId: budgetReservations.id,
+@@ -1497,2 +1561,14 @@ export function createPostgresRunDispatchAdapter(
+ 
++      const repairContext = parseObject(run.contextSnapshot);
++      const repairIssueId = readNonEmptyString(repairContext.issueId);
++      if (repairIssueId && readNonEmptyString(repairContext.pausedDispositionRepairRunId)
++        && (scope.adapterType !== "hermes_local" || claimedAdapterType(run) !== "hermes_local"
++          || !await pausedRepairActionIsCurrent(tx, { ...run, runId: run.id, contextSnapshot: repairContext }, repairIssueId, true))) {
++        return { dispatched: false as const, cancellation: await cancelStaleRunInTx(tx, run, repairIssueId, {
++          stale: true, errorCode: "issue_disposition_repair_superseded",
++          reason: "The paused disposition repair no longer owns a Hermes dispatch.",
++          details: { issueId: repairIssueId, recoveryActionId: repairContext.recoveryActionId },
++        }, input.expectedStatus, input.now, true) };
++      }
++
+       if (!stopRecovery && input.enforceContinuationOwnership !== false) {
+diff --git a/server/src/modules/run-dispatch/domain/policy.ts b/server/src/modules/run-dispatch/domain/policy.ts
+index 59d95527..8e9460d2 100644
+--- a/server/src/modules/run-dispatch/domain/policy.ts
++++ b/server/src/modules/run-dispatch/domain/policy.ts
+@@ -111,2 +111,3 @@ export type QueuedRunStalenessErrorCode =
+   | "issue_waiting_for_response"
++  | "issue_disposition_repair_superseded"
+   | "execution_reconciliation_required"
+diff --git a/server/src/services/agent-lifecycle.ts b/server/src/services/agent-lifecycle.ts
+index f24dc308..3dacf005 100644
+--- a/server/src/services/agent-lifecycle.ts
++++ b/server/src/services/agent-lifecycle.ts
+@@ -68,2 +68,5 @@ export function createAgentLifecycleEffects(_hooks: BudgetServiceHooks = {}): li
+       if (!isAgentStatusInvokable(before) && isAgentStatusInvokable(after)) {
++        if (before === "paused") {
++          await notifyDeliveryWork(tx, DELIVERY_QUEUES.activeRecoveryActions, JSON.stringify({ companyId }));
++        }
+         await notifyNativeResponsePresentation(tx, { companyId, agentId });
+diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
+index 5fe898c9..474d154a 100644
+--- a/server/src/services/heartbeat.ts
++++ b/server/src/services/heartbeat.ts
+@@ -2929,2 +2929,3 @@ export function heartbeatService(
+           typeof context.workspaceReconstructionActionId === "string" ||
++          typeof context.pausedDispositionRepairRunId === "string" ||
+           ["native_safe_replacement", "native_provider_overloaded"].includes(run.scheduledRetryReason ?? "")));
+diff --git a/server/src/services/pre-dispatch-review-wait.ts b/server/src/services/pre-dispatch-review-wait.ts
+index 68454275..2c06d79b 100644
+--- a/server/src/services/pre-dispatch-review-wait.ts
++++ b/server/src/services/pre-dispatch-review-wait.ts
+@@ -23,2 +23,3 @@ const staleDispatchReconciliationExemptions = {
+   issue_review_participant_changed: true,
++  issue_disposition_repair_superseded: true,
+   // This code requires its own executionWait receipt in pre-dispatch-execution-wait.ts.
+diff --git a/server/src/services/recovery/legacy-disposition-read.ts b/server/src/services/recovery/legacy-disposition-read.ts
+index 08f9204f..f235648a 100644
+--- a/server/src/services/recovery/legacy-disposition-read.ts
++++ b/server/src/services/recovery/legacy-disposition-read.ts
+@@ -4,2 +4,28 @@ import { recoveryRunResultColumn } from "./run-result-read.js";
+ 
++export async function pausedRepairOwnsReservation(
++  db: Pick<Db, "select">,
++  scope: { companyId: string; agentId: string; issueId: string; runId: string; context: Record<string, unknown> },
++  reservedRunId: unknown,
++) {
++  if (typeof reservedRunId !== "string") return false;
++  let id = scope.runId;
++  const marker = scope.context.pausedDispositionRepairRunId;
++  for (let depth = 0; depth <= 2; depth++) {
++    if (id === reservedRunId) return true;
++    const [run] = await db.select({ retryOfRunId: heartbeatRuns.retryOfRunId })
++      .from(heartbeatRuns).where(and(
++        eq(heartbeatRuns.id, id), eq(heartbeatRuns.companyId, scope.companyId),
++        eq(heartbeatRuns.agentId, scope.agentId), eq(heartbeatRuns.runtimeMode, "legacy"),
++        eq(heartbeatRuns.scheduledRetryReason, "transient_failure"),
++        sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${scope.issueId}`,
++        sql`${heartbeatRuns.contextSnapshot}->>'pausedDispositionRepairRunId' = ${marker}`,
++        sql`${heartbeatRuns.contextSnapshot}->>'recoveryActionId' = ${scope.context.recoveryActionId}`,
++        sql`${heartbeatRuns.contextSnapshot}->>'dispositionRepairFingerprint' = ${scope.context.dispositionRepairFingerprint}`,
++      )).limit(1);
++    if (!run?.retryOfRunId) return false;
++    id = run.retryOfRunId;
++  }
++  return false;
++}
++
+ export async function readLegacyDispositionSource(
 diff --git a/server/src/services/recovery/service.ts b/server/src/services/recovery/service.ts
-index a54fe7a..468f56a 100644
+index a31c52bb..7be1e663 100644
 --- a/server/src/services/recovery/service.ts
 +++ b/server/src/services/recovery/service.ts
-@@ -3203,2 +3203,23 @@ export function recoveryService(
+@@ -20,4 +20,6 @@ import { recoveryRunContextColumn, recoveryRunVersionColumn } from "./run-contex
+ import { recoveryRunResultColumn } from "./run-result-read.js";
+-import { readLegacyDispositionSource } from "./legacy-disposition-read.js";
++import { pausedRepairOwnsReservation, readLegacyDispositionSource } from "./legacy-disposition-read.js";
+ import { hasPendingWakeInteraction } from "./pending-wake-interaction.js";
++import { getExecutionBlocker } from "../execution-blocker.js";
++import { hasConversationContinuationPolicy, historicalAdapterType } from "../conversation-continuation.js";
+ import { isAgentAwaitingSetup } from "../../modules/agent-lifecycle/index.js";
+@@ -963,4 +965,5 @@ export function recoveryService(
+     issueId: string,
++    database: DbOrTransaction = db,
+   ): Promise<LatestIssueRun> {
+-    return db
++    return database
+       .select({
+@@ -3187,2 +3190,4 @@ export function recoveryService(
+     legacyEpisode?: LegacyDispositionEpisode;
++    pausedDispositionRepairRunId?: string;
++    pausedWakePolicy?: Record<string, unknown>;
+   }) {
+@@ -3199,2 +3204,23 @@ export function recoveryService(
      const idempotencyKey = `issue_disposition_repair:${input.issue.id}:${input.fingerprint}:${input.attempt}`;
 +    if (input.pausedDispositionRepairRunId && timing.delayMs === 0) return null;
 +    const actionUpdate = (scheduledRunId: string) => ({
@@ -1834,9 +1870,26 @@ index a54fe7a..468f56a 100644
 +      updatedAt: now,
 +    });
      const context = withRecoveryContext(
-@@ -3279,2 +3300,19 @@ export function recoveryService(
+@@ -3216,2 +3242,5 @@ export function recoveryService(
+         } : {}),
++        ...(input.pausedDispositionRepairRunId ? {
++          pausedDispositionRepairRunId: input.pausedDispositionRepairRunId,
++        } : {}),
+         bypassContinuationSummaryPark: true,
+@@ -3270,4 +3299,31 @@ export function recoveryService(
+         } else {
+-          scheduledRun = await db.transaction(async (tx) => {
++          const reservedRun = await db.transaction(async (tx) => {
              await notifyScheduledRetryDispatch(tx, { companyId: input.issue.companyId });
 +            if (input.pausedDispositionRepairRunId) {
++              const [current] = await tx.select({ status: issues.status, assigneeAgentId: issues.assigneeAgentId })
++                .from(issues).where(and(eq(issues.companyId, input.issue.companyId), eq(issues.id, input.issue.id)))
++                .for("update");
++              if (current?.status !== input.issue.status || current.assigneeAgentId !== agentId) return null;
++              const [owner] = await tx.select({ adapterType: agents.adapterType }).from(agents).where(and(
++                eq(agents.companyId, input.issue.companyId), eq(agents.id, agentId),
++              )).limit(1);
++              if (owner?.adapterType !== "hermes_local") return null;
 +              const [action] = await tx.select({ id: issueRecoveryActions.id })
 +                .from(issueRecoveryActions).where(and(
 +                  eq(issueRecoveryActions.id, input.action.id),
@@ -1852,9 +1905,11 @@ index a54fe7a..468f56a 100644
 +                  sql`${issueRecoveryActions.wakePolicy} = ${JSON.stringify(input.pausedWakePolicy ?? {})}::jsonb`,
 +                )).for("update");
 +              if (!action) return null;
++              const latest = await getLatestIssueRun(input.issue.companyId, input.issue.id, tx);
++              if (latest?.id !== input.pausedDispositionRepairRunId) return null;
 +            }
              const wakeup = await tx
-@@ -3329,5 +3367,9 @@ export function recoveryService(
+@@ -3322,4 +3378,10 @@ export function recoveryService(
                .where(eq(agentWakeupRequests.id, wakeup.id));
 +            if (input.pausedDispositionRepairRunId) {
 +              await tx.update(issueRecoveryActions).set(actionUpdate(run.id))
@@ -1862,19 +1917,16 @@ index a54fe7a..468f56a 100644
 +            }
              return run;
            });
--          created = true;
-+          created = Boolean(scheduledRun);
-         }
-@@ -3345,23 +3387,4 @@ export function recoveryService(
++          if (!reservedRun) return null;
++          scheduledRun = reservedRun;
+           created = true;
+@@ -3337,20 +3399,5 @@ export function recoveryService(
+ 
 -    await db
 +    if (!input.pausedDispositionRepairRunId) await db
        .update(issueRecoveryActions)
 -      .set({
 -        attemptCount: input.attempt,
--        ...(input.pausedDispositionRepairRunId && input.legacyEpisode ? {
--          maxAttempts: sql`case when ${issueRecoveryActions.maxAttempts} is null then null
--            else least(${issueRecoveryActions.maxAttempts}, ${input.legacyEpisode.maxAttempts}) end`,
--        } : {}),
 -        wakePolicy: {
 -          type: "bounded_owner_disposition_repair",
 -          retryAgentId: agentId,
@@ -1891,13 +1943,129 @@ index a54fe7a..468f56a 100644
 -      })
 +      .set(actionUpdate(scheduledRun.id))
        .where(
-@@ -3375,9 +3398,2 @@ export function recoveryService(
-           eq(issueRecoveryActions.fingerprint, input.fingerprint),
--          input.pausedDispositionRepairRunId ? and(
--            eq(issueRecoveryActions.ownerAgentId, agentId),
--            eq(issueRecoveryActions.returnOwnerAgentId, agentId),
--            eq(issueRecoveryActions.attemptCount, input.attempt - 1),
--            gte(issueRecoveryActions.maxAttempts, input.attempt),
--            sql`${issueRecoveryActions.wakePolicy} = ${JSON.stringify(input.pausedWakePolicy ?? {})}::jsonb`,
--          ) : undefined,
-           sql`${issueRecoveryActions.attemptCount} <= ${input.attempt}`,
+@@ -3601,4 +3648,70 @@ export function recoveryService(
+         );
+-        const outcome = await reconcileDispositionRepair(issue, latestRun, {
++        let sourceRun: LatestIssueRun = latestRun;
++        let pausedEpisode: LegacyDispositionEpisode | undefined;
++        let expectedLatestRunId: string | undefined;
++        if (latestRun?.status === "cancelled" && latestRun.errorCode === "agent_paused") {
++          const context = parseObject(latestRun.contextSnapshot);
++          const resultJson = parseObject(latestRun.resultJson);
++          const episode = legacyDispositionEpisode(latestRun);
++          const sourceId = readNonEmptyString(context.dispositionRepairSourceRunId);
++          const retryAt = Date.parse(readNonEmptyString(wakePolicy.retryAt) ?? "");
++          const adapterType = await historicalAdapterType(db, latestRun);
++          if (
++            action.status !== "active" || action.ownerType !== "agent" ||
++            !action.ownerAgentId || action.ownerAgentId !== issue.assigneeAgentId ||
++            action.returnOwnerAgentId !== action.ownerAgentId || latestRun.agentId !== action.ownerAgentId ||
++            latestRun.runtimeMode !== "legacy" ||
++            (latestRun.issueId && latestRun.issueId !== issue.id) ||
++            (latestRun.nativeIssueId && latestRun.nativeIssueId !== issue.id) ||
++            readNonEmptyString(context.issueId) !== issue.id ||
++            (readNonEmptyString(context.taskId) && readNonEmptyString(context.taskId) !== issue.id) ||
++            readNonEmptyString(context.recoveryActionId) !== action.id ||
++            readNonEmptyString(context.wakeReason) !== ISSUE_DISPOSITION_REPAIR_RETRY_REASON ||
++            readNonEmptyString(context.retryReason) !== ISSUE_DISPOSITION_REPAIR_RETRY_REASON ||
++            readNonEmptyString(context.dispositionRepairFingerprint) !== action.fingerprint ||
++            asNumber(context.dispositionRepairAttempt, -1) !== episode.attempt ||
++            asNumber(context.dispositionRepairMaxAttempts, -1) !== episode.maxAttempts ||
++            readNonEmptyString(wakePolicy.scheduledRunId) !== latestRun.id ||
++            readNonEmptyString(wakePolicy.retryAgentId) !== action.ownerAgentId ||
++            action.attemptCount !== episode.attempt ||
++            action.maxAttempts === null || action.maxAttempts < 1 ||
++            episode.attempt < 1 || episode.attempt > episode.maxAttempts ||
++            asNumber(wakePolicy.attempt, -1) !== episode.attempt ||
++            asNumber(wakePolicy.maxAttempts, -1) !== episode.maxAttempts ||
++            action.fingerprint !== legacyDispositionFingerprint(issue.companyId, issue.id, action.ownerAgentId, episode.id) ||
++            !sourceId || !Number.isFinite(retryAt) || retryAt > Date.now() ||
++            adapterType !== "hermes_local" ||
++            !hasConversationContinuationPolicy(resultJson) ||
++            parseObject(resultJson.executionCancellation).state !== "acknowledged" ||
++            isOperatorCancelledRun(latestRun, action.ownerAgentId) ||
++            await legacyExecutionNeedsReconciliationWithEvidence(db, latestRun) ||
++            await getExecutionBlocker(db, issue.companyId, issue.id)
++          ) {
++            result.skipped += 1;
++            continue;
++          }
++          const [source] = await db.select().from(heartbeatRuns).where(and(
++            eq(heartbeatRuns.companyId, issue.companyId), eq(heartbeatRuns.id, sourceId),
++          )).limit(1);
++          const sourceContext = parseObject(source?.contextSnapshot);
++          if (
++            !source || source.status !== "succeeded" || source.agentId !== action.ownerAgentId ||
++            readNonEmptyString(sourceContext.issueId) !== issue.id ||
++            (source.issueId && source.issueId !== issue.id) ||
++            (source.nativeIssueId && source.nativeIssueId !== issue.id) ||
++            legacyDispositionEpisode(source).id !== episode.id
++          ) {
++            result.skipped += 1;
++            continue;
++          }
++          sourceRun = source;
++          pausedEpisode = episode;
++          expectedLatestRunId = latestRun.id;
++        }
++        const outcome = await reconcileDispositionRepair(issue, sourceRun, {
+           historicalAttemptCount: persistedAttempt,
++          legacyEpisode: pausedEpisode,
++          expectedLatestRunId,
++          expectedActionId: pausedEpisode ? action.id : undefined,
++          expectedWakePolicy: pausedEpisode ? wakePolicy : undefined,
+         });
+@@ -3835,2 +3948,14 @@ export function recoveryService(
+     if (!issue) return "missing_issue";
++    if (readNonEmptyString(context.pausedDispositionRepairRunId)) {
++      const action = await recoveryActionsSvc.getActiveForIssue(run.companyId, issue.id);
++      const policy = parseObject(action?.wakePolicy);
++      if (!action || action.id !== readNonEmptyString(context.recoveryActionId) ||
++          action.status !== "active" || action.ownerType !== "agent" || action.ownerAgentId !== run.agentId ||
++          action.returnOwnerAgentId !== run.agentId || action.fingerprint !== context.dispositionRepairFingerprint ||
++          action.attemptCount !== episode.attempt || action.maxAttempts !== episode.maxAttempts ||
++          policy.retryAgentId !== run.agentId ||
++          !await pausedRepairOwnsReservation(db, { ...run, issueId, runId: run.id, context }, policy.scheduledRunId)) {
++        return "paused_repair_action_changed";
++      }
++    }
+     const state = await collectDispositionRepairSourceState(db, { issue, excludeRunId: run.id, excludeWakeupRequestId: run.wakeupRequestId ?? undefined });
+@@ -3858,3 +3983,4 @@ export function recoveryService(
+     latestRun: LatestIssueRun,
+-    options: { historicalAttemptCount?: number; legacyEpisode?: LegacyDispositionEpisode } = {},
++    options: { historicalAttemptCount?: number; legacyEpisode?: LegacyDispositionEpisode;
++      expectedLatestRunId?: string; expectedActionId?: string; expectedWakePolicy?: Record<string, unknown> } = {},
+   ): Promise<"queued" | "escalated" | "covered" | "skipped"> {
+@@ -3875,3 +4001,3 @@ export function recoveryService(
+     );
+-    const maxAttempts = episode?.maxAttempts ?? DISPOSITION_REPAIR_MAX_ATTEMPTS;
++    let maxAttempts = episode?.maxAttempts ?? DISPOSITION_REPAIR_MAX_ATTEMPTS;
+     const dependencyWait = episode ? null : await resolveContinuationWaitingOnReview(current);
+@@ -3890,3 +4016,5 @@ export function recoveryService(
+       if (!latestRun) return "skipped";
+-      const decision = await decidePersistedLegacyContinuation(current, latestRun.id, state, episode);
++      const decision = await decidePersistedLegacyContinuation(
++        current, latestRun.id, state, episode, options.expectedLatestRunId,
++      );
+       if (decision.kind === "skip") return "skipped";
+@@ -3918,2 +4046,7 @@ export function recoveryService(
+     );
++    if (options.expectedActionId && activeRepairAction?.id !== options.expectedActionId) return "skipped";
++    if (options.expectedActionId) {
++      if (ownerAgent?.adapterType !== "hermes_local" || !activeRepairAction?.maxAttempts) return "skipped";
++      maxAttempts = Math.min(maxAttempts, activeRepairAction.maxAttempts);
++    }
+     // Budget admission may wait behind another recovery worker. Read the
+@@ -3976,3 +4109,3 @@ export function recoveryService(
+     const nextAttempt = sameFingerprintAttempt + 1;
+-    const action = await ensureDispositionRepairAction({
++    const action = options.expectedActionId ? activeRepairAction! : await ensureDispositionRepairAction({
+       issue: current,
+@@ -3990,4 +4123,6 @@ export function recoveryService(
+       legacyEpisode: episode,
++      pausedDispositionRepairRunId: options.expectedLatestRunId,
++      pausedWakePolicy: options.expectedWakePolicy,
+     });
+-    if (!scheduled && episode) {
++    if (!scheduled && episode && !options.expectedActionId) {
+       // Admission can reject a stale snapshot under the issue lock. An empty
