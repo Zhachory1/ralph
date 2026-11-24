@@ -3,3 +3,4 @@
 *
 !paperclip-canary.Dockerfile
 !paperclip-handoff.patch
+!paperclip-protected-assignment.patch

@@ -10,8 +10,8 @@ FIXTURE = runpy.run_path(str(Path(__file__).with_name("paperclip-rfc-canary.py")
 ORIGIN = FIXTURE["ORIGIN"]
 
 
-def bearer(container, token, path, *, body=None):
-    args = [] if body is None else ["--json", json.dumps(body)]
+def bearer(container, token, path, *, body=None, method=None):
+    args = ([] if method is None else ["-X", method]) + ([] if body is None else ["--json", json.dumps(body)])
     # Pass the header through stdin, not Docker arguments or output.
     result = subprocess.run(
         ["docker", "exec", "-i", container, "curl", "-sS", "--max-time", "10",

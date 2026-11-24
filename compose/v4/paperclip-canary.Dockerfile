@@ -1,13 +1,14 @@
 # Put the two pinned upstream runtimes on the same execution host for the offline canary.
 #
-# Backport Paperclip PR #18510 to the pinned server; build context is compose/v4.
+# Apply the pinned server patches; build context is compose/v4.
 FROM nousresearch/hermes-agent@sha256:36099926da316742423544e055d4734777105ffe6341873af5459b957d0c2919 AS hermes
 FROM ghcr.io/paperclipai/paperclip:2026.1117.0@sha256:bdf38d10544dc6c831e16dc027f23ad586353ef3be1a1b2c6979e63b956aceb1 AS paperclip-base
 
 FROM paperclip-base AS paperclip-handoff
 WORKDIR /app
-COPY paperclip-handoff.patch /tmp/paperclip-handoff.patch
+COPY paperclip-handoff.patch paperclip-protected-assignment.patch /tmp/
 RUN git apply --verbose -p1 /tmp/paperclip-handoff.patch && \
+    git apply --verbose -p1 /tmp/paperclip-protected-assignment.patch && \
     cd server && \
     PAPERCLIP_TSC_EMIT_ONLY=1 PAPERCLIP_TYPECHECK_LOW_MEMORY=1 node ../scripts/run-tsc.mjs && \
     cp -Rf ../packages/paperclip-runner/dist/. dist/vendor/paperclip-runner/ && \
