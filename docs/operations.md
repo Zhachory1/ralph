@@ -247,10 +247,11 @@ builds its own approved/draft/transient Git fixture entirely inside that one con
 (nothing shared or bind-mounted), runs the bootstrap script above against it, confirms
 Paperclip's own `adapters/hermes_local/test-environment` check passes for an agent whose
 `adapterConfig.env.HERMES_HOME` is that exact directory, and dispatches two `hermes_local`
-seats using a synthetic model. The configured seat retrieves approved content through
-Hermes' MCP tools; a terminal-only seat's qmd tool search finds no match. Direct MCP checks
-exclude the draft and transient log and verify refresh to a second approved revision. This
-does not prove filesystem isolation between seats, enable Hindsight, or touch a live target.
+seats using a synthetic model. Tool search is off for both seats so the model checks the same
+direct tool list. Only the configured seat sees the qmd query tool and uses it to retrieve
+approved content. Separate, time-bounded MCP probes exclude the draft and transient log and
+verify refresh to a second approved revision. Tool visibility does not prove authorization or
+filesystem isolation between seats. This does not enable Hindsight or touch a live target.
 The container and volume are removed on exit.
 
 ### Paperclip cold restore drill

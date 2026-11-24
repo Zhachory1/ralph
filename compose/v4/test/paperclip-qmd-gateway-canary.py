@@ -11,8 +11,8 @@ an operator would, confirms Paperclip's own
 `adapterConfig.env.HERMES_HOME` is that exact directory, then dispatches a
 seat with a synthetic model through Hermes' native MCP tools. Direct MCP checks
 also verify that a draft and a transient log are absent before and after an
-approved-snapshot refresh. A terminal-only seat's qmd tool search finds no
-match; shared container filesystem access is not tested as an isolation boundary.
+approved-snapshot refresh. Both seats use direct tool advertisement: only the
+configured seat sees qmd. Shared filesystem access is not tested as an isolation boundary.
 
 No live Paperclip target, Hindsight, or push.
 
@@ -24,6 +24,7 @@ import importlib.util
 import json
 import os
 import secrets
+import select
 import subprocess
 import tempfile
 import time
@@ -42,6 +43,8 @@ APPROVED = "coppermeadow"
 APPROVED_NEXT = "silverfen"
 DRAFT = "violetdraft"
 LOG = "embertranscript"
+MCP_TIMEOUT_SECONDS = 15
+MCP_EXIT_SECONDS = 2
 
 
 def load_paperclip_canary():
@@ -159,32 +162,64 @@ def query_through_configured_entrypoint(container, term):
     """Speaks MCP over stdio to the literal command/env Hermes stores for
     this connector, inside this seat's actual container, so the result
     reflects what the seat itself would see."""
-    proc = subprocess.Popen(
+    return run_mcp_query(
         ["docker", "exec", "-u", "node", "-i",
          "-e", f"QMD_CONFIG_DIR={QMD_STATE_DIR}/config", "-e", f"XDG_CACHE_HOME={QMD_STATE_DIR}/cache",
          "-e", f"INDEX_PATH={QMD_STATE_DIR}/cache/index.sqlite",
-         container, f"{QMD_NPM_GLOBAL}/bin/qmd", "mcp"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+         container, "timeout", "-k", str(MCP_EXIT_SECONDS), str(MCP_TIMEOUT_SECONDS),
+         f"{QMD_NPM_GLOBAL}/bin/qmd", "mcp"],
+        term,
     )
-    try:
-        def rpc(message):
-            proc.stdin.write(json.dumps(message) + "\n")
-            proc.stdin.flush()
-            return json.loads(proc.stdout.readline())
 
-        init = rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "canary", "version": "0"}}})
-        assert "result" in init, init
-        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-        proc.stdin.flush()
-        response = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "query", "arguments": {
-                "searches": [{"type": "lex", "query": term}], "collections": ["approved"], "rerank": False}}})
-        return response["result"]["structuredContent"]["results"]
-    finally:
-        proc.stdin.close()
-        proc.terminate()
-        proc.wait(timeout=10)
+
+def run_mcp_query(command, term, *, timeout=MCP_TIMEOUT_SECONDS):
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as proc:
+        pending = b""
+
+        def send(message):
+            proc.stdin.write((json.dumps(message) + "\n").encode())
+            proc.stdin.flush()
+
+        def rpc(message):
+            nonlocal pending
+            send(message)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"qmd MCP timed out during {message['method']}")
+                line, newline, rest = pending.partition(b"\n")
+                if newline:
+                    pending = rest
+                    response = json.loads(line)
+                    if response.get("id") == message["id"]:
+                        assert "result" in response, f"qmd MCP {message['method']} failed"
+                        return response["result"]
+                    continue
+                if not select.select([proc.stdout], [], [], remaining)[0]:
+                    raise TimeoutError(f"qmd MCP timed out during {message['method']}")
+                chunk = os.read(proc.stdout.fileno(), 4096)
+                if not chunk:
+                    raise RuntimeError(f"qmd MCP closed stdout during {message['method']}")
+                pending += chunk
+
+        try:
+            rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-03-26", "capabilities": {},
+                "clientInfo": {"name": "canary", "version": "0"}}})
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            response = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "query", "arguments": {
+                    "searches": [{"type": "lex", "query": term}], "collections": ["approved"], "rerank": False}}})
+            assert not response.get("isError"), "qmd query reported an error"
+            return response["structuredContent"]["results"]
+        finally:
+            proc.stdin.close()
+            try:
+                proc.wait(timeout=MCP_EXIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
 
 def wait_for_ready(container, agent_id):
@@ -230,6 +265,7 @@ def run_canary():
                 ("model.provider", "custom"), ("model.default", "fixture-hermes"),
                 ("model.base_url", f"{pc.MODEL_API}/v1"), ("model.api_key", pc.MODEL_PLACEHOLDER),
                 ("terminal.backend", "local"), ("terminal.cwd", "/paperclip"),
+                ("tools.tool_search.enabled", "off"),
             ):
                 pc.docker("exec", "-u", "node", "-e", f"HERMES_HOME={HERMES_HOME}", container,
                           "/opt/hermes/bin/hermes", "config", "set", key, value)
@@ -267,7 +303,8 @@ def run_canary():
                 terminal_issue_id = issue["id"]
                 pc.RUN_SECONDS = 120
                 run = pc.wait_for_run(container, issue["id"], terminal_only["id"])
-                assert "QMD_SEARCH_NO_MATCH" in (run.get("stdoutExcerpt") or "")
+                output = run.get("stdoutExcerpt") or ""
+                assert "QMD_TOOL_NOT_ADVERTISED" in output, f"Unexpected terminal-only tool surface: {output[-2000:]}"
                 agent = pc.api(container, f"companies/{company['id']}/agents", {
                     "name": "Qmd Gateway Canary Seat",
                     "adapterType": "hermes_local",
@@ -290,7 +327,7 @@ def run_canary():
                 assert APPROVED in reply and "1-projects/fixture/rfc.md" in reply, \
                     f"Agent did not retrieve the approved document: {reply[-2000:]}"
                 assert DRAFT not in reply and LOG not in reply
-                print("PASS: configured seat retrieved qmd content; terminal-only qmd search found no match")
+                print("PASS: configured seat retrieved qmd content; no qmd tool advertised to the terminal-only seat")
             finally:
                 model.terminate()
                 model.wait(timeout=10)

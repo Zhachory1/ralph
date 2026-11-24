@@ -21,6 +21,46 @@ FINISH = r'''
 pc -X PATCH --json '{"status":"done","comment":"Follow-up fixture check passed."}' "$issue" >/dev/null
 '''
 
+QMD_QUERY_TOOL = "mcp__qmd__query"
+QMD_FIXTURE_TERM = "coppermeadow"
+QMD_FIXTURE_FILE = "approved/1-projects/fixture/rfc.md"
+
+
+def qmd_found_approved_document(content):
+    try:
+        payload = json.loads(content)
+        if "error" in payload:
+            return False
+        hits = payload["structuredContent"]["results"]
+        if not isinstance(hits, list) or len(hits) != 1 or hits[0]["file"] != QMD_FIXTURE_FILE:
+            return False
+        snippet = hits[0]["snippet"]
+        return isinstance(snippet, str) and QMD_FIXTURE_TERM in snippet
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def qmd_turn(names, tail):
+    if "terminal" not in names or names.intersection({"tool_search", "tool_describe", "tool_call"}):
+        return {"role": "assistant", "content": "QMD_FIXTURE_TOOL_SURFACE_ERROR"}, "stop"
+    if QMD_QUERY_TOOL not in names:
+        if any(name.startswith("mcp__qmd__") for name in names):
+            return {"role": "assistant", "content": "QMD_FIXTURE_TOOL_SURFACE_ERROR"}, "stop"
+        return {"role": "assistant", "content": "QMD_TOOL_NOT_ADVERTISED"}, "stop"
+    for message in tail:
+        if message["role"] == "tool" and message.get("tool_call_id") == "qmd_query":
+            content = message.get("content")
+            if not qmd_found_approved_document(content):
+                return {"role": "assistant", "content": "QMD_RETRIEVAL_FAILED"}, "stop"
+            return {"role": "assistant", "content": "QMD_RESULT: " + content}, "stop"
+    query = {"searches": [{"type": "lex", "query": QMD_FIXTURE_TERM}],
+             "collections": ["approved"], "rerank": False}
+    return {"role": "assistant", "tool_calls": [{
+        "index": 0, "id": "qmd_query", "type": "function",
+        "function": {"name": QMD_QUERY_TOOL, "arguments": json.dumps(query)},
+    }]}, "tool_calls"
+
+
 class Model(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/chat/completions":
@@ -34,44 +74,7 @@ class Model(BaseHTTPRequestHandler):
         prompt = str(messages[last_user]["content"])
         followup = "CANARY_FOLLOWUP" in prompt
         if "QMD_CANARY" in prompt:
-            replies = {message.get("tool_call_id"): message.get("content", "")
-                       for message in tail if message["role"] == "tool"}
-            query = {"searches": [{"type": "lex", "query": "coppermeadow"}],
-                     "collections": ["approved"], "rerank": False}
-            if "qmd_query" in replies:
-                delta = {"role": "assistant", "content": "QMD_RESULT: " + str(replies["qmd_query"])}
-                finish = "stop"
-            elif "qmd_search" in replies:
-                try:
-                    matches = json.loads(replies["qmd_search"])["results"][0]["matches"]
-                    if not isinstance(matches, list):
-                        raise ValueError("invalid tool search matches")
-                except (KeyError, IndexError, TypeError, ValueError):
-                    delta = {"role": "assistant", "content": "QMD_SEARCH_ERROR"}
-                    finish = "stop"
-                else:
-                    if "mcp__qmd__query" not in matches:
-                        delta = {"role": "assistant", "content": "QMD_SEARCH_NO_MATCH"}
-                        finish = "stop"
-                    else:
-                        delta = {"role": "assistant", "tool_calls": [{
-                            "index": 0, "id": "qmd_query", "type": "function",
-                            "function": {"name": "tool_call", "arguments": json.dumps({
-                                "calls": [{"name": "mcp__qmd__query", "arguments": query}],
-                            })},
-                        }]}
-                        finish = "tool_calls"
-            elif "mcp__qmd__query" in names or "tool_search" in names:
-                direct = "mcp__qmd__query" in names
-                delta = {"role": "assistant", "tool_calls": [{
-                    "index": 0, "id": "qmd_query" if direct else "qmd_search", "type": "function",
-                    "function": {"name": "mcp__qmd__query" if direct else "tool_search",
-                                 "arguments": json.dumps(query if direct else {"queries": ["qmd query"]})},
-                }]}
-                finish = "tool_calls"
-            else:
-                delta = {"role": "assistant", "content": "QMD_TOOL_UNAVAILABLE"}
-                finish = "stop"
+            delta, finish = qmd_turn(names, tail)
         elif ("terminal" in names and "CANARY_DELEGATE" in prompt
                 and not any(message["role"] == "tool" for message in tail)):
             args = json.dumps({"command": "python3 /paperclip/delegate.py"})
@@ -122,4 +125,5 @@ class Model(BaseHTTPRequestHandler):
         self.wfile.write(b'{"status":"ok"}')
 
 
-HTTPServer(("127.0.0.1", 8765), Model).serve_forever()
+if __name__ == "__main__":
+    HTTPServer(("127.0.0.1", 8765), Model).serve_forever()

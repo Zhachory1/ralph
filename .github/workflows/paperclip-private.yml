@@ -8,10 +8,17 @@ on:
       - "compose/v4/paperclip-private.yml"
       - "compose/v4/paperclip-canary.Dockerfile"
       - "compose/v4/paperclip-canary.Dockerfile.dockerignore"
+      - "compose/Dockerfile.knowledge"
+      - "compose/v4/bootstrap-qmd-gateway.sh"
+      - "compose/v4/paperclip-canary.yml"
       - "compose/v4/paperclip-handoff.patch"
       - "compose/v4/provision-paperclip.py"
       - "compose/v4/council-judge-worker.py"
       - "compose/v4/test/paperclip-private-canary.py"
+      - "compose/v4/test/paperclip-canary.py"
+      - "compose/v4/test/paperclip-model.py"
+      - "compose/v4/test/paperclip-qmd-gateway-canary.py"
+      - "compose/v4/test/test-paperclip-qmd-gateway-canary.py"
       - "compose/v4/test/paperclip-council-comments-canary.py"
       - "compose/v4/test/paperclip-roster-canary.py"
       - "compose/v4/test/paperclip-rfc-canary.py"
@@ -35,6 +42,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       - name: Build the pinned preview image
+        id: preview-image
         run: |
           docker build --no-cache --network none \
             -t ralph-paperclip-private:2026.1117.0 \
@@ -62,6 +70,28 @@ jobs:
           docker run --rm --network none --user node --entrypoint sh -w /app/server \
             ralph-paperclip-private:2026.1117.0 -c \
             './node_modules/.bin/vitest run src/modules/wake-queue/domain/policy.test.ts src/modules/wake-queue/application/use-cases.test.ts src/modules/wake-queue/adapters/postgres.test.ts --maxWorkers=1 --no-file-parallelism --silent'
+      - name: Verify native qmd tool visibility and retrieval
+        if: ${{ !cancelled() && steps.preview-image.outcome == 'success' }}
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD -- \
+            .github/workflows/paperclip-private.yml compose/Dockerfile.knowledge \
+            compose/v4/bootstrap-qmd-gateway.sh compose/v4/paperclip-canary.yml \
+            compose/v4/paperclip-canary.Dockerfile compose/v4/paperclip-canary.Dockerfile.dockerignore \
+            compose/v4/paperclip-handoff.patch compose/v4/test/paperclip-canary.py \
+            compose/v4/test/paperclip-model.py compose/v4/test/paperclip-qmd-gateway-canary.py \
+            compose/v4/test/test-paperclip-qmd-gateway-canary.py)
+          if [[ -z "$changed" ]]; then
+            exit 0
+          fi
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD"
+          python3 compose/v4/test/test-paperclip-qmd-gateway-canary.py
+          docker tag ralph-paperclip-private:2026.1117.0 ralph-paperclip-canary:2026.1117.0
+          docker build -t ralph-knowledge-qmd:2.8.3 -f compose/Dockerfile.knowledge compose
+          python3 compose/v4/test/paperclip-qmd-gateway-canary.py
       - name: Export tested server runtime
         run: |
           git rev-parse HEAD^1 > "$RUNNER_TEMP/paperclip-runtime-base"
