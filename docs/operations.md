@@ -138,6 +138,15 @@ so a review can be found after GitHub removes the request. Only submitted review
 named human on the dossier's exact head count. The dossier contents are left intact.
 No GitHub writes are made.
 
+`discoverReviewQueue` and `collectReviewEvidence` are read-only components for a
+future code-review queue. They require per-account GitHub readers and do not run
+PR code or tests. Searches with incomplete results or 1,000 matches fail closed.
+GitHub search covers at most 4,000 repositories, so discovery is best effort beyond that.
+Diff collection rejects comparisons at GitHub's 300-file limit, unreviewable patches,
+and diffs over 1 MiB. GitHub search and eligibility checks are not atomic; callers
+must recheck eligibility before handing off. Private PR data needs an approved
+storage destination. These components do not schedule work or dispatch a Reviewer.
+
 Run `node --test compose/v4/test/routine-maintenance-worker.test.mjs` and
 `node --test compose/v4/test/routine-maintenance-worker-cli.test.mjs`, plus
 `python3 compose/v4/test/paperclip-maintenance-canary.py` with the same cached image, to check
