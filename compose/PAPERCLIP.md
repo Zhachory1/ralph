@@ -7,7 +7,8 @@ are not configured here. The approved design is
 
 ## Prerequisites
 
-- Docker Compose, Node `26.13.0`, and a private tailnet.
+- Docker Compose, Node `26.13.0`, and a private tailnet with MagicDNS and HTTPS
+  certificates enabled.
 - Paperclip source at
   [`af7577b`](https://github.com/zhachbot/paperclip/commit/af7577bfdc743777f0409e4c3a8615d0480a7784);
   the OpenCode V2 fix is still an unmerged upstream PR.
@@ -68,9 +69,10 @@ git -C "$HOME/.local/share/ralph-v4/paperclip-src" switch --detach \
   af7577bfdc743777f0409e4c3a8615d0480a7784
 cd "$HOME/.local/share/ralph-v4/paperclip-src"
 npx --yes pnpm@9.15.4 install --frozen-lockfile --prefer-offline
+npx --yes pnpm@9.15.4 --filter @paperclipai/ui build
 ```
 
-Load the private database configuration and start Paperclip in the foreground:
+Load the private database configuration and bootstrap Paperclip in the foreground:
 
 ```sh
 set -a
@@ -81,13 +83,57 @@ PAPERCLIP_NO_BROWSER=true npx --yes pnpm@9.15.4 paperclipai onboard \
   --no-install-service
 ```
 
-Paperclip uses authenticated private mode. If it cannot detect a Tailscale
-address, onboarding warns and the server refuses to start. Connect Tailscale
-and make its CLI available on `PATH`. Onboarding may print an access-bearing
-invite URL; do not publish it. Do not expose the UI publicly. Finish the normal
-browser claim before use. Launch approval is still required before enabling the
-live instance. If onboarding asks for an initial agent, create it; its runtime
-and gateway are configured in a later step.
+If Tailscale is unavailable, the server refuses to start. Onboarding may print
+an access-bearing invite URL; do not publish it. Stop the foreground server
+with Ctrl+C after bootstrap, then configure HTTPS below before opening the UI.
+
+## Private HTTPS
+
+The browser needs HTTPS for `crypto.randomUUID`; opening the UI at a tailnet
+HTTP address breaks agent onboarding. Tailscale's transport encryption does not
+make an HTTP page a browser secure context.
+
+Check `tailscale serve status` first. Do not overwrite an existing route.
+With port 443 free, add the private proxy (not Funnel):
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:3100
+```
+
+From the Paperclip source directory, use its native configuration writers to
+preserve the database, secrets, and storage while changing the backend to
+authenticated loopback and the browser URL to HTTPS:
+
+```sh
+node --import ./cli/node_modules/tsx/dist/loader.mjs --input-type=module - <<'JS'
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import path from "node:path";
+import { readConfig, writeConfig } from "./cli/src/config/store.ts";
+import { mergePaperclipEnvEntries } from "./cli/src/config/env.ts";
+
+const status = JSON.parse(execFileSync("tailscale", ["status", "--json"], { encoding: "utf8" }));
+const hostname = status.Self?.DNSName?.replace(/\.$/, "");
+assert(hostname && status.CertDomains?.includes(hostname), "Enable Tailscale HTTPS first");
+const directory = path.join(homedir(), ".local/share/ralph-v4/paperclip/instances/default");
+const filename = path.join(directory, "config.json");
+const config = readConfig(filename);
+assert(config?.server.deploymentMode === "authenticated" && config.server.exposure === "private");
+config.server.bind = "loopback";
+config.server.host = "127.0.0.1";
+delete config.server.customBindHost;
+config.server.allowedHostnames = [...new Set([...config.server.allowedHostnames, hostname])];
+config.auth.baseUrlMode = "explicit";
+config.auth.publicBaseUrl = `https://${hostname}`;
+writeConfig(config, filename);
+mergePaperclipEnvEntries({ PAPERCLIP_UI_DEV_MIDDLEWARE: "false" }, path.join(directory, ".env"));
+JS
+```
+
+The built UI avoids a development-only HMR listener. Do not use
+`onboard --bind loopback` to make this change: that preset selects
+`local_trusted`, whereas this instance must keep authenticated private mode.
 
 For subsequent starts, load `database.env` as above and run from the Paperclip
 source directory:
@@ -96,6 +142,12 @@ source directory:
 PAPERCLIP_NO_BROWSER=true npx --yes pnpm@9.15.4 paperclipai run \
   --data-dir "$HOME/.local/share/ralph-v4/paperclip"
 ```
+
+Open the HTTPS address shown by `tailscale serve status`. Existing users must
+sign in again at the new origin; do not create a replacement account or
+instance. On a new private install, sign in and select **Claim this instance**.
+If onboarding asks for an initial agent, create it; runtime and gateway
+configuration follow later. Launch approval remains separate.
 
 ## Check and recover
 
@@ -106,9 +158,10 @@ docker compose --env-file "$HOME/.local/share/ralph-v4/database.env" \
   -f compose/compose.yaml ps
 ```
 
-Use Paperclip's `/api/health` on its configured private address to check the
-server. A healthy database or process alone does not prove the gateway or
-agents work.
+Use Paperclip's `/api/health` on its HTTPS address to check the server. In the
+browser, `window.isSecureContext` must be true and `crypto.randomUUID()` must
+succeed. A healthy database or process alone does not prove agent creation,
+the gateway, or agent runs work.
 
 Paperclip also schedules database backups. Its default tiered retention prunes
 older managed backups; review the instance's retention settings before relying
