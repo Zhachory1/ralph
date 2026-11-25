@@ -86,7 +86,8 @@ address, onboarding warns and the server refuses to start. Connect Tailscale
 and make its CLI available on `PATH`. Onboarding may print an access-bearing
 invite URL; do not publish it. Do not expose the UI publicly. Finish the normal
 browser claim before use. Launch approval is still required before enabling the
-live instance.
+live instance. If onboarding asks for an initial agent, create it; its runtime
+and gateway are configured in a later step.
 
 For subsequent starts, load `database.env` as above and run from the Paperclip
 source directory:
