@@ -1,5 +1,9 @@
 # Operations and onboarding
 
+> **v4 clean slate:** Use [compose/PAPERCLIP.md](../compose/PAPERCLIP.md) for
+> the current platform setup and recovery. The procedures below describe the
+> previous implementation.
+
 How to stand Ralph up, change it safely, and recover it. Components are described in [infrastructure.md](infrastructure.md) and flows in [workflows.md](workflows.md).
 
 ## A new instance from zero

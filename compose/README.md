@@ -1,5 +1,9 @@
 # Running Ralph
 
+> **v4 clean slate:** The current Paperclip platform setup is in
+> [PAPERCLIP.md](PAPERCLIP.md). The Hermes setup below describes the previous
+> system and is not the v4 installation.
+
 Ralph runs as its own Hermes in its own container. If you already run Hermes on this machine, installing Ralph does not touch it: separate home volume, separate board database, separate profiles, separate port.
 
 ## Install

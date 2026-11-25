@@ -1,5 +1,9 @@
 # Infrastructure
 
+> **v4 clean slate:** The Paperclip and PostgreSQL platform is described in
+> [compose/PAPERCLIP.md](../compose/PAPERCLIP.md). The infrastructure below
+> describes the previous implementation.
+
 Where each part of Ralph runs, what it can touch, and how to check it is healthy. Workflows are in [workflows.md](workflows.md); day-to-day operations in [operations.md](operations.md).
 
 ## System overview
