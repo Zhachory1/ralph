@@ -69,8 +69,33 @@ git -C "$HOME/.local/share/ralph-v4/paperclip-src" switch --detach \
   af7577bfdc743777f0409e4c3a8615d0480a7784
 cd "$HOME/.local/share/ralph-v4/paperclip-src"
 npx --yes pnpm@9.15.4 install --frozen-lockfile --prefer-offline
+```
+
+Onboarding defaults to Paperclip Runner on supported hosts. Source installs
+must build its native daemon too; installing JavaScript dependencies alone
+does not provide it. Use the Rust version pinned by `rust-toolchain.toml`
+(`1.97.1` for this revision). If Rust is not installed, install it using the
+[official installer](https://rust-lang.github.io/rustup/installation/index.html).
+For an isolated installation, set these locations before installing Rust:
+
+```sh
+export CARGO_HOME="$HOME/.local/share/ralph-v4/toolchains/cargo"
+export RUSTUP_HOME="$HOME/.local/share/ralph-v4/toolchains/rustup"
+export PATH="$CARGO_HOME/bin:$PATH"
+```
+
+From the Paperclip source directory, build and stage the native daemon, then
+build the UI:
+
+```sh
+npx --yes pnpm@9.15.4 --filter @paperclipai/paperclip-runner build:binary
 npx --yes pnpm@9.15.4 --filter @paperclipai/ui build
 ```
+
+`build:binary` uses the locked Rust dependency graph and stages the signed
+daemon on macOS. If provider setup reports `paperclip_runner_binary_missing`,
+finish this build before retrying the provider test. This error does not
+establish whether a provider key is valid.
 
 Load the private database configuration and bootstrap Paperclip in the foreground:
 
