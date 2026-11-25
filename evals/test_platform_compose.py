@@ -55,12 +55,19 @@ class PlatformComposeTest(unittest.TestCase):
         postgres = config["services"]["postgres"]
         self.assertEqual(config["name"], "ralph-v4")
         self.assertEqual(postgres["image"], IMAGE)
+        self.assertEqual(len(postgres["ports"]), 1)
         self.assertEqual(postgres["ports"][0]["host_ip"], "127.0.0.1")
         self.assertEqual(postgres["ports"][0]["published"], "5432")
+        self.assertEqual(postgres["ports"][0]["target"], 5432)
+        self.assertEqual(len(postgres["volumes"]), 1)
         self.assertEqual(postgres["volumes"][0]["type"], "volume")
+        self.assertEqual(postgres["volumes"][0]["source"], "paperclip-db")
         self.assertEqual(postgres["volumes"][0]["target"], "/var/lib/postgresql/data")
         self.assertEqual(postgres["restart"], "unless-stopped")
-        self.assertIn("pg_isready", " ".join(postgres["healthcheck"]["test"]))
+        self.assertEqual(
+            postgres["healthcheck"]["test"],
+            ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U paperclip -d paperclip"],
+        )
 
     def test_database_port_can_be_changed(self):
         result = compose_config(password="not-a-real-password", port="15432")

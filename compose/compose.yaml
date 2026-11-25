@@ -13,7 +13,7 @@ services:
     volumes:
       - paperclip-db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U paperclip -d paperclip"]
       interval: 5s
       timeout: 5s
       retries: 12
