@@ -109,6 +109,10 @@ Use Paperclip's `/api/health` on its configured private address to check the
 server. A healthy database or process alone does not prove the gateway or
 agents work.
 
+Paperclip also schedules database backups. Its default tiered retention prunes
+older managed backups; review the instance's retention settings before relying
+on them.
+
 Create a database backup without overwriting an existing file:
 
 ```sh
