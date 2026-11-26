@@ -1,17 +1,48 @@
 # Paperclip platform
 
-This is the first v4 infrastructure slice: Paperclip on the host and a
-persistent PostgreSQL container. The gateway, QMD, agents, and PR workflows
-are not configured here. The approved design is
+This is the v4 infrastructure slice: Paperclip on the host with authenticated
+private access and persistent PostgreSQL. The approved design is
 [docs#37](https://github.com/Zhachory1/docs/pull/37).
+
+## Verified baseline (2026-11-25)
+
+The selected Paperclip source candidate is the pinned fork revision below, not
+a release claim. Fork PRs [1](https://github.com/zhachbot/paperclip/pull/1),
+[2](https://github.com/zhachbot/paperclip/pull/2), and
+[3](https://github.com/zhachbot/paperclip/pull/3) are merged. This evidence covers
+prelaunch validation; Director launch approval remains a separate gate.
+
+One shared gateway exposes QMD and GitHub. OpenCode and Hermes configure that
+gateway as their only MCP server through the native `managedMcpOnly: true` opt-in.
+Real Paperclip runs of both runtimes completed reads through both gateway
+connections with run-attributed audit; the final Hermes run exited 0. This is
+not evidence of launch readiness. Hermes usage is unpriced, not zero.
+
+The current native gateway has one shared `require_approval` policy at priority
+0 for the exact GitHub connection and `merge_pull_request`, scoped to the three
+initial agent actors. It precedes the default remembered-trust priority 40.
+Confirmation is human-only after reviewing the arguments. Update this fixed
+audience before giving new agents merge access. All three retain 116 GitHub
+tools (115 allowed, one Ask first, none off) and five QMD tools, all allowed.
+Non-executing policy checks for all three show merge as Ask first and comments,
+reviews, and approving reviews as allowed. The human-principal simulation is
+unchanged. These are configuration simulations, not a live approval or merge
+end-to-end test.
+The gate governs MCP only, not `gh`, shell, or direct API access. Upstream
+GitHub credential write-permission evidence remains pending; a tool catalog is
+not proof of credential permission.
+
+Agents may comment, review, and approve agent-authored work, but merging needs
+explicit human instruction; a review approval, green checks, or an agent request
+is not that instruction. PRD, design, and launch human approval gates are separate.
+The actual review workflow is outside this platform slice.
 
 ## Prerequisites
 
 - Docker Compose, Node `26.13.0`, and a private tailnet with MagicDNS and HTTPS
   certificates enabled.
 - Paperclip source at
-  [`af7577b`](https://github.com/zhachbot/paperclip/commit/af7577bfdc743777f0409e4c3a8615d0480a7784);
-  the OpenCode V2 fix is still an unmerged upstream PR.
+  [`e716c6c`](https://github.com/zhachbot/paperclip/commit/e716c6cea0e3672d02fd97df20804743be4d8308).
 - A free local PostgreSQL port. The default is `5432`.
 
 ## First setup
@@ -58,23 +89,23 @@ its pinned dependencies:
 ```sh
 git clone --no-tags --depth 1 --branch fix/opencode-v2-compatibility \
   https://github.com/zhachbot/paperclip.git "$HOME/.local/share/ralph-v4/paperclip-src"
+git -C "$HOME/.local/share/ralph-v4/paperclip-src" switch --detach \
+  e716c6cea0e3672d02fd97df20804743be4d8308
 git -C "$HOME/.local/share/ralph-v4/paperclip-src" rev-parse HEAD
 ```
 
-The output must be `af7577bfdc743777f0409e4c3a8615d0480a7784`. Stop if it
+The output must be `e716c6cea0e3672d02fd97df20804743be4d8308`. Stop if it
 differs; do not silently use a different revision.
 
 ```sh
-git -C "$HOME/.local/share/ralph-v4/paperclip-src" switch --detach \
-  af7577bfdc743777f0409e4c3a8615d0480a7784
 cd "$HOME/.local/share/ralph-v4/paperclip-src"
 npx --yes pnpm@9.15.4 install --frozen-lockfile --prefer-offline
 ```
 
 Onboarding defaults to Paperclip Runner on supported hosts. Source installs
 must build its native daemon too; installing JavaScript dependencies alone
-does not provide it. Use the Rust version pinned by `rust-toolchain.toml`
-(`1.97.1` for this revision). If Rust is not installed, install it using the
+does not provide it. Use the Rust version pinned by `rust-toolchain.toml`.
+If Rust is not installed, install it using the
 [official installer](https://rust-lang.github.io/rustup/installation/index.html).
 For an isolated installation, set these locations before installing Rust:
 
@@ -206,15 +237,23 @@ Create a database backup without overwriting an existing file:
 
 Retain the matching `database.env` and Paperclip instance directory, including
 configuration, persistent files, and encryption/signing keys. Store backups
-and keys securely and separately. For recovery, restore the dump into a new,
-empty database before starting Paperclip. Set `BACKUP_FILE` to the chosen dump
-path:
+and keys securely and separately. Set `BACKUP_FILE` to the chosen dump path and
+inspect the archive without restoring it:
 
 ```sh
 docker compose --env-file "$HOME/.local/share/ralph-v4/database.env" \
-  -f compose/compose.yaml exec -T postgres pg_restore --no-owner --no-privileges \
-  -U paperclip -d paperclip < "$BACKUP_FILE"
+  -f compose/compose.yaml exec -T postgres pg_restore --list < "$BACKUP_FILE"
 ```
 
-Restore the matching instance files and keys as well. Do not restore over an
-existing instance or volume. Test recovery before relying on a backup.
+For recovery, obtain approval for a new, empty database and instance target,
+separate from all existing data; verify the target before restoring the dump.
+Use `pg_restore --exit-on-error --no-owner --no-privileges`, explicitly selecting
+that empty database rather than the running database from `database.env`.
+Copy the backed-up database environment to a private recovery-only file and
+update its `DATABASE_URL` to the verified recovery target. Leave the original
+environment untouched. Restore the matching instance files and encryption/signing
+keys into the new instance target. Verify the effective database connection
+without printing its secret URL, then start the pinned Paperclip source with the
+recovery environment and `--data-dir` pointing to that new instance directory.
+Never overwrite the live database, instance, or volume. Recovery has not been
+drilled; test it before relying on a backup.
