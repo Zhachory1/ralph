@@ -1,5 +1,10 @@
 # Workflows
 
+> **v4 clean slate:** The workflows below describe the previous implementation.
+> The Paperclip platform is being set up in
+> [#338](https://github.com/Zhachory1/ralph/issues/338); v4 workflows are not
+> implemented by that platform setup.
+
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
 
 ![Ralph System: intake, plan, work, review, deliver](diagrams/system-flow.svg)

@@ -1,5 +1,9 @@
 # ✊ Ralph
 
+> **v4 clean slate:** Paperclip platform setup is in
+> [compose/PAPERCLIP.md](compose/PAPERCLIP.md). The system description below
+> documents the previous implementation.
+
 **R**eliable **A**gent **L**oop using **P**ersonal **H**ermes.
 
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
