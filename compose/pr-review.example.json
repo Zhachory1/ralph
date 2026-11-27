@@ -1,0 +1,16 @@
+{
+  "companyId": "replace-with-company-id",
+  "projectId": "replace-with-project-id",
+  "routineAgentId": "replace-with-routine-agent-id",
+  "expertAgentId": "replace-with-expert-agent-id",
+  "reviewerAgentId": "replace-with-reviewer-agent-id",
+  "gatewayConnectionId": "replace-with-github-connection-id",
+  "ledgerIssueId": "replace-with-unassigned-ledger-issue-id",
+  "assignmentLogin": "replace-with-assignment-login",
+  "publisherLogin": "replace-with-publisher-login",
+  "publisherAccountId": 999999999999999999999,
+  "authors": [],
+  "repoFilter": [],
+  "repoOverrides": {},
+  "reviewHistoryUnfiltered": false
+}
