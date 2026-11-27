@@ -4,6 +4,16 @@
 > the current platform setup and recovery. The procedures below describe the
 > previous implementation.
 
+For native assigned-PR reviews, `routine` only prints paused routine and disabled
+trigger requests. The other helper actions require a real owning Paperclip run;
+they are not manual operator substitutes for the normal expert/reviewer path.
+Do not apply or enable requests before native qualification and launch approval.
+For an uncertain send, keep its native intent and reconcile GitHub state; never
+force another POST by deleting the ledger or changing its key. Pausing the
+routine stops future intake, not accepted writes from active tasks.
+See [current status](../compose/PAPERCLIP.md#assigned-pr-reviews-prelaunch).
+The procedures below remain historical.
+
 How to stand Ralph up, change it safely, and recover it. Components are described in [infrastructure.md](infrastructure.md) and flows in [workflows.md](workflows.md).
 
 ## A new instance from zero

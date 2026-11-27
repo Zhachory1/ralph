@@ -1,11 +1,27 @@
 # Workflows
 
 > **v4 clean slate:** The workflows below describe the previous implementation.
-> The Paperclip platform is being set up in
-> [#338](https://github.com/Zhachory1/ralph/issues/338); v4 workflows are not
-> implemented by that platform setup.
+> The Paperclip platform is described in
+> [compose/PAPERCLIP.md](../compose/PAPERCLIP.md). Native assigned-PR review
+> helpers are a local prelaunch implementation, not a verified live workflow.
 
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
+
+## Native assigned PR review (prelaunch)
+
+The [approved design](https://github.com/Zhachory1/docs/pull/39) targets native
+routine discovery, expert/reviewer delegation and trusted local checks.
+The current helpers dispatch native expert/reviewer tasks, validate the
+completed result and submit one classified APPROVE/COMMENT summary through
+the existing gateway. Author policy gates contents/checks; exact head/base
+and eligibility are checked again before a unique send reservation.
+The Director replaced pending/inline reviews with one submitted summary.
+Routine wiring remains paused and unqualified; see the
+[current status](../compose/PAPERCLIP.md#assigned-pr-reviews-prelaunch).
+Do not enable rendered requests without launch approval or treat passing
+fixtures as live delivery. Uncertain sends retain their native intents rather
+than retrying blindly.
+The sections below retain the historical Hermes flows.
 
 ![Ralph System: intake, plan, work, review, deliver](diagrams/system-flow.svg)
 

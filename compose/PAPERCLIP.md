@@ -257,3 +257,86 @@ without printing its secret URL, then start the pinned Paperclip source with the
 recovery environment and `--data-dir` pointing to that new instance directory.
 Never overwrite the live database, instance, or volume. Recovery has not been
 drilled; test it before relying on a backup.
+
+## Assigned PR reviews (prelaunch)
+
+The [approved review design](https://github.com/Zhachory1/docs/pull/39), with the
+Director's [single-summary amendment](https://github.com/Zhachory1/docs/pull/40), has a local helper
+implementation. It has not passed a live native-agent acceptance run.
+
+- `bootstrap/paperclip_client.py`: native run/gateway/document requests.
+- `bootstrap/paperclip_review.py`: discovery, native expert/reviewer handoff,
+  preflight, result recording and one-write summary publication.
+- `compose/pr-review.example.json`: placeholder configuration with a deny-all
+  author list and an unrestricted empty repository filter.
+
+Inspect the disabled requests without credentials or API calls:
+
+```sh
+python3 bootstrap/paperclip_review.py routine --config compose/pr-review.example.json
+```
+
+This prints JSON only, with a paused routine and disabled trigger. Do not apply
+it or enable the routine yet. Keep real
+identities, routing and native company/project/connection references in private
+configuration, not this public example.
+Generate requests from the permanent installed checkout: commands embed the
+interpreter, helper and private-config paths. Regenerate them if those paths
+move; do not apply copied temporary/CI previews.
+
+Only normal Paperclip task runs may use the other actions. They require the
+injected `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY`, company/agent/run/task IDs
+and matching native authority. Run them in that task's terminal with the
+injected environment, not a code-execution tool that strips credential
+variables. Do not substitute board credentials or the operator's `gh` identity.
+
+| Action | Intended caller | Effect |
+| --- | --- | --- |
+| `discover` | Native routine's coordinator | Filter assigned open/non-draft PRs by author/repository policy; dispatch keyed standalone expert tasks. |
+| `delegate` | Expert task | Create an independent reviewer child with a self-contained plan and a native dependency. |
+| `preflight` | Reviewer task | Revalidate pinned metadata and policy before reading contents or executing local checks. |
+| `record-result --result <json-file>` | Reviewer task | Save its structured result in its own `review-result` document. The reviewer then completes its native task. |
+| `publish` | Resumed expert task | Validate completed reviewer provenance and submit one APPROVE/COMMENT summary, or report a non-completion state. |
+
+The result file contains verified `reviewedHead`, `reviewedBase`, `verdict`,
+`coverage`, `findings` and `checks`. The reviewer must check the pinned head and
+base rather than a moving branch; the helper rejects mismatched declarations.
+Findings use `classification` (`blocking` or `non-blocking`), repository-relative
+`path`, positive `line`, `evidence` and `correction`. Checks contain `command`
+and `outcome`; omitted checks also need a `reason`. These strings are evidence,
+not shell commands for the helper to execute.
+
+Checks run through the normal reviewer tools in a separate local checkout with
+the OS user's access. Author filtering is a trust decision, not isolation.
+Review summaries include separate Blocking findings, Non-blocking suggestions
+and Checks sections, plus file/line references and reviewed head/base.
+
+Publication uses native `pull_request_review_write`, `method: create`, with an
+explicit APPROVE/COMMENT event, commit SHA and marked summary. It never creates
+a pending draft, writes inline threads or submits another pending review.
+Any visible pending conflict is left untouched. Existing submitted reviews
+by the account/head suppress another write, without turning manual work into
+automatic acceptance.
+
+Treat the JSON `status` as authoritative, not a successful process exit.
+`submitted` includes a confirmed remote review link; `existing_review` skips
+an already reviewed head. `pending` needs a native continuation.
+`submission_unknown`, `conflict` and stale submissions need reconciliation or
+operator attention, not another POST or a new key. Preserve native send intents
+and receipts across restarts; never delete them to clear a blocked operation.
+
+Each coordinator execution scans and hands off; it does not wait for review
+delivery or a single key's reconciliation. Report partial failures and keep
+operator waits on separate key-specific native tasks, not children/blockers of
+the scan task. Otherwise routine coalescing would hold future ticks.
+
+The configured publishing identity and intended-agent path remain unverified.
+Qualify complete, unfiltered review history before enabling publication; MCP
+lockdown/filtering modes can make bare-array pagination incomplete. The private
+`reviewHistoryUnfiltered` flag defaults false and records that qualification,
+not proof by itself. No live calls were made to establish compatibility.
+
+No sandbox provider, publisher plugin or spend-limit setup is required. Design
+approval does not authorize launch. A passing fixture, tool catalog or local
+process does not close #339: first prove one authorized native
+routine/expert/reviewer/gateway journey and duplicate-safe readback.
