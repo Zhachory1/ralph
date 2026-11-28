@@ -14,6 +14,15 @@ routine stops future intake, not accepted writes from active tasks.
 See [current status](../compose/PAPERCLIP.md#assigned-pr-reviews-prelaunch).
 The procedures below remain historical.
 
+The PR-maintenance renderer is offline-only. Do not apply its paused routine or
+enable its disabled trigger: #339 is open and native qualification, setup and
+launch remain paused. Configured author login/account ID must identify the
+actual PR author; publisher identity is separate. Use only the owning native
+run and managed GitHub launcher for non-rendering actions. On an unknown
+effect, preserve its intent and reconcile with readback; do not reset or resend.
+Pausing future intake does not quiesce admitted jobs. See
+[PR maintenance status and boundaries](../compose/PAPERCLIP.md#pr-maintenance-prelaunch).
+
 How to stand Ralph up, change it safely, and recover it. Components are described in [infrastructure.md](infrastructure.md) and flows in [workflows.md](workflows.md).
 
 ## A new instance from zero

@@ -4,12 +4,12 @@
 > [compose/PAPERCLIP.md](../compose/PAPERCLIP.md). The infrastructure below
 > describes the previous implementation.
 
-The native assigned-PR review helpers add a native API client, task handoff,
-result/provenance validation and one-write summary publication. They add no
-service, database, sandbox provider or publishing plugin. The native routine
-request renderer stays paused; live actor/gateway qualification remains pending.
-Instance policy belongs in private configuration. See the
-[assigned PR reviews](../compose/PAPERCLIP.md#assigned-pr-reviews-prelaunch).
+The native assigned-review and PR-maintenance helpers add no service,
+database, sandbox provider or publishing plugin. Their routine renderers remain
+paused pending live actor/gateway qualification; maintenance setup and launch
+are also unauthorized. Instance policy belongs in private configuration:
+[assigned reviews](../compose/PAPERCLIP.md#assigned-pr-reviews-prelaunch) and
+[PR maintenance](../compose/PAPERCLIP.md#pr-maintenance-prelaunch).
 
 Where each part of Ralph runs, what it can touch, and how to check it is healthy. Workflows are in [workflows.md](workflows.md); day-to-day operations in [operations.md](operations.md).
 

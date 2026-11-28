@@ -1,10 +1,14 @@
 """Paperclip run-scoped REST and tool gateway client."""
 
+import hashlib
 import ipaddress
 import json
+import uuid
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 
 class ProtocolError(RuntimeError):
@@ -17,6 +21,10 @@ class PermissionDenied(ProtocolError):
 
 class DocumentNotFound(ProtocolError):
     """The document GET returned a definite not-found response."""
+
+
+class DocumentConflict(ProtocolError):
+    """The document PUT returned a definite conflict response."""
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -55,27 +63,30 @@ class PaperclipClient:
         self._tools = None
 
     def _http(self, method, path, headers, body):
-        data = None if body is None else json.dumps(body).encode("utf-8")
+        data = body if isinstance(body, bytes) or body is None else json.dumps(body).encode("utf-8")
         request = Request(self._base + path, data=data, method=method, headers=headers)
         handlers = [_NoRedirect()]
         if self._base.startswith("http://"):
             handlers.append(ProxyHandler({}))
         try:
             with build_opener(*handlers).open(request, timeout=30) as response:
+                if path.endswith("/content?download=1"):
+                    return response.status, response.read(MAX_ATTACHMENT_BYTES + 1)
                 return response.status, json.loads(response.read())
         except HTTPError as error:
             if error.code in (401, 403):
                 raise PermissionDenied("Paperclip authorization denied") from None
-            if error.code == 404:
-                return 404, None
+            if error.code in (404, 409):
+                return error.code, None
             raise ProtocolError("Paperclip request failed or outcome unknown") from None
         except (URLError, TimeoutError, ValueError, OSError):
             raise ProtocolError("Paperclip request failed or outcome unknown") from None
 
     def _request(self, method, path, body=None, expected=200, gateway=False, document_get=False,
-                 gateway_token=None):
+                 gateway_token=None, multipart_boundary=None, document_put=False):
         headers = dict(self._headers)
-        headers["Content-Type"] = "application/json"
+        headers["Content-Type"] = ("multipart/form-data; boundary=" + multipart_boundary
+                                   if multipart_boundary else "application/json")
         if gateway:
             token = gateway_token if gateway_token is not None else self._gateway_token
             if not token:
@@ -86,6 +97,8 @@ class PaperclipClient:
             raise PermissionDenied("Paperclip authorization denied")
         if document_get and status == 404:
             raise DocumentNotFound("Document not found")
+        if document_put and status == 409:
+            raise DocumentConflict("Document conflict")
         if status != expected:
             raise ProtocolError("Paperclip request failed or outcome unknown")
         return result
@@ -93,14 +106,114 @@ class PaperclipClient:
     def get_issue(self, issue_id):
         return self._request("GET", "/api/issues/" + _segment(issue_id))
 
+    def list_issues(self, company_id, project_id, after_id=None, limit=100):
+        company = _segment(company_id)
+        _segment(project_id)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ProtocolError("Invalid issue page limit")
+        query = {"projectId": project_id, "sortField": "id", "sortDir": "asc", "limit": limit}
+        if after_id is not None:
+            _segment(after_id)
+            query["afterId"] = after_id
+        result = self._request("GET", "/api/companies/" + company + "/issues?" + urlencode(query))
+        if not isinstance(result, list):
+            raise ProtocolError("Invalid issues response")
+        return result
+
     def get_me(self):
         return self._request("GET", "/api/agents/me")
 
     def update_issue(self, issue_id, body):
         return self._request("PATCH", "/api/issues/" + _segment(issue_id), body)
 
+    def checkout_issue(self, issue_id, agent_id):
+        result = self._request("POST", "/api/issues/" + _segment(issue_id) + "/checkout", {
+            "agentId": agent_id, "expectedStatuses": ["todo", "in_progress"],
+        })
+        if (not isinstance(result, dict) or result.get("id") != issue_id
+                or result.get("assigneeAgentId") != agent_id or result.get("status") != "in_progress"
+                or result.get("checkoutRunId") != self._headers["X-Paperclip-Run-Id"]):
+            raise ProtocolError("Native checkout was not established for this run")
+        return result
+
+    def list_interactions(self, issue_id):
+        result = self._request("GET", "/api/issues/" + _segment(issue_id) + "/interactions")
+        if not isinstance(result, list):
+            raise ProtocolError("Invalid native interaction listing")
+        return result
+
+    def create_interaction(self, issue_id, body):
+        return self._request("POST", "/api/issues/" + _segment(issue_id) + "/interactions", body, expected=201)
+
     def get_run(self, run_id):
         return self._request("GET", "/api/heartbeat-runs/" + _segment(run_id))
+
+    def resolve_context(self, company_id, agent_id, task_id=None):
+        _segment(company_id)
+        _segment(agent_id)
+        if task_id is not None:
+            _segment(task_id)
+        run_id = self._headers["X-Paperclip-Run-Id"]
+        run = self.get_run(run_id)
+        if not isinstance(run, dict):
+            raise ProtocolError("Missing run provenance")
+        context = run.get("contextSnapshot")
+        if context is None:
+            context = {}
+        if not isinstance(context, dict):
+            raise ProtocolError("Invalid run context")
+        binding = next((item for item in (run.get("nativeIssueId"), run.get("issueId"),
+                                          context.get("issueId"), context.get("taskId"))
+                        if isinstance(item, str) and item.strip()), None)
+        if (run.get("id") != run_id or run.get("companyId") != company_id
+                or run.get("agentId") != agent_id or run.get("status") != "running"
+                or binding is None or (task_id is not None and binding != task_id)):
+            raise ProtocolError("Run provenance mismatch")
+        return {"companyId": company_id, "agentId": agent_id, "runId": run_id, "taskId": binding}
+
+    def live_runs(self, issue_id):
+        result = self._request("GET", "/api/issues/" + _segment(issue_id) + "/live-runs")
+        if not isinstance(result, list):
+            raise ProtocolError("Invalid live runs response")
+        return result
+
+    def list_attachments(self, issue_id):
+        result = self._request("GET", "/api/issues/" + _segment(issue_id) + "/attachments")
+        if not isinstance(result, list):
+            raise ProtocolError("Invalid attachments response")
+        return result
+
+    def upload_attachment(self, company_id, issue_id, filename, data):
+        path = "/api/companies/{}/issues/{}/attachments".format(
+            _segment(company_id), _segment(issue_id))
+        if (not isinstance(filename, str) or not filename.strip()
+                or any(ord(char) < 32 or ord(char) > 126 or char in '"/\\'
+                       for char in filename)
+                or not isinstance(data, bytes) or not 0 < len(data) <= MAX_ATTACHMENT_BYTES):
+            raise ProtocolError("Invalid attachment")
+        boundary = uuid.uuid4().hex
+        while boundary.encode("ascii") in data:
+            boundary = uuid.uuid4().hex
+        body = (b"--" + boundary.encode("ascii") + b'\r\nContent-Disposition: form-data; '
+                + b'name="file"; filename="' + filename.encode("ascii")
+                + b'"\r\nContent-Type: application/octet-stream\r\n\r\n' + data
+                + b"\r\n--" + boundary.encode("ascii") + b"--\r\n")
+        result = self._request("POST", path, body, expected=201, multipart_boundary=boundary)
+        if (not isinstance(result, dict) or not isinstance(result.get("id"), str)
+                or not result["id"].strip() or result.get("companyId") != company_id
+                or result.get("issueId") != issue_id
+                or result.get("originatingRunId") != self._headers["X-Paperclip-Run-Id"]
+                or result.get("sha256") != hashlib.sha256(data).hexdigest()
+                or type(result.get("byteSize")) is not int or result["byteSize"] != len(data)):
+            raise ProtocolError("Attachment acknowledgement is not authoritative")
+        return result
+
+    def download_attachment(self, attachment_id):
+        path = "/api/attachments/" + _segment(attachment_id) + "/content?download=1"
+        result = self._request("GET", path)
+        if not isinstance(result, bytes) or len(result) > MAX_ATTACHMENT_BYTES:
+            raise ProtocolError("Invalid attachment content")
+        return result
 
     def get_revision(self, issue_id, key, revision_id):
         path = "/api/issues/{}/documents/{}/revisions/{}".format(
@@ -126,11 +239,17 @@ class PaperclipClient:
             raise ProtocolError("Document response is incomplete")
         return result
 
+    def list_documents(self, issue_id):
+        result = self._request("GET", "/api/issues/" + _segment(issue_id) + "/documents")
+        if not isinstance(result, list):
+            raise ProtocolError("Invalid document listing")
+        return result
+
     def create_document(self, issue_id, key, body):
         path = "/api/issues/{}/documents/{}".format(_segment(issue_id), _segment(key))
         result = self._request("PUT", path, {
             "title": key, "format": "markdown", "body": body, "baseRevisionId": None,
-        }, expected=201)
+        }, expected=201, document_put=True)
         if (not isinstance(result, dict) or result.get("key") != key or
                 result.get("body") != body or not isinstance(result.get("latestRevisionId"), str)
                 or not result["latestRevisionId"]):
@@ -143,7 +262,7 @@ class PaperclipClient:
         path = "/api/issues/{}/documents/{}".format(_segment(issue_id), _segment(key))
         result = self._request("PUT", path, {
             "title": key, "format": "markdown", "body": body, "baseRevisionId": base_revision_id,
-        })
+        }, document_put=True)
         if (not isinstance(result, dict) or result.get("key") != key or result.get("body") != body
                 or not isinstance(result.get("latestRevisionId"), str)
                 or not result["latestRevisionId"] or result["latestRevisionId"] == base_revision_id):

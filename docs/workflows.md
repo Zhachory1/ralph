@@ -3,9 +3,29 @@
 > **v4 clean slate:** The workflows below describe the previous implementation.
 > The Paperclip platform is described in
 > [compose/PAPERCLIP.md](../compose/PAPERCLIP.md). Native assigned-PR review
-> helpers are a local prelaunch implementation, not a verified live workflow.
+> and PR-maintenance helpers are local prelaunch implementations, not verified
+> live workflows.
 
 Each workflow: entry, exit, owners, and how it fails. Where the parts run is in [infrastructure.md](infrastructure.md).
+
+## PR maintenance (prelaunch)
+
+Approved by [product brief #41](https://github.com/Zhachory1/docs/pull/41) and
+[design #42](https://github.com/Zhachory1/docs/pull/42); no native qualification
+or launch has occurred. A code-only poll checks open PRs by actual configured
+author login and numeric ID, records each PR in one unassigned native ledger
+issue, and starts bounded expert → writer → (material-only) independent review
+steps. Clean, already-handled and pending-only checks do not start an LLM job.
+See [as-built behavior and gates](../compose/PAPERCLIP.md#pr-maintenance-prelaunch).
+
+The writer diagnoses and tests in a separate checkout, merges the actual base,
+and records a prepared result. Material changes require review of the exact
+attached commit/tree/base before checked push, replies and thread resolution.
+One clarification and one review correction are allowed. A blocker closes write
+admission and asks one human-only native question; the answer settles the old
+job, never executes its text or resumes its budget. Unknown writes require
+readback, not retries. A fresh expert receives the verified human decision.
+No merge, rebase or force-push is permitted.
 
 ## Native assigned PR review (prelaunch)
 
