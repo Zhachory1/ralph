@@ -340,3 +340,70 @@ No sandbox provider, publisher plugin or spend-limit setup is required. Design
 approval does not authorize launch. A passing fixture, tool catalog or local
 process does not close #339: first prove one authorized native
 routine/expert/reviewer/gateway journey and duplicate-safe readback.
+
+## PR maintenance (prelaunch)
+
+The approved [product brief](https://github.com/Zhachory1/docs/pull/41) and
+[design](https://github.com/Zhachory1/docs/pull/42) have a local helper, not a
+qualified live workflow. #339 remains open. Setup, native runs, recurrence and
+launch are paused pending separate authorization and acceptance, including a
+zero-provider process run, actor permissions, managed identity, attachment
+round-trip and real GitHub writes.
+
+- `bootstrap/paperclip_maintain.py` implements the workflow;
+  `compose/pr-maintenance.example.json` is placeholder-only. Keep real IDs,
+  logins and routing in private config.
+- Render the proposed routine offline; this makes no API calls:
+
+  ```sh
+  python3 bootstrap/paperclip_maintain.py routine --config compose/pr-maintenance.example.json
+  ```
+
+  The JSON includes a PATCH for the existing checker identity
+  (`adapterType: process`, legacy runner, `runtimeConfig: {}`), a paused
+  routine, and a disabled three-minute trigger. The checker must be a
+  dedicated process agent; its built-in adapter declares `models: []`, not an
+  agent PATCH-body field. Do not apply or enable the rendered requests yet.
+- Configure the actual PR author login **and numeric account ID**; eligibility
+  is authorship, not `@me`, assignment or review request. Configure the
+  publisher separately. The ledger is one stable issue in the same company
+  and project, with neither human nor agent assignee.
+- Native actions other than `routine` require the owning run's injected
+  `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` and `PAPERCLIP_RUN_ID`; a missing
+  `PAPERCLIP_TASK_ID` is resolved from that run. Git access additionally
+  requires `PAPERCLIP_GITHUB_BROKER_URL`,
+  `PAPERCLIP_GITHUB_BROKER_TOKEN` and `PAPERCLIP_GITHUB_LAUNCHER_DIR`. No host
+  `gh` identity fallback is allowed.
+
+| Action | Purpose |
+| --- | --- |
+| `poll` | Code-only GitHub intake and bounded advancement; no recurring success reports. |
+| `preflight` | Recheck native actor/run/task and return pinned job evidence. |
+| `record-result --result <json-file>` | Validate and save the current agent's structured result; preparation/review also uses `--workspace <checkout>`. |
+| `prepare-review --workspace <checkout>` | Verify the material bundle; check out its returned candidate commit before running checks and recording review. |
+| `push`, `reply --source <version> --body <text>`, `resolve --source <version>` | Perform only checked, intent-recorded effects and read them back. |
+| `finish` | Push the admitted fix, reply to verified fixed feedback, resolve verified threads, and settle the run. |
+
+The expert returns `noop` with `handled` feedback versions, or `plan` with
+`writer` (`builder` or `sre`), `instructions` and boolean `material`. The writer
+may return one `clarify` with a `question`; the expert returns an `answer` with
+`instructions`. Preparation returns `prepared` with `commit`, or `existing`
+without a new commit, plus `material`, `fixed` feedback versions and `checks`
+(`command`/`outcome`). Optional `responses` maps fixed versions to relevant reply
+text. Review returns `approve` or `changes` with checks and correction
+instructions (at most one correction). Every result has an `outcome` field.
+Material changes require independent approval of the exact prepared
+commit/tree/base and result revision, from a clean reviewer checkout at that
+commit. `block` must name `reason` and the exact human `unblock` action.
+Holds use one native `human_only` question, not Chat or routine reports.
+An answer closes the old job after all admitted runs and writes settle. A fresh
+expert receives the verified human decision as context, not executable
+instructions or extra old-job budget. Pending human input or a held ancestor
+prevents writes.
+
+Agents diagnose, test, and fetch/merge the actual target base in a separate
+checkout; the helper exposes no arbitrary-command runner. No merge, rebase,
+force-push or permission bypass is allowed. Repository permissions remain the
+real trust boundary; this is not a full-shell sandbox. On errors or unknown
+write outcomes, preserve intent and reconcile by readback—never reset a key or
+blindly resend. Pausing future intake does not stop already admitted jobs.
